@@ -744,6 +744,29 @@ void RunRoadTests() {
             outward &= dist(leftOuter) > dist(roadLeft) + 1.4f && dist(rightOuter) > dist(roadRight) + 1.4f;
             sloped &= std::abs((roadLeft.y - leftOuter.y) - 0.06f) < 1e-3f;
         }
+        // 段差: 境界の直後に面取り列が入り、以後の列が段差ぶん下がる。境界の頂点は共有のまま。
+        {
+            auto& stepSettings = std::get<graph::ShoulderNodeSettings>(sg.FindMutableNode(sLeft)->settings);
+            stepSettings.stepHeightMeters = 0.03f;
+            stepSettings.stepWidthMeters = 0.05f;
+            graph::RoadGeometry stepped;
+            Check(graph::EvaluateShoulder(sg, sLeft, stepped, error) && stepped.stride == 4 &&
+                  stepped.surface.vertices.size() == sRows * 4, "stepped shoulder adds one chamfer column");
+            bool stepOk = stepped.stride == 4;
+            for (size_t row = 0; stepOk && row < sRows; ++row) {
+                const auto& edge = stepped.surface.vertices[row * 4].position;
+                const auto& chamfer = stepped.surface.vertices[row * 4 + 1].position;
+                const auto& outer = stepped.surface.vertices[row * 4 + 3].position;
+                const auto& roadLeft = sRoadGeo.surface.vertices[row * sRoadGeo.stride + sRoadGeo.stride - 1].position;
+                stepOk &= near(edge, roadLeft);
+                stepOk &= std::abs(std::hypot(chamfer.x - edge.x, chamfer.z - edge.z) - 0.05f) < 1e-3f;
+                stepOk &= std::abs((edge.y - chamfer.y) - (0.03f + 0.04f * 0.05f)) < 1e-4f;
+                stepOk &= std::abs((edge.y - outer.y) - (0.03f + 0.06f)) < 1e-3f;
+            }
+            Check(stepOk, "chamfer column sits 5 cm out and 3 cm down, outer edge keeps the slope");
+            stepSettings.stepHeightMeters = 0.0f;
+            Check(graph::EvaluateShoulder(sg, sLeft, stepped, error) && stepped.stride == 3, "zero step removes the chamfer column");
+        }
         for (const auto& v : leftGeo.surface.vertices) upward &= v.normal.y > 0.5f;
         Check(shared, "shoulder inner column shares the road boundary vertices");
         Check(outward, "shoulders extend away from the road on both sides regardless of traffic side");

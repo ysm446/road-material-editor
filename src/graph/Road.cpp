@@ -113,8 +113,22 @@ bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t inn
     if (edgeColumn >= source.stride || innerColumn >= source.stride || edgeColumn == innerColumn) return fail("境界の列が不正です");
     const size_t rows = sv.size() / source.stride;
     if (source.rowDistances.size() != rows) return fail("境界の実距離が揃っていません");
-    const uint32_t columns = static_cast<uint32_t>(std::ceil(settings.widthMeters));
-    const uint32_t stride = columns + 1;
+    if (!std::isfinite(settings.stepHeightMeters) || settings.stepHeightMeters < 0.0f || settings.stepHeightMeters > 0.5f ||
+        !std::isfinite(settings.stepWidthMeters) || settings.stepWidthMeters < 0.005f || settings.stepWidthMeters > 1.0f)
+        return fail("段差は0〜0.5 m、面取り幅は0.005〜1 mにしてください");
+    // 列の横位置。境界 0、（段差があれば）面取り列、以後は約 1 m 刻みで外側まで。
+    const uint32_t cells = static_cast<uint32_t>(std::ceil(settings.widthMeters));
+    const bool stepped = settings.stepHeightMeters > 0.0f;
+    const float stepLateral = std::min(settings.stepWidthMeters, settings.widthMeters * 0.5f);
+    std::vector<float> laterals;
+    laterals.push_back(0.0f);
+    if (stepped) laterals.push_back(stepLateral);
+    for (uint32_t cell = 1; cell <= cells; ++cell) {
+        const float lateral = settings.widthMeters * static_cast<float>(cell) / static_cast<float>(cells);
+        if (lateral > laterals.back() + 1e-4f) laterals.push_back(lateral);
+    }
+    const uint32_t stride = static_cast<uint32_t>(laterals.size());
+    const uint32_t columns = stride - 1;
     if (rows * stride > 65536) return fail("路肩の分割数が多すぎます");
     RoadGeometry built;
     built.stride = stride;
@@ -139,13 +153,14 @@ bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t inn
         if (Length(outward) < 1e-5f) return fail("境界の幅が 0 の行があります");
         outward = XMVector3Normalize(outward);
         for (uint32_t column = 0; column <= columns; ++column) {
-            const float lateral = settings.widthMeters * static_cast<float>(column) / static_cast<float>(columns);
+            const float lateral = laterals[column];
             renderer::MeshVertex vertex{};
             if (column == 0) {
                 vertex.position = edge;
             } else {
                 XMStoreFloat3(&vertex.position, XMVectorAdd(Load(edge), XMVectorScale(outward, lateral)));
-                vertex.position.y -= drop * lateral;
+                // 段差は面取り列から先の全列に掛かる（境界の頂点は共有のまま）。
+                vertex.position.y -= drop * lateral + (stepped ? settings.stepHeightMeters : 0.0f);
             }
             vertex.uv = {lateral / settings.uvRepeatMeters, source.rowDistances[row] / settings.uvRepeatMeters};
             if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);

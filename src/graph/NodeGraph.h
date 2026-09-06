@@ -228,6 +228,9 @@ struct ShoulderNodeSettings {
     float widthMeters = 1.5f;
     // 横断勾配（%）。正なら外側へ向かって下がる。
     float crossSlopePercent = 4.0f;
+    // 舗装端の段差（m）。0 より大きいと、境界の直後に stepWidthMeters の面取り列を 1 つ挟み、そこで段差ぶん下げる。
+    float stepHeightMeters = 0.0f;
+    float stepWidthMeters = 0.05f;
     float uvRepeatMeters = 1.0f;
     bool uvAlongU = false;
     // 材質のレイヤー構造は Road と同じ（スロット × 4、Mask 2〜4、変位）。

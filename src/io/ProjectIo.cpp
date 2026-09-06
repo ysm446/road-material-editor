@@ -1230,6 +1230,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                              {"uvRepeat", decal->uvRepeatMeters}, {"uvAlongU", decal->uvAlongU}};
         } else if (const auto* shoulder = std::get_if<graph::ShoulderNodeSettings>(&node.settings)) {
             item["shoulder"] = {{"width", shoulder->widthMeters}, {"crossSlope", shoulder->crossSlopePercent},
+                                {"stepHeight", shoulder->stepHeightMeters}, {"stepWidth", shoulder->stepWidthMeters},
                                 {"uvRepeat", shoulder->uvRepeatMeters}, {"uvAlongU", shoulder->uvAlongU},
                                 {"displacement", shoulder->displacementMeters},
                                 {"layerWorldUv", json::array({shoulder->layerWorldUv[0], shoulder->layerWorldUv[1],
@@ -1455,6 +1456,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                 if (const json* shoulder = FindMember(item, "shoulder"); shoulder && shoulder->is_object()) {
                     settings.widthMeters = ReadFloat(*shoulder, "width", settings.widthMeters);
                     settings.crossSlopePercent = ReadFloat(*shoulder, "crossSlope", settings.crossSlopePercent);
+                    settings.stepHeightMeters = std::clamp(ReadFloat(*shoulder, "stepHeight", settings.stepHeightMeters), 0.0f, 0.5f);
+                    settings.stepWidthMeters = std::clamp(ReadFloat(*shoulder, "stepWidth", settings.stepWidthMeters), 0.005f, 1.0f);
                     settings.uvRepeatMeters = ReadFloat(*shoulder, "uvRepeat", settings.uvRepeatMeters);
                     settings.uvAlongU = ReadBool(*shoulder, "uvAlongU", settings.uvAlongU);
                     settings.displacementMeters = std::clamp(ReadFloat(*shoulder, "displacement", settings.displacementMeters), 0.0f, 1.0f);

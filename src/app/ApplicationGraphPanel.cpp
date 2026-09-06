@@ -1218,6 +1218,13 @@ void Application::DrawGraphPanel() {
                                          "境界から外側へ張る幅", "%.2f m");
             changed |= ui::PropertyFloat("横断勾配", &shoulder->crossSlopePercent, -50.0f, 50.0f, defaults.crossSlopePercent,
                                          "外側へ向かって下がる割合。1 m 進んで何 cm 下がるか", "%.1f %%");
+            changed |= ui::PropertyFloat("段差", &shoulder->stepHeightMeters, 0.0f, 0.5f, defaults.stepHeightMeters,
+                                         "舗装端の段差。0 より大きいと境界の直後に面取り列を挟み、路肩全体をこの高さだけ下げる",
+                                         "%.3f m", 0, 0.005f);
+            if (shoulder->stepHeightMeters > 0.0f) {
+                changed |= ui::PropertyFloat("面取り幅", &shoulder->stepWidthMeters, 0.005f, 1.0f, defaults.stepWidthMeters,
+                                             "境界から段差の底までの横幅。小さいほど垂直に近い", "%.3f m", 0, 0.005f);
+            }
             changed |= ui::PropertyFloat("UV反復長", &shoulder->uvRepeatMeters, 0.1f, 100.0f, defaults.uvRepeatMeters,
                                          "UV が 1 増える実距離", "%.2f m");
             {

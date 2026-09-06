@@ -83,7 +83,7 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
             lengths[i] = lengths[i-1] + Length(XMVectorSubtract(Load(centers[i]), Load(centers[i-1])));
         const float total = lengths.back();
         if (!std::isfinite(total) || total > 16000.0f) return fail("道路が長すぎます");
-        const size_t steps = std::max(size_t(1), static_cast<size_t>(std::ceil(total / 0.25f)));
+        const size_t steps = std::max(size_t(1), static_cast<size_t>(std::ceil(total / 1.0f)));
         std::vector<XMFLOAT3> uniform;
         size_t segment = 1;
         for (size_t i = 0; i <= steps; ++i) {
@@ -96,6 +96,8 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
         }
         centers = std::move(uniform);
     }
+    const uint32_t columns = static_cast<uint32_t>(std::ceil(settings.widthMeters));
+    const uint32_t stride = columns + 1;
     std::vector<XMFLOAT3> rights;
     for (size_t i = 1; i < centers.size(); ++i) {
         const float dx = centers[i].x - centers[i-1].x;
@@ -121,17 +123,22 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
         }
         if (i > 0) distance += Length(XMVectorSubtract(Load(centers[i]), Load(centers[i-1])));
         const XMVECTOR offset = XMVectorScale(right, settings.widthMeters * 0.5f * miter);
-        for (int side = 0; side < 2; ++side) {
+        for (uint32_t column = 0; column <= columns; ++column) {
+            const float across = static_cast<float>(column) / static_cast<float>(columns);
             renderer::MeshVertex vertex{};
-            XMStoreFloat3(&vertex.position, XMVectorAdd(Load(centers[i]), XMVectorScale(offset, side == 0 ? -1.0f : 1.0f)));
-            vertex.uv = {side * settings.widthMeters / settings.uvRepeatMeters,
+            XMStoreFloat3(&vertex.position, XMVectorAdd(Load(centers[i]), XMVectorScale(offset, across * 2.0f - 1.0f)));
+            vertex.uv = {across * settings.widthMeters / settings.uvRepeatMeters,
                          distance / settings.uvRepeatMeters};
             built.surface.vertices.push_back(vertex);
-            AddBoundaryPoint(side == 0 ? built.left : built.right, vertex.position);
+            if (column == 0) AddBoundaryPoint(built.left, vertex.position);
+            if (column == columns) AddBoundaryPoint(built.right, vertex.position);
         }
         if (i > 0) {
-            const uint32_t a = static_cast<uint32_t>((i-1)*2);
-            built.surface.indices.insert(built.surface.indices.end(), {a,a+2,a+1,a+1,a+2,a+3});
+            for (uint32_t column = 0; column < columns; ++column) {
+                const uint32_t a = static_cast<uint32_t>(i-1)*stride + column;
+                built.surface.indices.insert(built.surface.indices.end(),
+                    {a,a+stride,a+1,a+1,a+stride,a+stride+1});
+            }
         }
     }
     auto& mesh = built.surface;
@@ -147,11 +154,48 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
     for (size_t i = 0; i < mesh.vertices.size(); ++i) {
         auto& vertex = mesh.vertices[i];
         const XMVECTOR n = XMVector3Normalize(Load(vertex.normal));
-        const XMVECTOR across = XMVectorSubtract(Load(mesh.vertices[(i/2)*2+1].position), Load(mesh.vertices[(i/2)*2].position));
+        const XMVECTOR across = XMVectorSubtract(Load(mesh.vertices[(i/stride)*stride+columns].position), Load(mesh.vertices[(i/stride)*stride].position));
         const XMVECTOR t = XMVector3Normalize(XMVectorSubtract(across, XMVectorScale(n, XMVectorGetX(XMVector3Dot(n, across)))));
         XMStoreFloat3(&vertex.normal, n);
         XMStoreFloat4(&vertex.tangent, t);
         vertex.tangent.w = -1.0f;
+    }
+    // 直線は先に角のマイターを作ってから行を補間する。先に中心線だけを
+    // 分割すると、角の短い区間で幅の内側が反転してしまう。
+    if (!curved) {
+        renderer::MeshData divided;
+        for (size_t row = 0; row < centers.size(); ++row) {
+            size_t steps = 1;
+            if (row > 0) {
+                const float length = Length(XMVectorSubtract(Load(centers[row]), Load(centers[row-1])));
+                if (!std::isfinite(length) || length > 16000.0f) return fail("道路が長すぎます");
+                steps = std::max(size_t(1), static_cast<size_t>(std::ceil(length)));
+            }
+            if (divided.vertices.size()/stride + steps > 65536) return fail("道路の分割数が多すぎます");
+            for (size_t step = 1; step <= steps; ++step) {
+                const float t = static_cast<float>(step)/static_cast<float>(steps);
+                for (uint32_t column = 0; column <= columns; ++column) {
+                    const auto& b = mesh.vertices[row*stride+column];
+                    const auto& a = mesh.vertices[(row == 0 ? 0 : row-1)*stride+column];
+                    renderer::MeshVertex v;
+                    XMStoreFloat3(&v.position, XMVectorLerp(Load(a.position), Load(b.position), t));
+                    const auto n = XMVector3Normalize(XMVectorLerp(Load(a.normal), Load(b.normal), t));
+                    const auto tangent = XMVectorLerp(XMLoadFloat4(&a.tangent), XMLoadFloat4(&b.tangent), t);
+                    XMStoreFloat3(&v.normal, n);
+                    XMStoreFloat4(&v.tangent, XMVector3Normalize(XMVectorSubtract(tangent,
+                        XMVectorScale(n,XMVectorGetX(XMVector3Dot(n,tangent))))));
+                    v.tangent.w = -1.0f;
+                    v.uv = {a.uv.x+(b.uv.x-a.uv.x)*t,a.uv.y+(b.uv.y-a.uv.y)*t};
+                    divided.vertices.push_back(v);
+                }
+                const auto count = static_cast<uint32_t>(divided.vertices.size()/stride);
+                if (count > 1) for (uint32_t column = 0; column < columns; ++column) {
+                    const auto a = (count-2)*stride+column;
+                    divided.indices.insert(divided.indices.end(),{a,a+stride,a+1,a+1,a+stride,a+stride+1});
+                }
+            }
+        }
+        mesh = std::move(divided);
     }
     result = std::move(built);
     return true;
@@ -178,6 +222,7 @@ CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph) {
         renderer::SceneMesh mesh;
         mesh.geometry = std::move(geometry.surface);
         mesh.material.roughness = 0.85f;
+        mesh.roadMetersPerUv = std::get<RoadNodeSettings>(road->settings).uvRepeatMeters;
         compiled.scene.meshes.push_back(std::move(mesh));
     }
     return compiled;

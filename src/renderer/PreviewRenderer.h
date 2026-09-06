@@ -251,6 +251,8 @@ public:
     // ハイトの範囲（height 0 / 0.5 / 1 の枠）を描くか。設定は AppSettings が持ち、
     // Application が毎フレーム写す。深度テストするためレンダラ側で描く。
     bool& ShowHeightGuide() { return m_showHeightGuide; }
+    bool& ShowRoadGrid() { return m_showRoadGrid; }
+    bool& ShowUvChecker() { return m_showUvChecker; }
     bool& ShowReferenceGrid() { return m_showReferenceGrid; }
     // マスクのプレビューで、0 か 1 に張り付いた所へ斜線を引くか（設定）。
     bool& MaskSaturationHatch() { return m_maskSaturationHatch; }
@@ -341,6 +343,8 @@ private:
     float m_tessellationFactor = kPreviewDefaults.tessellationFactor;
     bool m_showHeightGuide = false;
     bool m_showReferenceGrid = true;
+    bool m_showRoadGrid = false;
+    bool m_showUvChecker = false;
     bool m_maskSaturationHatch = kPreviewDefaults.maskSaturationHatch;
     bool m_maskPreviewActive = false;
     bool m_skyRebuildRequested = false;

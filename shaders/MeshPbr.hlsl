@@ -49,8 +49,8 @@ struct MeshConstants
     uint debugView;
     // ハイトを形状に反映する量。0 なら押し出さない。
     float displacementScale;
-    float pad3;
-    float pad4;
+    float roadMetersPerUv;
+    uint meshDisplayFlags;
 
     float4x4 lightViewProjection;
 
@@ -334,8 +334,40 @@ struct PsOutput
     float4 materialUv : SV_Target1;
 };
 
+// 距離場を画面微分でなだらかにし、遠方の細いグリッドのちらつきを抑える。
+float GridLine(float2 coordinate)
+{
+    float2 footprint = max(fwidth(coordinate), 1e-5f);
+    float2 distance = abs(frac(coordinate + 0.5f) - 0.5f);
+    float2 coverage = 1.0f - smoothstep(0.4f, 1.4f, distance / footprint);
+    coverage *= saturate(1.0f - footprint);
+    return max(coverage.x, coverage.y);
+}
+float3 ApplyRoadGrid(float3 color, float2 uv)
+{
+    if ((g_mesh.meshDisplayFlags & 1u) != 0u && g_mesh.roadMetersPerUv > 0.0f)
+        color *= lerp(1.0f, 0.12f, GridLine(uv * g_mesh.roadMetersPerUv));
+    return color;
+}
+
 PsOutput PsMain(VsOutput input)
 {
+    if ((g_mesh.meshDisplayFlags & 2u) != 0u)
+    {
+        // 1 UVタイルを2×2の市松模様で表示。赤がU、緑がV方向の目印。
+        float2 cell = floor(input.uv * 2.0f);
+        float checker = fmod(abs(cell.x + cell.y), 2.0f);
+        float fade = saturate(1.0f - max(fwidth(input.uv.x), fwidth(input.uv.y)) * 2.0f);
+        float3 color = lerp(0.45f.xxx, lerp(0.18f.xxx, 0.75f.xxx, checker), fade);
+        float2 local = frac(input.uv);
+        color = lerp(color, float3(0.8f,0.12f,0.08f), step(local.y,0.07f)*fade);
+        color = lerp(color, float3(0.08f,0.65f,0.18f), step(local.x,0.07f)*fade);
+        color *= lerp(1.0f,0.25f,GridLine(input.uv));
+        PsOutput result;
+        result.color = float4(ApplyRoadGrid(color,input.uv),1.0f);
+        result.materialUv = float4(frac(input.uv),1.0f,0.0f);
+        return result;
+    }
     const float3 geometricNormal = normalize(input.worldNormal);
     const float3 viewDirection = normalize(g_mesh.cameraPosition - input.worldPosition);
 
@@ -495,7 +527,7 @@ PsOutput PsMain(VsOutput input)
         }
 
         PsOutput debugOutput;
-        debugOutput.color = float4(debugColor, 1.0f);
+        debugOutput.color = float4(ApplyRoadGrid(debugColor, input.uv), 1.0f);
         debugOutput.materialUv = float4(frac(input.uv), 1.0f, 0.0f);
         return debugOutput;
     }
@@ -548,7 +580,7 @@ PsOutput PsMain(VsOutput input)
     PsOutput output;
     // シーンカラーは R16G16B16A16_FLOAT。half の上限（65504）を超えると Inf になり、
     // トーンマップを経て NaN → ハイライト中心の黒点になる。上限手前でクランプする。
-    output.color = float4(min(radiance, 60000.0f), 1.0f);
+    output.color = float4(ApplyRoadGrid(min(radiance, 60000.0f), input.uv), 1.0f);
     // ペイントマスクはタイル 1 枚ぶんのテクスチャなので、UV も畳んで書き出す。
     output.materialUv = float4(frac(input.uv), 1.0f, 0.0f);
     return output;

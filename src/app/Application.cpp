@@ -411,6 +411,8 @@ int Application::Run() {
         // だが、レンダラは AppSettings を知らないので、描く直前に毎フレーム渡す。
         m_renderer.ShowHeightGuide() = m_settings.Display().showHeightGuide;
         m_renderer.ShowReferenceGrid() = m_settings.Display().showReferenceGrid;
+        m_renderer.ShowRoadGrid() = m_settings.Display().showRoadGrid;
+        m_renderer.ShowUvChecker() = m_settings.Display().showUvChecker;
 
         // グラフをレイヤー列へコンパイルした結果で評価する。
         SyncGraphStack();

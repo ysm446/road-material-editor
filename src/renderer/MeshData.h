@@ -28,6 +28,8 @@ struct MaterialSettings {
 struct SceneMesh {
     MeshData geometry;
     MaterialSettings material;
+    // 道路の表示用メタデータ。0は道路以外。生成時に再構築する。
+    float roadMetersPerUv = 0.0f;
 };
 
 struct MeshScene {

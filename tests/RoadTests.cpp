@@ -16,17 +16,23 @@ void RunRoadTests() {
     graph::RoadGeometry road;
     std::string error;
     Check(graph::BuildRoad(path, settings, road, error), "sloped road builds");
-    Check(road.surface.vertices.size() == 4 && road.surface.indices.size() == 6, "straight strip topology");
-    if (road.surface.vertices.size() != 4) return;
+    Check(road.surface.vertices.size() == 84 && road.surface.indices.size() == 396, "one metre rows and columns");
+    if (road.surface.vertices.size() != 84) return;
     Check(std::abs(road.surface.vertices[0].position.x + 3) < 1e-5f &&
-          std::abs(road.surface.vertices[1].position.x - 3) < 1e-5f, "six metre width and left/right orientation");
-    Check(std::abs(road.surface.vertices[2].uv.y - std::sqrt(104.0f)) < 1e-4f,
+          std::abs(road.surface.vertices[6].position.x - 3) < 1e-5f, "six metre width and left/right orientation");
+    Check(std::abs(road.surface.vertices.back().uv.y - std::sqrt(104.0f)) < 1e-4f,
           "longitudinal UV measures 3D distance");
     renderer::MeshScene scene;
     scene.meshes.push_back({road.surface,{}});
     Check(renderer::ValidateMeshScene(scene), "finite orthonormal mesh with valid indices");
     Check(road.left.worldSpace && road.left.points.back().y == 2 &&
           road.right.points.back().x == 3, "boundaries preserve world coordinates and height");
+    bool metreCells = true;
+    for (size_t i = 0; i < road.surface.vertices.size(); ++i) {
+        if (i % 7 != 6) metreCells &= std::abs(road.surface.vertices[i+1].position.x-road.surface.vertices[i].position.x) <= 1.001f;
+        if (i + 7 < road.surface.vertices.size()) metreCells &= road.surface.vertices[i+7].uv.y-road.surface.vertices[i].uv.y <= 1.001f;
+    }
+    Check(metreCells, "straight cells are at most one metre in both axes");
     const float endUv = road.surface.vertices.back().uv.y;
     graph::PathSettings dense;
     dense.worldSpace = true;
@@ -57,6 +63,13 @@ void RunRoadTests() {
     for (auto& edge : curve.edges) edge.curve = graph::PathCurve::Cubic;
     Check(graph::BuildRoad(curve, settings, road, error), "gentle cubic road builds");
     if (!error.empty()) std::printf("Road error: %s\n", error.c_str());
+    auto corner = path;
+    graph::AddPathPoint(corner, 10, 10, b);
+    Check(graph::BuildRoad(corner, settings, road, error), "subdivision preserves a right angle miter");
+    auto narrow = settings;
+    narrow.widthMeters = 2.5f;
+    Check(graph::BuildRoad(path,narrow,road,error) && std::abs(road.surface.vertices[3].position.x-1.25f)<1e-5f,
+          "fractional width is preserved with sub-metre columns");
     graph::NodeGraph graph;
     auto pathId = graph.CreateNode(graph::NodeKind::Path);
     auto roadId = graph.CreateNode(graph::NodeKind::Road);
@@ -73,14 +86,14 @@ void RunRoadTests() {
     history.Push(before, 0);
     std::get<graph::RoadNodeSettings>(graph.FindMutableNode(roadId)->settings).widthMeters = 8;
     compiled = graph::CompileMeshGraph(graph);
-    Check(compiled.scene.meshes.size() == 1 && compiled.scene.meshes[0].geometry.vertices[1].position.x == 4,
+    Check(compiled.scene.meshes.size() == 1 && compiled.scene.meshes[0].geometry.vertices[8].position.x == 4,
           "width changes regenerate geometry");
     DocumentSnapshot after;
     after.graphNodes = graph.Nodes(); after.graphLinks = graph.Links();
     auto restored = history.Undo(after);
     graph.Replace(restored.graphNodes, restored.graphLinks);
     compiled = graph::CompileMeshGraph(graph);
-    Check(compiled.scene.meshes[0].geometry.vertices[1].position.x == 3, "undo regenerates original width");
+    Check(compiled.scene.meshes[0].geometry.vertices[6].position.x == 3, "undo regenerates original width");
     restored = history.Redo(before);
     graph.Replace(restored.graphNodes, restored.graphLinks);
     Check(std::get<graph::RoadNodeSettings>(graph.FindNode(roadId)->settings).widthMeters == 8, "redo restores road settings");

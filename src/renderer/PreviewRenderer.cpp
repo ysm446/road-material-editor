@@ -99,8 +99,8 @@ struct MeshConstants {
     uint32_t debugView;
     float displacementScale;
     // float4 の区切りを守るための詰め物。**HLSL 側と必ず同じ数だけ置くこと。**
-    float pad3;
-    float pad4;
+    float roadMetersPerUv;
+    uint32_t meshDisplayFlags;
 
     XMFLOAT4X4 lightViewProjection;
 
@@ -743,6 +743,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     constants.materialSurfaceIndex = materialTextures.surface.SrvIndex();
     constants.materialHeightIndex = materialTextures.height.SrvIndex();
     constants.debugView = static_cast<uint32_t>(m_debugView);
+    constants.meshDisplayFlags = m_meshSceneEnabled ? ((m_showRoadGrid ? 1u : 0u) | (m_showUvChecker ? 2u : 0u)) : 0u;
     constants.displacementScale = m_meshSceneEnabled ? 0.0f : m_displacementScale;
     // 分割量はカメラから見た見え方で決める。本描画では viewProjection と同一で、
     // シャドウパスだけが viewProjection 側を上書きして分岐する。
@@ -765,6 +766,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             if (m_meshSceneEnabled) {
                 XMStoreFloat4x4(&drawConstants.model, XMMatrixIdentity());
                 XMStoreFloat4x4(&drawConstants.normalMatrix, XMMatrixIdentity());
+                drawConstants.roadMetersPerUv = m_meshScene.meshes[i].roadMetersPerUv;
                 const auto& material = m_meshScene.meshes[i].material;
                 drawConstants.baseColor = material.baseColor;
                 drawConstants.roughness = material.roughness;
@@ -941,7 +943,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     // チャンネルを覗く表示には掛けない（値そのものを見るための表示）。
     uint32_t tonemapSourceIndex = m_sceneColor.SrvIndex();
     ID3D12PipelineState* dofPipeline =
-        (m_dof.enabled && IsShadedView(m_debugView) && m_sceneColorDof.IsValid())
+        (m_dof.enabled && IsShadedView(m_debugView) && !m_showUvChecker && m_sceneColorDof.IsValid())
             ? pipelineCache.GetCompute(L"DepthOfField.hlsl", L"CsMain")
             : nullptr;
     if (dofPipeline != nullptr) {
@@ -990,7 +992,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         tonemapSourceIndex,    m_output.UavIndex(),
         m_width,               m_height,
         m_exposure.Exposure(), static_cast<uint32_t>(m_tonemap),
-        IsShadedView(m_debugView) ? 0u : 1u};
+        (IsShadedView(m_debugView) && !(m_meshSceneEnabled && m_showUvChecker)) ? 0u : 1u};
 
     commandList->SetComputeRootSignature(pipelineCache.GlobalRootSignature());
     commandList->SetPipelineState(tonemapPipeline);

@@ -42,6 +42,8 @@ struct DisplaySettings {
     bool showHeightGuide = false;
     // 原点中心の50m四方、1m刻みの作業グリッド。
     bool showReferenceGrid = true;
+    bool showRoadGrid = false;
+    bool showUvChecker = false;
     // アセットの帯（テクスチャ / マテリアル / 天球）を出すか。畳むとビューポートが縦に広がる。
     bool showAssetBand = true;
     // 前面にあるときの FPS 上限。0 で上限なし。

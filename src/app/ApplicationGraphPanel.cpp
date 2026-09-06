@@ -572,7 +572,15 @@ void Application::DrawGraphNode(const graph::Node& node) {
             ui::ThumbnailImage(static_cast<ImTextureID>(handle.ptr), thumbnailSize);
         } else if (layerSettings != nullptr) {
             ImGui::Dummy(ImVec2(kNodeWidth, 2.0f));
-            const D3D12_GPU_DESCRIPTOR_HANDLE result = GraphLayerThumbnail(node.id);
+            D3D12_GPU_DESCRIPTOR_HANDLE result = GraphLayerThumbnail(node.id);
+            // 合成結果が無いとき（メッシュシーン表示中や未評価の枝）は、割り当てた材質のサムネイルを出す。
+            // 繋ぎ替えずに何の材質かが分かればよいので、球の絵で足りる。
+            if (result.ptr == 0 && layerSettings->layer.material != compositor::kNoMaterialAsset) {
+                if (const compositor::MaterialAsset* asset = m_materialLibrary.Find(layerSettings->layer.material);
+                    asset != nullptr && asset->thumbnail.IsValid()) {
+                    result = asset->thumbnail.srv.gpu;
+                }
+            }
             ui::ThumbnailImage(static_cast<ImTextureID>(result.ptr), thumbnailSize);
             // マテリアル一覧からサムネイルへ落とすと、そのノードに割り当たる
             // （Surface だけ）。ID の無いアイテムでも BeginDragDropTarget は矩形から

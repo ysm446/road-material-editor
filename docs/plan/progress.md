@@ -25,7 +25,8 @@ R3 は白線（中央線と外側線の帯ポリゴン）を実装した。R2 �
 - メッシュシーンで HS / DS を有効にし、Road ノードの「変位量」を `SceneMesh::displacementMeters` として頂点 / ドメインシェーダの押し出しへ渡す。Height は道路 UV で wrap。
 - 「表示 > ワイヤーフレーム（分割後）」を追加。本描画と同じ VS / HS / DS と `PsWireframe` で、トーンマップ後に線を重ねる。設定は settings.json。
 - Debug / Release ビルド・テストが成功。`data/road-profile-check/tess.tgproj` の UI 画像（`tess-ui.png`）で分割の上限 16 のパッチが出ることを確認。
-- 未検証: 変位量を上げたときの見え方（サンプルの材質テクスチャが手元に無い）。白線の帯は路面の押し出しに追従しないので、変位を使うと埋まる（後続で道路 UV を持たせる）。
+- `data/textures` の砂利材質で変位 0.25 m を確認（`data/road-profile-check/displace-on.png` / `displace-wire.png`）。Surface ノードのハイトのソースを「テクスチャ」にしないと材質のハイトは合成に入らず、変位も効かない。
+- 白線の帯は路面の押し出しに追従しないので、変位を使うと埋まる（後続で道路 UV を持たせる）。
 
 ### 2026-09-07 01:29 — 走行側と進行方向の矢印
 

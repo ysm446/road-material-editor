@@ -33,9 +33,10 @@ bool ReadMeshScene(const nlohmann::json& node, renderer::MeshScene& scene) {
         for (const auto& vertex : entry["vertices"]) {
             float values[12];
             if (!ReadFloats(vertex, values, 12)) return false;
+            // 保存形式は 12 値のまま。道路 UV は持たないので uv を写す。
             mesh.geometry.vertices.push_back({{values[0], values[1], values[2]},
                 {values[3], values[4], values[5]}, {values[6], values[7], values[8], values[9]},
-                {values[10], values[11]}});
+                {values[10], values[11]}, {values[10], values[11]}});
         }
         for (const auto& index : entry["indices"]) {
             if (!index.is_number_integer()) return false;

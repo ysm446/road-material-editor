@@ -136,6 +136,7 @@ MeshData MakePlane(float size, uint32_t subdivisions) {
             // 陰影が反転する**（球とキューブは +1 で dP/dv と一致している）。
             vertex.tangent = XMFLOAT4{1.0f, 0.0f, 0.0f, -1.0f};
             vertex.uv = XMFLOAT2{tx, tz};
+            vertex.roadUv = vertex.uv;
             data.vertices.push_back(vertex);
         }
     }

@@ -119,6 +119,10 @@ struct MeshConstants {
     float maskPreviewLow;
     float maskPreviewHigh;
     float pad7;
+
+    uint32_t displacementHeightIndex;
+    uint32_t displacementUseRoadUv;
+    float pad8[2];
 };
 
 // GPU 側の SkyboxConstants と一致させること。
@@ -822,6 +826,18 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 XMStoreFloat4x4(&drawConstants.normalMatrix, XMMatrixIdentity());
                 drawConstants.roadMetersPerUv = m_meshScene.meshes[i].roadMetersPerUv;
                 drawConstants.displacementScale = m_meshScene.meshes[i].displacementMeters;
+                // 白線など、別のメッシュ（道路面）の材質ハイトで押し出す。
+                const int source = m_meshScene.meshes[i].displacementSource;
+                if (source >= 0 && static_cast<size_t>(source) < m_sceneMaterials.size()) {
+                    const auto& sourceEvaluator = m_sceneMaterials[static_cast<size_t>(source)].evaluator;
+                    if (sourceEvaluator && sourceEvaluator->EvaluatedRevision() != 0 &&
+                        sourceEvaluator->Textures().IsValid()) {
+                        drawConstants.displacementHeightIndex = sourceEvaluator->Textures().height.SrvIndex();
+                        drawConstants.displacementUseRoadUv = 1u;
+                    } else {
+                        drawConstants.displacementScale = 0.0f;
+                    }
+                }
                 if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;
                 const auto& material = m_meshScene.meshes[i].material;
                 drawConstants.baseColor = material.baseColor;

@@ -74,6 +74,12 @@ struct MeshConstants
     float maskPreviewLow;
     float maskPreviewHigh;
     float pad7;
+
+    // 押し出しに使うハイト。displacementUseRoadUv が 1 なら、displacementHeightIndex の
+    // テクスチャを道路 UV で読む（白線が道路面と同じ量だけ動く）。0 なら自分の材質のハイトを uv で読む。
+    uint displacementHeightIndex;
+    uint displacementUseRoadUv;
+    float2 pad8;
 };
 
 // 「ハイト（ローカル）」で周りの平均を取る半径（合成テクセル）と、
@@ -130,6 +136,7 @@ struct VsInput
     float3 normal   : NORMAL;
     float4 tangent  : TANGENT;
     float2 uv       : TEXCOORD0;
+    float2 roadUv   : TEXCOORD1;
 };
 
 struct VsOutput
@@ -191,14 +198,27 @@ float SampleShadow(float3 worldPosition, float nDotL, uint shadowIndex, float te
 // **VsMain と DsMain の両方がこの関数を通る。** 別々の式を書くと、
 // モデル行列を入れたときにテセレーションの ON / OFF で形が変わってしまう。
 // 頂点 / ドメインシェーダには微分が無いので SampleLevel を使う。
-float3 ApplyDisplacement(float3 worldPosition, float3 worldNormal, float2 uv)
+float3 ApplyDisplacement(float3 worldPosition, float3 worldNormal, float2 uv, float2 roadUv)
 {
-    if (g_mesh.useMaterialTextures == 0u || g_mesh.displacementScale == 0.0f)
+    if (g_mesh.displacementScale == 0.0f)
     {
         return worldPosition;
     }
-    Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.materialHeightIndex];
-    const float height = SampleMaterialScalarLevel(heightMap, uv);
+    float height = 0.5f;
+    if (g_mesh.displacementUseRoadUv != 0u)
+    {
+        Texture2D<float> roadHeight = ResourceDescriptorHeap[g_mesh.displacementHeightIndex];
+        height = roadHeight.SampleLevel(g_samplerAnisoWrap, roadUv, 0.0f);
+    }
+    else if (g_mesh.useMaterialTextures != 0u)
+    {
+        Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.materialHeightIndex];
+        height = SampleMaterialScalarLevel(heightMap, uv);
+    }
+    else
+    {
+        return worldPosition;
+    }
     // 高さの中央（0.5）を基準にする。全体が膨らまないようにするため。
     return worldPosition + worldNormal * ((height - 0.5f) * g_mesh.displacementScale);
 }
@@ -209,7 +229,7 @@ VsOutput VsMain(VsInput input)
 
     const float3 worldNormal = mul((float3x3)g_mesh.normalMatrix, input.normal);
     float3 worldPosition = mul(g_mesh.model, float4(input.position, 1.0f)).xyz;
-    worldPosition = ApplyDisplacement(worldPosition, normalize(worldNormal), input.uv);
+    worldPosition = ApplyDisplacement(worldPosition, normalize(worldNormal), input.uv, input.roadUv);
 
     output.worldPosition = worldPosition;
     output.clipPosition = mul(g_mesh.viewProjection, float4(worldPosition, 1.0f));
@@ -237,6 +257,7 @@ struct HsControlPoint
     float3 worldTangent  : TANGENT;
     float tangentSign    : TANGENTSIGN;
     float2 uv            : TEXCOORD0;
+    float2 roadUv        : TEXCOORD1;
 };
 
 struct HsPatchConstants
@@ -254,6 +275,7 @@ HsControlPoint VsControl(VsInput input)
     output.worldTangent = mul((float3x3)g_mesh.model, input.tangent.xyz);
     output.tangentSign = input.tangent.w;
     output.uv = input.uv;
+    output.roadUv = input.roadUv;
     return output;
 }
 
@@ -313,9 +335,11 @@ VsOutput DsMain(HsPatchConstants patchConstants, float3 barycentric : SV_DomainL
                                 patch[2].worldTangent * barycentric.z;
     const float2 uv = patch[0].uv * barycentric.x + patch[1].uv * barycentric.y +
                       patch[2].uv * barycentric.z;
+    const float2 roadUv = patch[0].roadUv * barycentric.x + patch[1].roadUv * barycentric.y +
+                          patch[2].roadUv * barycentric.z;
 
     // 分割後の点で高さを引いて押し出す。式は VsMain と共通の ApplyDisplacement。
-    worldPosition = ApplyDisplacement(worldPosition, worldNormal, uv);
+    worldPosition = ApplyDisplacement(worldPosition, worldNormal, uv, roadUv);
 
     output.worldPosition = worldPosition;
     output.clipPosition = mul(g_mesh.viewProjection, float4(worldPosition, 1.0f));

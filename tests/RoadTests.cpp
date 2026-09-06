@@ -201,6 +201,24 @@ void RunRoadTests() {
               "grid overlay is only on the road surface");
         Check(compiled.scene.meshes[1].material.baseColor.x > 0.8f && !compiled.scene.meshes[1].materialStack,
               "unconnected marking is white");
+        Check(compiled.scene.meshes[0].displacementSource == -1 && compiled.scene.meshes[1].displacementSource == 0,
+              "markings take their displacement height from the road surface");
+        {
+            // 白線の道路 UV は、同じ位置の道路面の UV と一致する（列 0 = Right 端が u = 0）。
+            const auto& roadMesh = compiled.scene.meshes[0].geometry;
+            const auto& lineMesh = compiled.scene.meshes[1].geometry;
+            const float uvRepeat = 1.0f;
+            bool matched = true;
+            for (size_t i = 0; i < lineMesh.vertices.size() && i < 12; ++i) {
+                const auto& v = lineMesh.vertices[i];
+                const float expectedU = (v.position.x + 3.0f) / uvRepeat;
+                // 縦の UV は 3D の実距離。この道路は z 10 m で高さ 2 m 上がる。
+                const float expectedV = v.position.z * std::sqrt(104.0f) / 10.0f / uvRepeat;
+                matched &= std::abs(v.roadUv.x - expectedU) < 1e-3f && std::abs(v.roadUv.y - expectedV) < 1e-2f;
+            }
+            matched &= std::abs(roadMesh.vertices[0].roadUv.x) < 1e-6f;
+            Check(matched, "marking road UV maps to the road surface UV");
+        }
     }
     const auto paint = chain.CreateNode(graph::NodeKind::Surface);
     chain.CreateLink(chain.FindNode(paint)->outputs[0].id, chain.FindNode(chainMarking)->inputs[1].id);

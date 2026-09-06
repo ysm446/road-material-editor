@@ -157,6 +157,7 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
             XMStoreFloat3(&vertex.position, XMVectorAdd(Load(centers[i]), XMVectorScale(offset, across * 2.0f - 1.0f)));
             vertex.uv = {across * settings.widthMeters / settings.uvRepeatMeters,
                          distance / settings.uvRepeatMeters};
+            vertex.roadUv = vertex.uv;
             built.surface.vertices.push_back(vertex);
             // 列 0 は進行方向に向かって右（右手系 Y-up で (dz, 0, -dx) は左を向く）。
             if (column == 0) AddBoundaryPoint(built.right, vertex.position);
@@ -215,6 +216,7 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
                         XMVectorScale(n,XMVectorGetX(XMVector3Dot(n,tangent))))));
                     v.tangent.w = -1.0f;
                     v.uv = {a.uv.x+(b.uv.x-a.uv.x)*t,a.uv.y+(b.uv.y-a.uv.y)*t};
+                    v.roadUv = v.uv;
                     divided.vertices.push_back(v);
                 }
                 const auto count = static_cast<uint32_t>(divided.vertices.size()/stride);
@@ -290,6 +292,9 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
                 XMStoreFloat4(&vertex.tangent, tangent);
                 vertex.tangent.w = -1.0f;
                 vertex.uv = {static_cast<float>(side), distance / settings.uvRepeatMeters};
+                // 路面上の位置。列 0（Right 端）からの横距離と実距離を道路の UV 反復長で割る。
+                vertex.roadUv = {(width * 0.5f + lateral) / road.settings.uvRepeatMeters,
+                                 distance / road.settings.uvRepeatMeters};
                 result.vertices.push_back(vertex);
             }
             if (row > 0) {
@@ -377,6 +382,8 @@ void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings&
                 XMStoreFloat4(&vertex.tangent, tangent);
                 vertex.tangent.w = -1.0f;
                 vertex.uv = {local.u, local.w};
+                vertex.roadUv = {(width * 0.5f + laneCenters[lane] + local.t * direction) / road.settings.uvRepeatMeters,
+                                 (center + local.s * direction) / road.settings.uvRepeatMeters};
                 result.vertices.push_back(vertex);
             }
             for (const auto& triangle : triangles) {
@@ -418,6 +425,8 @@ void AttachMaterial(const NodeGraph& graph, const Node& node, renderer::SceneMes
 struct MeshChain {
     std::vector<renderer::SceneMesh> meshes;
     RoadGeometry road;
+    // 道路面が chain.meshes の何番目か。白線の押し出し元にする。
+    int roadIndex = -1;
 };
 bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chain,
                        std::string& error, std::unordered_set<GraphId>& visiting) {
@@ -434,6 +443,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
             mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
             AttachMaterial(graph, *node, mesh);
+            chain.roadIndex = static_cast<int>(chain.meshes.size());
             chain.meshes.push_back(std::move(mesh));
             success = true;
         }
@@ -448,6 +458,9 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.material.roughness = 0.6f;
                 mesh.roadMetersPerUv = marking->uvRepeatMeters;
                 mesh.roadGridOverlay = false;
+                // 道路面と同じハイト・同じ量で押し出し、変位後の路面に貼り付ける。
+                mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
+                mesh.displacementSource = chain.roadIndex;
                 AttachMaterial(graph, *node, mesh);
                 chain.meshes.push_back(std::move(mesh));
                 success = true;
@@ -475,7 +488,11 @@ CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph) {
             compiled.error += error;
             continue;
         }
-        for (auto& mesh : chain.meshes) compiled.scene.meshes.push_back(std::move(mesh));
+        const int base = static_cast<int>(compiled.scene.meshes.size());
+        for (auto& mesh : chain.meshes) {
+            if (mesh.displacementSource >= 0) mesh.displacementSource += base;
+            compiled.scene.meshes.push_back(std::move(mesh));
+        }
     }
     return compiled;
 }

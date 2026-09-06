@@ -25,7 +25,7 @@ inline constexpr uint32_t kRootConstantCount = 20;
 // 頂点入力レイアウトの種類。頂点構造体は数が限られるので列挙で持つ。
 enum class VertexLayout {
     None,          // 頂点バッファを使わない（フルスクリーン描画など）
-    MeshStandard,  // position / normal / tangent / uv
+    MeshStandard,  // position / normal / tangent / uv / roadUv
 };
 
 struct GraphicsPipelineDesc {

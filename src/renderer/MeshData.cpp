@@ -26,7 +26,7 @@ bool ValidateMeshScene(const MeshScene& scene) {
         for (const auto& v : data.vertices) {
             const float values[] = {v.position.x, v.position.y, v.position.z,
                 v.normal.x, v.normal.y, v.normal.z, v.tangent.x, v.tangent.y,
-                v.tangent.z, v.tangent.w, v.uv.x, v.uv.y};
+                v.tangent.z, v.tangent.w, v.uv.x, v.uv.y, v.roadUv.x, v.roadUv.y};
             for (float value : values) {
                 if (!std::isfinite(value)) return false;
             }

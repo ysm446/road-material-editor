@@ -14,6 +14,9 @@ struct MeshVertex {
     DirectX::XMFLOAT3 normal;
     DirectX::XMFLOAT4 tangent;
     DirectX::XMFLOAT2 uv;
+    // 路面上の位置の道路 UV。白線などの部品が路面と同じハイトを読んで追従するために持つ。
+    // 道路面自身は uv と同じ。使わないメッシュは uv を写す。
+    DirectX::XMFLOAT2 roadUv{};
 };
 
 struct MeshData {
@@ -36,6 +39,9 @@ struct SceneMesh {
     bool roadGridOverlay = true;
     // 材質のハイトで法線方向へ押し出す量（m）。0 なら形は変えない。材質が無ければ効かない。
     float displacementMeters = 0.0f;
+    // 押し出しに使うハイトを別のメッシュ（道路面）の材質から読む。-1 なら自分の材質。
+    // 白線はこれで道路面と同じ量だけ押し出され、変位後の路面に貼り付く。
+    int displacementSource = -1;
     // 接続から導出した材質。GPU参照や保存対象ではない。
     std::optional<compositor::MaterialStack> materialStack;
 };

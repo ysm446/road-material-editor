@@ -1210,7 +1210,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
             item["maskArea"] = WriteAreaMask(mask->areaMask);
         } else if (const auto* road = std::get_if<graph::RoadNodeSettings>(&node.settings)) {
             item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters},
-                            {"displacement", road->displacementMeters}};
+                            {"displacement", road->displacementMeters}, {"uvAlongU", road->uvAlongU}};
         } else if (const auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&node.settings)) {
             item["roadMarking"] = {{"lineWidth", marking->lineWidthMeters},
                                    {"centerLine", marking->centerLine},
@@ -1220,7 +1220,8 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                    {"uvRepeat", marking->uvRepeatMeters},
                                    {"arrows", marking->arrows},
                                    {"arrowInterval", marking->arrowIntervalMeters},
-                                   {"arrowLength", marking->arrowLengthMeters}};
+                                   {"arrowLength", marking->arrowLengthMeters},
+                                   {"uvAlongU", marking->uvAlongU}};
         } else if (const auto* path = std::get_if<graph::PathNodeSettings>(&node.settings)) {
             item["path"] = WritePath(path->path);
         }
@@ -1362,6 +1363,7 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.widthMeters = ReadFloat(*road, "width", settings.widthMeters);
                     settings.uvRepeatMeters = ReadFloat(*road, "uvRepeat", settings.uvRepeatMeters);
                     settings.displacementMeters = std::clamp(ReadFloat(*road, "displacement", 0.0f), 0.0f, 5.0f);
+                    settings.uvAlongU = ReadBool(*road, "uvAlongU", settings.uvAlongU);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::RoadMarking) {
@@ -1376,6 +1378,7 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.arrows = ReadBool(*marking, "arrows", settings.arrows);
                     settings.arrowIntervalMeters = ReadFloat(*marking, "arrowInterval", settings.arrowIntervalMeters);
                     settings.arrowLengthMeters = ReadFloat(*marking, "arrowLength", settings.arrowLengthMeters);
+                    settings.uvAlongU = ReadBool(*marking, "uvAlongU", settings.uvAlongU);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::Path) {

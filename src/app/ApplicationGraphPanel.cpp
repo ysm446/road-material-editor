@@ -1060,6 +1060,15 @@ void Application::DrawGraphPanel() {
                 defaults.widthMeters, "中心線から左右へ半分ずつ広げる全幅", "%.2f m");
             changed |= ui::PropertyFloat("UV反復長", &road->uvRepeatMeters, 0.1f, 100.0f,
                 defaults.uvRepeatMeters, "UVが1増える実距離。道路の長さと幅の両方に適用する", "%.2f m");
+            {
+                static const char* const kUvAxisLabels[] = {"長さ方向 = V（縦）", "長さ方向 = U（横）"};
+                int axis = road->uvAlongU ? 1 : 0;
+                if (ui::PropertyCombo("UVの向き", &axis, kUvAxisLabels, IM_ARRAYSIZE(kUvAxisLabels), 0,
+                                      "テクスチャのどの軸を道路の長さ方向に沿わせるか。横長の素材は U")) {
+                    road->uvAlongU = (axis == 1);
+                    changed = true;
+                }
+            }
             changed |= ui::PropertyFloat("変位量", &road->displacementMeters, 0.0f, 1.0f,
                 defaults.displacementMeters,
                 "Materialのハイトで路面を法線方向へ押し出す量。ハイト0〜1の全幅がこの高さ（m）。"
@@ -1084,7 +1093,16 @@ void Application::DrawGraphPanel() {
             changed |= ui::PropertyFloat("浮かせ量", &marking->liftMeters, 0.0f, 0.1f,
                 defaults.liftMeters, "路面から法線方向へ持ち上げる量。0だと路面とちらつく", "%.3f m");
             changed |= ui::PropertyFloat("UV反復長", &marking->uvRepeatMeters, 0.1f, 100.0f,
-                defaults.uvRepeatMeters, "帯の長さ方向でVが1増える実距離。幅方向のUは0〜1", "%.2f m");
+                defaults.uvRepeatMeters, "帯の長さ方向でUVが1増える実距離。幅方向は0〜1", "%.2f m");
+            {
+                static const char* const kUvAxisLabels[] = {"長さ方向 = V（縦）", "長さ方向 = U（横）"};
+                int axis = marking->uvAlongU ? 1 : 0;
+                if (ui::PropertyCombo("UVの向き", &axis, kUvAxisLabels, IM_ARRAYSIZE(kUvAxisLabels), 0,
+                                      "テクスチャのどの軸を帯の長さ方向に沿わせるか。2048×256 のような横長の白線素材は U")) {
+                    marking->uvAlongU = (axis == 1);
+                    changed = true;
+                }
+            }
             changed |= ui::PropertyBool("進行方向の矢印", &marking->arrows, defaults.arrows,
                 "左右の車線の中央に矢印を置く。走行側の車線は線形の向き、対向車線は逆向き");
             if (marking->arrows) {

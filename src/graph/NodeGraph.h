@@ -177,6 +177,8 @@ struct RoadNodeSettings {
     float uvRepeatMeters = 1.0f;
     // Material のハイトで路面を押し出す量（m）。ハイト 0〜1 の全幅がこの高さになる。
     float displacementMeters = 0.0f;
+    // 真なら道路の長さ方向を U にする（既定は V）。横長のテクスチャを道路に沿わせるとき。
+    bool uvAlongU = false;
 };
 
 // 道路網に共通の設定。走行側は道路ごとではなくプロジェクトで 1 つ。
@@ -199,6 +201,8 @@ struct RoadMarkingNodeSettings {
     float liftMeters = 0.005f;
     // 帯の長さ方向でVが1増える実距離。幅方向のUは帯の左端0〜右端1。
     float uvRepeatMeters = 1.0f;
+    // 真なら長さ方向を U、幅方向を V にする（横長の白線テクスチャ向け）。
+    bool uvAlongU = false;
 };
 
 // グラフを評価器の入力へ落とした結果。レイヤー列と、マスクの op の列。

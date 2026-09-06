@@ -15,6 +15,9 @@ namespace {
 
 constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
+// 路面に貼る帯（白線）の深度バイアス。D32 なので定数項は深度の指数に対する相対値。負で手前。
+constexpr int kDecalDepthBias = -2000;
+constexpr float kDecalSlopeScaledDepthBias = -2.0f;
 constexpr DXGI_FORMAT kOutputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 // ガイド線の端点の最大数。シェーダの TG_OVERLAY_MAX_VERTICES と一致させること。
@@ -824,15 +827,23 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         return asset ? asset->blendMode : compositor::BlendMode::Opaque;
     };
     // 各メッシュは世界座標で受け取る。平面の拡大・Height・マスク合成は使わない。
-    // translucentPass: 0 = 半透明以外、1 = 半透明だけ、-1 = 全部（影 / ワイヤーフレーム）。
-    const auto drawMeshes = [&](const MeshConstants& passConstants, int translucentPass = -1) {
+    // passMask: kPassOpaque = 路面など、kPassDecal = 路面に貼る帯（白線。深度バイアス付き）、
+    // kPassTranslucent = 半透明の帯。影とワイヤーフレームは半透明以外を全部描く。
+    constexpr uint32_t kPassOpaque = 1u;
+    constexpr uint32_t kPassDecal = 2u;
+    constexpr uint32_t kPassTranslucent = 4u;
+    const auto passOf = [&](size_t i) {
+        if (!m_meshSceneEnabled) return kPassOpaque;
+        if (blendModeOf(i) == compositor::BlendMode::Translucent) return kPassTranslucent;
+        return m_meshScene.meshes[i].useBlendMode ? kPassDecal : kPassOpaque;
+    };
+    const auto drawMeshes = [&](const MeshConstants& passConstants, uint32_t passMask) {
         const size_t count = m_meshSceneEnabled ? m_sceneMeshes.size() : 1;
         for (size_t i = 0; i < count; ++i) {
             MeshConstants drawConstants = passConstants;
             const Mesh& drawMesh = m_meshSceneEnabled ? m_sceneMeshes[i] : mesh;
             const compositor::BlendMode blendMode = blendModeOf(i);
-            if (translucentPass == 0 && blendMode == compositor::BlendMode::Translucent) continue;
-            if (translucentPass == 1 && blendMode != compositor::BlendMode::Translucent) continue;
+            if ((passOf(i) & passMask) == 0u) continue;
             if (m_meshSceneEnabled) {
                 if (blendMode != compositor::BlendMode::Opaque) {
                     const compositor::MaterialAsset* asset = materials.Find(m_meshScene.meshes[i].blendMaterial);
@@ -930,7 +941,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
             commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
             commandList->SetPipelineState(shadowPipeline);
-            drawMeshes(shadowConstants, 0);
+            drawMeshes(shadowConstants, kPassOpaque | kPassDecal);
 
             TransitionIfNeeded(commandList, m_shadowMap,
                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -968,21 +979,33 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
     commandList->SetPipelineState(meshPipeline);
-    drawMeshes(constants, 0);
-    // 半透明の材質（白線の帯など）は不透明の後にアルファ合成で描く。深度は読むだけ。
+    drawMeshes(constants, kPassOpaque);
     if (m_meshSceneEnabled) {
-        bool anyTranslucent = false;
-        for (size_t i = 0; i < m_sceneMeshes.size(); ++i) anyTranslucent |= blendModeOf(i) == compositor::BlendMode::Translucent;
-        if (anyTranslucent) {
+        uint32_t passes = 0u;
+        for (size_t i = 0; i < m_sceneMeshes.size(); ++i) passes |= passOf(i);
+        // 路面に貼る帯は深度バイアスで手前へ寄せ、路面の分割との差で石が突き抜けないようにする。
+        if (passes & kPassDecal) {
+            rhi::GraphicsPipelineDesc decalDesc = meshPipelineDesc;
+            decalDesc.depthBias = kDecalDepthBias;
+            decalDesc.slopeScaledDepthBias = kDecalSlopeScaledDepthBias;
+            if (ID3D12PipelineState* decalPipeline = pipelineCache.GetGraphics(decalDesc)) {
+                commandList->SetPipelineState(decalPipeline);
+                drawMeshes(constants, kPassDecal);
+            }
+        }
+        // 半透明の帯は最後にアルファ合成で描く。深度は読むだけ。
+        if (passes & kPassTranslucent) {
             rhi::GraphicsPipelineDesc blendDesc = meshPipelineDesc;
             blendDesc.alphaBlend = true;
             blendDesc.depthWrite = false;
+            blendDesc.depthBias = kDecalDepthBias;
+            blendDesc.slopeScaledDepthBias = kDecalSlopeScaledDepthBias;
             if (ID3D12PipelineState* blendPipeline = pipelineCache.GetGraphics(blendDesc)) {
                 commandList->SetPipelineState(blendPipeline);
-                drawMeshes(constants, 1);
-                commandList->SetPipelineState(meshPipeline);
+                drawMeshes(constants, kPassTranslucent);
             }
         }
+        commandList->SetPipelineState(meshPipeline);
     }
     m_stats.tessellation = useTessellation;
     m_stats.tessellationFactor = m_tessellationFactor;
@@ -1143,7 +1166,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             commandList->OMSetRenderTargets(1, &outputRtv, FALSE, &depthDsv);
             commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
             commandList->SetPipelineState(wirePipeline);
-            drawMeshes(constants);
+            drawMeshes(constants, kPassOpaque | kPassDecal);
             PIXEndEvent(commandList);
         }
     }

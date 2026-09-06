@@ -253,7 +253,16 @@ bool Application::DrawMaterialProperties(compositor::MaterialAsset& asset) {
         changed |= DrawMapSlotRow("メタルネス", asset.metallic, m_textureLibrary);
         changed |= DrawMapSlotRow("AO", asset.ambientOcclusion, m_textureLibrary);
         changed |= DrawMapSlotRow("ハイト", asset.height, m_textureLibrary);
-        changed |= DrawMapSlotRow("不透明度", asset.opacity, m_textureLibrary);
+        {
+            const compositor::TextureId before = asset.opacity.texture;
+            const bool slotChanged = DrawMapSlotRow("不透明度", asset.opacity, m_textureLibrary);
+            // マップを付けたのに不透明のままだと何も起きないので、マスク抜きへ切り替える。
+            if (slotChanged && before == compositor::kNoTexture && asset.opacity.texture != compositor::kNoTexture &&
+                asset.blendMode == compositor::BlendMode::Opaque) {
+                asset.blendMode = compositor::BlendMode::Masked;
+            }
+            changed |= slotChanged;
+        }
 
         // 1 枚に AO / ラフネス / ハイトを詰めたテクスチャをまとめて割り当てる。
         ui::PropertyLabel("ORD", "1 枚に AO / ラフネス / ハイトを詰めたテクスチャ");

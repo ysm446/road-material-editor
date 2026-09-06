@@ -227,6 +227,23 @@ void RunRoadTests() {
           !compiled.scene.meshes[0].materialStack, "marking material does not leak to the road");
     Check(compiled.scene.meshes[1].useBlendMode && !compiled.scene.meshes[0].useBlendMode,
           "only markings honour the material blend mode");
+    {
+        // UV の向き。長さ方向を U にすると帯の uv が入れ替わり、道路の roadUv も道路側の設定に従う。
+        auto& markingSettings = std::get<graph::RoadMarkingNodeSettings>(chain.FindMutableNode(chainMarking)->settings);
+        auto& roadSettings = std::get<graph::RoadNodeSettings>(chain.FindMutableNode(chainRoad)->settings);
+        markingSettings.uvAlongU = true;
+        roadSettings.uvAlongU = true;
+        auto swapped = graph::CompileMeshGraph(chain);
+        const auto& lineV = swapped.scene.meshes[1].geometry.vertices;
+        const auto& roadV = swapped.scene.meshes[0].geometry.vertices;
+        Check(lineV[0].uv.x == 0.0f && lineV[1].uv.x == 0.0f && lineV[1].uv.y == 1.0f,
+              "marking uv along U puts the strip width on V");
+        Check(std::abs(roadV[6].uv.y - 6.0f) < 1e-4f && roadV[6].uv.x == 0.0f,
+              "road uv along U puts the width on V");
+        Check(std::abs(lineV[0].roadUv.y - (3.0f - 0.075f)) < 1e-3f, "marking road UV follows the road axis setting");
+        markingSettings.uvAlongU = false;
+        roadSettings.uvAlongU = false;
+    }
     std::get<graph::LayerNodeSettings>(chain.FindMutableNode(paint)->settings).layer.material = 7;
     compiled = graph::CompileMeshGraph(chain);
     Check(compiled.scene.meshes[1].blendMaterial == 7, "blend material comes from the top layer");

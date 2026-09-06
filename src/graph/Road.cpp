@@ -157,6 +157,7 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
             XMStoreFloat3(&vertex.position, XMVectorAdd(Load(centers[i]), XMVectorScale(offset, across * 2.0f - 1.0f)));
             vertex.uv = {across * settings.widthMeters / settings.uvRepeatMeters,
                          distance / settings.uvRepeatMeters};
+            if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
             vertex.roadUv = vertex.uv;
             built.surface.vertices.push_back(vertex);
             // 列 0 は進行方向に向かって右（右手系 Y-up で (dz, 0, -dx) は左を向く）。
@@ -292,9 +293,11 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
                 XMStoreFloat4(&vertex.tangent, tangent);
                 vertex.tangent.w = -1.0f;
                 vertex.uv = {static_cast<float>(side), distance / settings.uvRepeatMeters};
+                if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
                 // 路面上の位置。列 0（Right 端）からの横距離と実距離を道路の UV 反復長で割る。
                 vertex.roadUv = {(width * 0.5f + lateral) / road.settings.uvRepeatMeters,
                                  distance / road.settings.uvRepeatMeters};
+                if (road.settings.uvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
                 result.vertices.push_back(vertex);
             }
             if (row > 0) {
@@ -382,8 +385,10 @@ void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings&
                 XMStoreFloat4(&vertex.tangent, tangent);
                 vertex.tangent.w = -1.0f;
                 vertex.uv = {local.u, local.w};
+                if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
                 vertex.roadUv = {(width * 0.5f + laneCenters[lane] + local.t * direction) / road.settings.uvRepeatMeters,
                                  (center + local.s * direction) / road.settings.uvRepeatMeters};
+                if (road.settings.uvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
                 result.vertices.push_back(vertex);
             }
             for (const auto& triangle : triangles) {

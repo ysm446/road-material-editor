@@ -586,6 +586,7 @@ json WritePath(const graph::PathSettings& path) {
         item["width"] = point.widthMeters;
         item["feather"] = point.featherMeters;
         item["intensity"] = point.intensity;
+        if (point.stopLine != graph::PathStopLine::None) item["stopLine"] = static_cast<int>(point.stopLine);
         if (!path.worldSpace) item["heightOffset"] = point.y;
         points.push_back(std::move(item));
     }
@@ -685,6 +686,7 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
             point.widthMeters = ReadFloat(item, "width", path.defaultWidthMeters);
             point.featherMeters = ReadFloat(item, "feather", path.defaultFeatherMeters);
             point.intensity = ReadFloat(item, "intensity", path.defaultIntensity);
+            point.stopLine = static_cast<graph::PathStopLine>(std::clamp(ReadInt(item, "stopLine", 0), 0, 3));
             point.y = ReadFloat(item, "heightOffset", 0.0f);
             if (path.worldSpace) {
                 const auto position = ReadFloat3(item, "position", {point.x, point.y, point.z});
@@ -1263,6 +1265,8 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                    {"laneLines", marking->laneLines},
                                    {"dashLength", marking->dashLengthMeters},
                                    {"dashGap", marking->dashGapMeters},
+                                   {"stopLines", marking->stopLines},
+                                   {"stopLineWidth", marking->stopLineWidthMeters},
                                    {"lift", marking->liftMeters},
                                    {"uvRepeat", marking->uvRepeatMeters},
                                    {"arrows", marking->arrows},
@@ -1502,6 +1506,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.laneLines = ReadBool(*marking, "laneLines", settings.laneLines);
                     settings.dashLengthMeters = ReadFloat(*marking, "dashLength", settings.dashLengthMeters);
                     settings.dashGapMeters = ReadFloat(*marking, "dashGap", settings.dashGapMeters);
+                    settings.stopLines = ReadBool(*marking, "stopLines", settings.stopLines);
+                    settings.stopLineWidthMeters = ReadFloat(*marking, "stopLineWidth", settings.stopLineWidthMeters);
                     settings.liftMeters = ReadFloat(*marking, "lift", settings.liftMeters);
                     settings.uvRepeatMeters = ReadFloat(*marking, "uvRepeat", settings.uvRepeatMeters);
                     settings.arrows = ReadBool(*marking, "arrows", settings.arrows);

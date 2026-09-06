@@ -16,6 +16,12 @@ struct RoadGeometry {
     RoadNodeSettings settings;
     // 行ごとの始点からの実距離（m）。UV の向きに依存しない。
     std::vector<float> rowDistances;
+    // 停止線。Path の点のうち stopLine を持つものを、道路上で最も近い実距離に写したもの。
+    struct StopLine {
+        float distanceMeters = 0.0f;
+        PathStopLine kind = PathStopLine::None;
+    };
+    std::vector<StopLine> stopLines;
 };
 bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
                RoadGeometry& result, std::string& error);

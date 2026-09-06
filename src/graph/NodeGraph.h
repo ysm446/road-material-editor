@@ -292,6 +292,9 @@ struct RoadMarkingNodeSettings {
     bool laneLines = true;
     float dashLengthMeters = 5.0f;
     float dashGapMeters = 5.0f;
+    // 停止線。Path の点に付けた停止線を、その向きの車線の幅いっぱいに引く。
+    bool stopLines = true;
+    float stopLineWidthMeters = 0.45f;
     // 進行方向の矢印。左右の車線の中央に一定間隔で置き、走行側に応じて向きを決める。
     bool arrows = true;
     float arrowIntervalMeters = 30.0f;

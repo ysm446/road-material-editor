@@ -401,6 +401,38 @@ void RunRoadTests() {
         float fullMaxZ = -1e9f;
         for (const auto& v : dashMesh.vertices) fullMaxZ = std::max(fullMaxZ, v.position.z);
         Check(std::abs(fullMaxZ - 10.0f) < 1e-3f, "zero gap reaches the end of the road");
+        // 停止線。終点の制御点に「進行方向」を付けると、道路の末尾に進行方向の車線幅の帯が出る。
+        {
+            graph::PathSettings stopPath = path;
+            stopPath.FindPoint(b)->stopLine = graph::PathStopLine::Forward;
+            graph::RoadGeometry stopRoad;
+            Check(graph::BuildRoad(stopPath, laneSettings, stopRoad, error) && stopRoad.stopLines.size() == 1 &&
+                  std::abs(stopRoad.stopLines[0].distanceMeters - stopRoad.rowDistances.back()) < 1e-3f,
+                  "stop line on the last point maps to the end of the road");
+            graph::RoadMarkingNodeSettings stopOnly;
+            stopOnly.centerLine = stopOnly.edgeLines = stopOnly.laneLines = stopOnly.arrows = false;
+            stopOnly.stopLines = true;
+            stopOnly.stopLineWidthMeters = 0.45f;
+            renderer::MeshData stopMesh;
+            // 左側通行: 進行方向 2 車線は Left（+X）側、横位置 -1.5〜4.5。
+            Check(graph::BuildRoadMarkings(stopRoad, stopOnly, true, stopMesh, error) && stopMesh.vertices.size() == 4 &&
+                  stopMesh.indices.size() == 6, "one stop line is a single quad");
+            if (!error.empty()) std::printf("Stop line error: %s\n", error.c_str());
+            if (stopMesh.vertices.size() == 4) {
+                float stopMinX = 1e9f, stopMaxX = -1e9f, stopMinZ = 1e9f, stopMaxZ = -1e9f;
+                for (const auto& v : stopMesh.vertices) {
+                    stopMinX = std::min(stopMinX, v.position.x); stopMaxX = std::max(stopMaxX, v.position.x);
+                    stopMinZ = std::min(stopMinZ, v.position.z); stopMaxZ = std::max(stopMaxZ, v.position.z);
+                }
+                Check(std::abs(stopMinX + 1.5f) < 1e-3f && std::abs(stopMaxX - 4.5f) < 1e-3f, "stop line spans the forward lanes");
+                Check(std::abs(stopMaxZ - 10.0f) < 1e-3f && stopMaxZ - stopMinZ > 0.4f && stopMaxZ - stopMinZ < 0.46f,
+                      "stop line ends at the point and is 45 cm deep");
+            }
+            stopPath.FindPoint(b)->stopLine = graph::PathStopLine::Both;
+            Check(graph::BuildRoad(stopPath, laneSettings, stopRoad, error) &&
+                  graph::BuildRoadMarkings(stopRoad, stopOnly, true, stopMesh, error) && stopMesh.vertices.size() == 4,
+                  "opposing stop line beyond the road end is dropped");
+        }
         // 矢印は車線ごと。3 車線なら 1 間隔あたり 3 本。
         graph::RoadMarkingNodeSettings laneArrows;
         laneArrows.centerLine = laneArrows.edgeLines = laneArrows.laneLines = false;

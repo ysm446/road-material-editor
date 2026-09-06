@@ -1333,6 +1333,12 @@ void Application::DrawGraphPanel() {
                 changed |= ui::PropertyFloat("破線の間隔", &marking->dashGapMeters, 0.0f, 50.0f,
                     defaults.dashGapMeters, "破線と破線の間の空き。0 で実線", "%.1f m");
             }
+            changed |= ui::PropertyBool("停止線", &marking->stopLines, defaults.stopLines,
+                "Path の点に付けた停止線を、その向きの車線の幅いっぱいに引く");
+            if (marking->stopLines) {
+                changed |= ui::PropertyFloat("停止線の幅", &marking->stopLineWidthMeters, 0.1f, 2.0f,
+                    defaults.stopLineWidthMeters, "停止線の道路の長さ方向の幅", "%.2f m");
+            }
             changed |= ui::PropertyFloat("線幅", &marking->lineWidthMeters, 0.05f, 1.0f,
                 defaults.lineWidthMeters, "帯の幅", "%.2f m");
             changed |= ui::PropertyFloat("端からの距離", &marking->edgeInsetMeters, 0.0f, 5.0f,

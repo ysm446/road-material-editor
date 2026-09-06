@@ -1,7 +1,7 @@
 # node-graph — ノードグラフの設計
 
 作成日時: 2026-09-02 12:50
-更新日時: 2026-09-07 08:50
+更新日時: 2026-09-07 09:10
 
 `src/graph/` とグラフパネル（`src/app/ApplicationGraphPanel.cpp`）の設計。
 ノード編集と移行前の評価経路、Road / Mesh Output による道路メッシュの評価を記録する。
@@ -276,6 +276,14 @@ Roadは約1 m四方のセルを三角形2枚で構成する。カーブ・端の
   破線は `SampleRoadSurface` で距離ごとに帯を作り、行をまたぐ区間は行ごとに刻む。矢印は各車線の中央に、車線の向きで置く。
 - Road Mask の轍は `tracksFromLanes` で各車線の中央に置く（`bothLanes` が偽なら進行方向の車線だけ）。`BakeRoadMask` に `RoadLanes` を渡す。
   路肩には車線が無いので nullptr を渡し、手入力の `laneOffsetMeters` に落ちる。旧ファイルはキーが無いので手入力のまま。
+
+### 停止線（2026-09-07）
+
+- 実寸 Path の点が `stopLine`（なし / 進行方向 / 対向 / 両方）を持つ。曲線は制御点を通らないので、`BuildRoad` が点に最も近い行の間へ射影して
+  実距離に写し、`RoadGeometry::stopLines` に持つ。交差点を後で作るときも「点に付いた属性」の形で持ち越せる。
+- Lane Marking は `stopLines` が真なら、その向きの車線の幅いっぱいに `stopLineWidthMeters` の帯を置く。進行方向の車線は距離 [d − 幅, d]、
+  対向車線は [d, d ＋ 幅]（どちらも走ってくる側から見て手前）。道路の外に出る分は切る。
+- 点の選択時のプロパティ「停止線」で付ける（面上のパスには出ない）。
 
 ## Lane Marking（白線）
 

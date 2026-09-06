@@ -19,6 +19,8 @@ void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings&
                         const RoadLanes& lanes, renderer::MeshData& result);
 void BuildDashedStrip(const RoadGeometry& road, const RoadMarkingNodeSettings& settings, float lateral,
                       renderer::MeshData& result);
+void BuildStopLines(const RoadGeometry& road, const RoadMarkingNodeSettings& settings, const RoadLanes& lanes,
+                    renderer::MeshData& result);
 void AddBoundaryPoint(PathSettings& path, const XMFLOAT3& p) {
     const auto previous = path.points.empty() ? 0 : path.points.back().id;
     const auto id = AddPathPoint(path, p.x, p.z, 0);
@@ -389,6 +391,31 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
                                                          Load(mesh.vertices[row * stride + columns].position)), 0.5f);
             built.rowDistances[row] = built.rowDistances[row - 1] + Length(XMVectorSubtract(b, a));
         }
+        // 停止線。点に最も近い行の間を線分として射影し、実距離に写す（曲線は点を通らない）。
+        for (const PathPoint& point : path.points) {
+            if (point.stopLine == PathStopLine::None || rowCount < 2) continue;
+            const XMVECTOR p = XMVectorSet(point.x, 0.0f, point.z, 0.0f);
+            float bestError = 1e30f;
+            float bestDistance = 0.0f;
+            for (size_t row = 0; row + 1 < rowCount; ++row) {
+                const auto rowCenter = [&](size_t r) {
+                    const XMVECTOR c = XMVectorScale(XMVectorAdd(Load(mesh.vertices[r * stride].position),
+                                                                 Load(mesh.vertices[r * stride + columns].position)), 0.5f);
+                    return XMVectorSetY(c, 0.0f);
+                };
+                const XMVECTOR a = rowCenter(row);
+                const XMVECTOR d = XMVectorSubtract(rowCenter(row + 1), a);
+                const float lengthSq = XMVectorGetX(XMVector3LengthSq(d));
+                const float t = lengthSq > 1e-8f
+                    ? std::clamp(XMVectorGetX(XMVector3Dot(XMVectorSubtract(p, a), d)) / lengthSq, 0.0f, 1.0f) : 0.0f;
+                const float err = Length(XMVectorSubtract(p, XMVectorAdd(a, XMVectorScale(d, t))));
+                if (err < bestError) {
+                    bestError = err;
+                    bestDistance = built.rowDistances[row] + t * (built.rowDistances[row + 1] - built.rowDistances[row]);
+                }
+            }
+            built.stopLines.push_back({bestDistance, point.stopLine});
+        }
     }
     result = std::move(built);
     return true;
@@ -428,7 +455,12 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
     if (dashed && (!std::isfinite(settings.dashLengthMeters) || settings.dashLengthMeters < 0.1f ||
                    !std::isfinite(settings.dashGapMeters) || settings.dashGapMeters < 0.0f))
         return fail("破線の長さは0.1 m以上、間隔は0 m以上にしてください");
-    if (offsets.empty() && !dashed && !settings.arrows) return fail("中央線・外側線・車線境界線・矢印のどれかを有効にしてください");
+    const bool stops = settings.stopLines && !road.stopLines.empty();
+    if (stops && (!std::isfinite(settings.stopLineWidthMeters) || settings.stopLineWidthMeters < 0.1f ||
+                  settings.stopLineWidthMeters > 2.0f))
+        return fail("停止線の幅は0.1〜2 mにしてください");
+    if (offsets.empty() && !dashed && !stops && !settings.arrows)
+        return fail("中央線・外側線・車線境界線・停止線・矢印のどれかを有効にしてください");
     if (settings.arrows && (!std::isfinite(settings.arrowIntervalMeters) || settings.arrowIntervalMeters < 1.0f ||
                             !std::isfinite(settings.arrowLengthMeters) || settings.arrowLengthMeters < 0.5f ||
                             settings.arrowLengthMeters > 20.0f))
@@ -476,6 +508,7 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
     if (dashed) {
         for (const float divider : lanes.dividers) BuildDashedStrip(road, settings, divider, result);
     }
+    if (stops) BuildStopLines(road, settings, lanes, result);
     if (settings.arrows) BuildArrowMarkings(road, settings, lanes, result);
     return true;
 }
@@ -550,6 +583,64 @@ void BuildDashedStrip(const RoadGeometry& road, const RoadMarkingNodeSettings& s
             const uint32_t a = first + (ring - 1) * 2;
             result.indices.insert(result.indices.end(), {a, a + 2, a + 1, a + 1, a + 2, a + 3});
         }
+    }
+}
+
+// 停止線。その向きの車線の幅いっぱいに、進行方向の手前側へ幅ぶんの帯を置く。
+// 進行方向の車線は距離 [d - 幅, d]、対向車線は [d, d + 幅]（対向から見て手前）。
+void BuildStopLines(const RoadGeometry& road, const RoadMarkingNodeSettings& settings, const RoadLanes& lanes,
+                    renderer::MeshData& result) {
+    const float total = road.rowDistances.empty() ? 0.0f : road.rowDistances.back();
+    const float width = road.settings.widthMeters;
+    const float half = lanes.laneWidthMeters * 0.5f;
+    const auto extent = [&](bool forward, float& lo, float& hi) {
+        lo = 1e30f; hi = -1e30f;
+        for (size_t i = 0; i < lanes.laneCenters.size(); ++i) {
+            if (lanes.laneForward[i] != forward) continue;
+            lo = std::min(lo, lanes.laneCenters[i] - half);
+            hi = std::max(hi, lanes.laneCenters[i] + half);
+        }
+        return lo < hi;
+    };
+    const auto addQuad = [&](float d0, float d1, float lat0, float lat1) {
+        d0 = std::clamp(d0, 0.0f, total);
+        d1 = std::clamp(d1, 0.0f, total);
+        if (d1 - d0 < 1e-3f) return;
+        const uint32_t first = static_cast<uint32_t>(result.vertices.size());
+        const float corners[4][2] = {{d0, lat0}, {d0, lat1}, {d1, lat0}, {d1, lat1}};
+        for (const auto& corner : corners) {
+            const SurfaceSample sample = SampleRoadSurface(road, corner[0], corner[1]);
+            renderer::MeshVertex vertex{};
+            XMStoreFloat3(&vertex.position, XMVectorAdd(sample.position, XMVectorScale(sample.normal, settings.liftMeters)));
+            XMStoreFloat3(&vertex.normal, sample.normal);
+            const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(sample.across,
+                XMVectorScale(sample.normal, XMVectorGetX(XMVector3Dot(sample.normal, sample.across)))));
+            XMStoreFloat4(&vertex.tangent, tangent);
+            vertex.tangent.w = -1.0f;
+            // 帯の幅方向（道路の長さ方向）を U、帯の長さ方向（道路の横方向）を V にする。
+            vertex.uv = {(corner[0] - d0) / (d1 - d0), (corner[1] - lat0) / (lat1 - lat0)};
+            if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
+            vertex.roadUv = {(width * 0.5f + corner[1]) / road.settings.uvRepeatMeters, corner[0] / road.settings.uvRepeatMeters};
+            if (road.settings.uvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
+            result.vertices.push_back(vertex);
+        }
+        const uint32_t tris[2][3] = {{first, first + 2, first + 1}, {first + 1, first + 2, first + 3}};
+        for (const auto& tri : tris) {
+            uint32_t a = tri[0], b = tri[1], c = tri[2];
+            const XMVECTOR n = XMVector3Cross(
+                XMVectorSubtract(Load(result.vertices[b].position), Load(result.vertices[a].position)),
+                XMVectorSubtract(Load(result.vertices[c].position), Load(result.vertices[a].position)));
+            if (XMVectorGetX(XMVector3Dot(n, Load(result.vertices[a].normal))) < 0.0f) std::swap(b, c);
+            result.indices.insert(result.indices.end(), {a, b, c});
+        }
+    };
+    for (const auto& stop : road.stopLines) {
+        float lo = 0.0f, hi = 0.0f;
+        const auto kind = static_cast<uint8_t>(stop.kind);
+        if ((kind & 1u) && extent(true, lo, hi))
+            addQuad(stop.distanceMeters - settings.stopLineWidthMeters, stop.distanceMeters, lo, hi);
+        if ((kind & 2u) && extent(false, lo, hi))
+            addQuad(stop.distanceMeters, stop.distanceMeters + settings.stopLineWidthMeters, lo, hi);
     }
 }
 

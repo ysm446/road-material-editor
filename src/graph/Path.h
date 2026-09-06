@@ -20,6 +20,15 @@ namespace tg::graph {
 
 using PathElementId = int;
 
+// 停止線。実寸 Path の点に持ち、Road がその点に最も近い実距離を控え、Lane Marking が引く。
+// 進行方向の車線に引くか、対向車線に引くか（両方も可）。
+enum class PathStopLine : uint8_t {
+    None = 0,
+    Forward = 1,
+    Backward = 2,
+    Both = 3,
+};
+
 struct PathPoint {
     PathElementId id = 0;
     float x = 0.5f;  // worldSpace: X(m)、旧形式: 地形UV
@@ -30,6 +39,8 @@ struct PathPoint {
     // Y座標（m）。旧形式だけは地形からの高さのずれ。
     // Mask Path は見ない。
     float y = 0.0f;
+    // 停止線（実寸 Path のみ）。曲線は点を通らないので、道路上ではこの点に最も近い位置になる。
+    PathStopLine stopLine = PathStopLine::None;
 };
 
 // 鎖（分岐から分岐までのエッジの並び）をどう描くか。エッジに持ち、鎖を選んだときに

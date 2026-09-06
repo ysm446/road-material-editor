@@ -2201,6 +2201,16 @@ bool Application::DrawPathSettings(graph::Node& node) {
                 }
                 changed |= axes != 0;
             }
+            if (path.worldSpace && !path.surfaceSpace) {
+                static const char* const kStopLineLabels[] = {"なし", "進行方向", "対向", "両方"};
+                int stop = static_cast<int>(edit.stopLine);
+                if (ui::PropertyCombo("停止線", &stop, kStopLineLabels, IM_ARRAYSIZE(kStopLineLabels), 0,
+                                      "この点の位置に停止線を引く。進行方向の車線か対向車線か。Lane Marking が描く。"
+                                      "曲線は点を通らないので、道路上で最も近い位置になる")) {
+                    edit.stopLine = static_cast<graph::PathStopLine>(stop);
+                    pointChanged = true;
+                }
+            }
             if (!path.worldSpace) {
                 pointChanged |= ui::PropertyFloat("幅", &edit.widthMeters, 0.5f, 2000.0f,
                                                   path.defaultWidthMeters, "この点での幅（m）",
@@ -2222,6 +2232,7 @@ bool Application::DrawPathSettings(graph::Node& node) {
                 point->widthMeters = edit.widthMeters;
                 point->featherMeters = edit.featherMeters;
                 point->intensity = edit.intensity;
+                point->stopLine = edit.stopLine;
                 if (!path.worldSpace) point->y = edit.y;
             }
             changed = true;

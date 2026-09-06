@@ -21,9 +21,9 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 
 ## 完了した作業
 
-### 2026-09-07 10:40 — 材質の「明るさ」
+### 2026-09-07 10:40 — 材質の「明度」
 
-- `MaterialAsset::brightness`。`AdjustBaseColor` の最後に掛けて `saturate`。合成（colorAdjust.z）・サムネイル・球の定数に同じ値を渡す。保存はキー追加のみ。
+- `MaterialAsset::brightness`（UI は「明度」。並びは 明度・彩度・色相）。`AdjustBaseColor` の最後に掛けて `saturate`。合成（colorAdjust.z）・サムネイル・球の定数に同じ値を渡す。保存はキー追加のみ。
 - 確認画像 `data/ui_bright_compare.png`（上: そのまま、下: 道路の下地を 2.5 倍）。
 
 ### 2026-09-07 10:00 — Crack ノード（ひび割れの自動配置、R4 第一段）

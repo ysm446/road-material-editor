@@ -202,15 +202,16 @@ bool Application::DrawMaterialProperties(compositor::MaterialAsset& asset) {
             "ベースカラーのマップに掛ける色。白ならマップそのまま。マップが無ければこの色になる");
         // **ベースカラーだけの調整。** ティントでは彩度を上げられず色相も回せないので、
         // 素材を馴染ませる操作をここに置く。掛ける色（ティント）のあとに効く。
-        changed |= ui::PropertyFloat(
-            "色相", &asset.hueShiftDegrees, -180.0f, 180.0f, kDefaultAsset.hueShiftDegrees,
-            "ベースカラーの色みを回す（度）。灰色は灰色のまま残る", "%.0f 度");
+        // 並びは 明度・彩度・色相（HSV の逆順で、いちばん触るものを上に）。
+        changed |= ui::PropertyFloat("明度", &asset.brightness, 0.0f, 4.0f,
+                                     kDefaultAsset.brightness,
+                                     "ベースカラーに掛ける倍率。1 でそのまま。1 を超えた成分は 1 で止める", "%.2f");
         changed |= ui::PropertyFloat("彩度", &asset.saturation, 0.0f, 2.0f,
                                      kDefaultAsset.saturation,
                                      "ベースカラーの鮮やかさ。0 で白黒、1 でそのまま", "%.2f");
-        changed |= ui::PropertyFloat("明るさ", &asset.brightness, 0.0f, 4.0f,
-                                     kDefaultAsset.brightness,
-                                     "ベースカラーに掛ける倍率。1 でそのまま。1 を超えた成分は 1 で止める", "%.2f");
+        changed |= ui::PropertyFloat(
+            "色相", &asset.hueShiftDegrees, -180.0f, 180.0f, kDefaultAsset.hueShiftDegrees,
+            "ベースカラーの色みを回す（度）。灰色は灰色のまま残る", "%.0f 度");
         changed |= ui::PropertyFloat("ラフネス", &asset.roughnessValue, 0.0f, 1.0f,
                                      kDefaultAsset.roughnessValue, "マップが無いときの値",
                                      "%.2f");

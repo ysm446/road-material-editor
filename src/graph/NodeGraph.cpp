@@ -260,10 +260,16 @@ bool IsLayerMaskSourceKind(NodeKind kind) {
            kind == NodeKind::Scatter;
 }
 
+bool IsMeshNodeKind(NodeKind kind) {
+    return kind == NodeKind::Road || kind == NodeKind::RoadMarking || kind == NodeKind::Decal;
+}
+
 bool IsPreviewableNodeKind(NodeKind kind) {
     // マスクは見ながら調整するものなので、どのマスクノードもプレビューできる。
     // パスは Base に繋いだ地形（沿う面）を出す。
-    return IsLayerNodeKind(kind) || IsMaskNodeKind(kind) || kind == NodeKind::Path;
+    // 道路メッシュのノードは、そのノードまでの鎖をメッシュシーンに出す。
+    return IsLayerNodeKind(kind) || IsMaskNodeKind(kind) || kind == NodeKind::Path ||
+           IsMeshNodeKind(kind);
 }
 
 compositor::LayerKind LayerKindFor(NodeKind kind) {

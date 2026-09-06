@@ -446,9 +446,13 @@ bool IsHeightMaskNodeKind(NodeKind kind);
 // この 3 つの Mask は「そのレイヤーを合成した時点の作業用テクスチャ」から焼くので、
 // 出どころがチェーンの中で走っていないと結果が残らない。
 bool IsLayerMaskSourceKind(NodeKind kind);
+// 道路メッシュの鎖を成す種類か（Road / Lane Marking / Decal）。Mesh Output は含まない。
+// 出力ピンを選ぶと、そのノードまでの鎖がメッシュシーンに出る。
+bool IsMeshNodeKind(NodeKind kind);
 // 選ぶとプレビューの対象になる種類か。レイヤーに加えて、
 // **川筋（マスクを目で見て調整するもの）**もプレビューできる。
 // Path は Base に繋いだ地形（パスが沿う面）をプレビューする。
+// 道路メッシュのノードはそのノードまでの鎖をメッシュシーンに出す。
 bool IsPreviewableNodeKind(NodeKind kind);
 // 種類に対応するレイヤー種別（レイヤー設定を持つ種類のみ意味を持つ）。
 compositor::LayerKind LayerKindFor(NodeKind kind);

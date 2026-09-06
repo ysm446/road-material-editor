@@ -564,5 +564,22 @@ void RunRoadTests() {
               "road and decal reach the Mesh Output as a decal pass mesh");
         Check(!dg.CanCreateLink(dg.FindNode(dDecal)->outputs[0].id, dg.FindNode(dSurfacePath)->inputs[0].id) ||
               true, "decal output can feed further surface paths");
+
+        // 途中のノードを見る: Road を指せば道路面だけ、Decal を指せば Mesh Output と同じ。
+        auto roadOnly = graph::CompileMeshGraph(dg, dRoad);
+        Check(roadOnly.active && roadOnly.error.empty() && roadOnly.scene.meshes.size() == 1,
+              "previewing the Road node shows the road surface only");
+        auto decalOnly = graph::CompileMeshGraph(dg, dDecal);
+        Check(decalOnly.error.empty() && decalOnly.scene.meshes.size() == 2, "previewing the Decal node shows the whole chain");
+        Check(!graph::CompileMeshGraph(dg, dSurfacePath).active || graph::CompileMeshGraph(dg, dSurfacePath).scene.meshes.size() == 2,
+              "previewing a non-mesh node falls back to the Mesh Output chain");
+        // 部品の失敗で道路ごと消さない: Path の点を全部消しても道路面は残り、理由が出る。
+        auto& surfaceSettings = std::get<graph::PathNodeSettings>(dg.FindMutableNode(dSurfacePath)->settings).path;
+        surfaceSettings.points.clear();
+        surfaceSettings.edges.clear();
+        auto emptyDecal = graph::CompileMeshGraph(dg);
+        Check(emptyDecal.active && emptyDecal.scene.meshes.size() == 1 && !emptyDecal.error.empty() &&
+              emptyDecal.error.find("Decal") != std::string::npos,
+              "decal with an empty path keeps the road and reports the reason");
     }
 }

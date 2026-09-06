@@ -134,6 +134,8 @@ private:
     void SyncGraphStack();
     void SyncMeshGraph();
     uint64_t m_meshGraphRevision = 0;
+    // 直近にメッシュシーンへ出した「途中のメッシュノード」。0 なら Mesh Output の鎖。
+    graph::GraphId m_meshGraphPreviewNode = 0;
     bool m_meshGraphActive = false;
     std::string m_meshGraphError;
     // 選択中のノードを控える / 貼り付ける（Ctrl+C / Ctrl+V）。

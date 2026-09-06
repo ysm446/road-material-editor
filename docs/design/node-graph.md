@@ -1,7 +1,7 @@
 # node-graph — ノードグラフの設計
 
 作成日時: 2026-09-02 12:50
-更新日時: 2026-09-07 05:11
+更新日時: 2026-09-07 06:10
 
 `src/graph/` とグラフパネル（`src/app/ApplicationGraphPanel.cpp`）の設計。
 ノード編集と移行前の評価経路、Road / Mesh Output による道路メッシュの評価を記録する。
@@ -224,6 +224,12 @@ Mask Path / Areaへ渡す際は評価対象のサイズに応じてUVへ変換�
 `Path → Road → Mesh Output` で道路を表示する。Roadは幅とUV反復長を持ち、RoadSurface（Mesh）、Left / Right（Path）を出す。左右は進行方向基準。境界もRoadの入力に接続できる。
 
 複数Mesh Outputは同時に表示する。未接続・不正な枝は空となり理由をプロパティ領域に表示する。生成処理はCPUデータを返し、グラフ改版時にフレーム外でGPUへ転送する。Mesh Output表示中は旧地形プレビューより優先する。
+
+### 部分描画と途中経過の表示（2026-09-07）
+
+- 鎖は Road を起点に Lane Marking / Decal が部品を積む。**部品の生成が失敗しても道路面までの部品は残し**、失敗したノード名と理由を「 / 」区切りでプロパティ領域に出す（`CompiledMeshGraph::error`）。Road 自体が失敗したときだけ、その枝は空になる。
+- Road / Lane Marking / Decal の出力ピンをクリック（またはノードをダブルクリック）すると、**そのノードまでの鎖だけ**をメッシュシーンに出す（`CompileMeshGraph(graph, previewNodeId)`）。Mesh Output が無くても表示できる。背景のダブルクリックか「Mesh Output へ戻す」で全 Mesh Output の表示に戻る。2D の合成プレビューには影響しない。
+- Merge（複数の枝を 1 つの Mesh Output に集めるノード）は未実装。現状は Mesh Output を複数置いて代用する。
 
 ## 道路の分割・確認表示
 

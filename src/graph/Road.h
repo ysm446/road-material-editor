@@ -51,7 +51,10 @@ struct CompiledMeshGraph {
     renderer::MeshScene scene;
     std::string error;
 };
-// Mesh Outputへ接続された道路と、その上の白線をシーンへ追加する。
-CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph);
+// Mesh Outputへ接続された道路と、その上の白線・Decalをシーンへ追加する。
+// 部品（白線・Decal）が失敗しても道路面までは積み、理由を error に「 / 」区切りで残す。
+// previewNodeId が Road / Lane Marking / Decal を指すときは、そのノードまでの鎖だけを出す
+// （途中経過の確認。Mesh Output は使わない）。
+CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph, GraphId previewNodeId = 0);
 
 }  // namespace tg::graph

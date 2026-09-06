@@ -503,13 +503,22 @@ struct MeshChain {
     // 道路面が chain.meshes の何番目か。白線の押し出し元にする。
     int roadIndex = -1;
 };
+// 複数の理由を「 / 」で繋いで残す。
+void AppendError(std::string& errors, const std::string& error) {
+    if (error.empty()) return;
+    if (!errors.empty()) errors += " / ";
+    errors += error;
+}
+// 戻り値は「道路面（chain.road）が出来たか」。白線・Decal などの部品が失敗しても
+// 上流までの部品は残し、理由だけ errors に足す（途中の 1 つの失敗で道路ごと消さない）。
 bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chain,
-                       std::string& error, std::unordered_set<GraphId>& visiting) {
-    if (!node) { error = "Mesh OutputにRoadSurfaceを接続してください"; return false; }
+                       std::string& errors, std::unordered_set<GraphId>& visiting) {
+    if (!node) { AppendError(errors, "Mesh OutputにRoadSurfaceを接続してください"); return false; }
     if (visiting.size() >= 64 || !visiting.insert(node->id).second) {
-        error = "メッシュの依存が循環しているか、深すぎます"; return false;
+        AppendError(errors, "メッシュの依存が循環しているか、深すぎます"); return false;
     }
     bool success = false;
+    std::string error;
     if (node->kind == NodeKind::Road) {
         if (EvaluateRoad(graph, node->id, chain.road, error)) {
             renderer::SceneMesh mesh;
@@ -527,7 +536,8 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
         const Node* upstream = node->inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node->inputs.front().id);
         if (!upstream) {
             error = "Lane MarkingにRoadSurfaceを接続してください";
-        } else if (EvaluateMeshChain(graph, upstream, chain, error, visiting)) {
+        } else if (EvaluateMeshChain(graph, upstream, chain, errors, visiting)) {
+            success = true;  // 道路面はある。白線が失敗しても道路は残す。
             renderer::SceneMesh mesh;
             if (BuildRoadMarkings(chain.road, *marking, graph.RoadNetwork().leftHandTraffic, mesh.geometry, error)) {
                 mesh.material.baseColor = {0.85f, 0.85f, 0.82f};
@@ -540,7 +550,6 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.useBlendMode = true;
                 AttachMaterial(graph, *node, mesh);
                 chain.meshes.push_back(std::move(mesh));
-                success = true;
             }
         }
     } else if (const auto* decal = std::get_if<DecalNodeSettings>(&node->settings)) {
@@ -549,11 +558,12 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
         const auto* pathSettings = pathNode ? std::get_if<PathNodeSettings>(&pathNode->settings) : nullptr;
         if (!upstream) {
             error = "DecalにRoadSurfaceを接続してください";
-        } else if (!pathSettings) {
-            error = "DecalのPathに面上のPathを接続してください";
-        } else if (EvaluateMeshChain(graph, upstream, chain, error, visiting)) {
+        } else if (EvaluateMeshChain(graph, upstream, chain, errors, visiting)) {
+            success = true;  // 道路面はある。Decal が失敗しても道路は残す。
             renderer::SceneMesh mesh;
-            if (BuildDecal(chain.road, pathSettings->path, *decal, mesh.geometry, error)) {
+            if (!pathSettings) {
+                error = "DecalのPathに面上のPathを接続してください";
+            } else if (BuildDecal(chain.road, pathSettings->path, *decal, mesh.geometry, error)) {
                 mesh.material.baseColor = {0.6f, 0.6f, 0.6f};
                 mesh.material.roughness = 0.7f;
                 mesh.roadMetersPerUv = decal->uvRepeatMeters;
@@ -563,12 +573,12 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.useBlendMode = true;
                 AttachMaterial(graph, *node, mesh);
                 chain.meshes.push_back(std::move(mesh));
-                success = true;
             }
         }
     } else {
         error = "Mesh OutputにはRoad / Lane Marking / DecalのRoadSurfaceを接続してください";
     }
+    if (!error.empty()) { const NodeDefinition* def = FindNodeDefinition(node->kind); AppendError(errors, std::string(def ? def->title : "?") + ": " + error); }
     visiting.erase(node->id);
     return success;
 }
@@ -755,25 +765,33 @@ bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const
     return true;
 }
 
-CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph) {
+CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph, GraphId previewNodeId) {
     CompiledMeshGraph compiled;
-    for (const auto& node : graph.Nodes()) {
-        if (node.kind != NodeKind::MeshOutput) continue;
-        compiled.active = true;
-        const Node* source = node.inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node.inputs.front().id);
+    const auto appendChain = [&](const Node* source) {
         MeshChain chain;
-        std::string error;
         std::unordered_set<GraphId> visiting;
-        if (!EvaluateMeshChain(graph, source, chain, error, visiting)) {
-            if (!compiled.error.empty()) compiled.error += " / ";
-            compiled.error += error;
-            continue;
-        }
+        std::string errors;
+        // 道路面が無ければ何も積まない。部品の失敗は理由だけ残して上流までを積む。
+        const bool hasRoad = EvaluateMeshChain(graph, source, chain, errors, visiting);
+        AppendError(compiled.error, errors);
+        if (!hasRoad) return;
         const int base = static_cast<int>(compiled.scene.meshes.size());
         for (auto& mesh : chain.meshes) {
             if (mesh.displacementSource >= 0) mesh.displacementSource += base;
             compiled.scene.meshes.push_back(std::move(mesh));
         }
+    };
+    // 途中のノードを見る指定があれば、そのノードまでの鎖だけを出す（Mesh Output は使わない）。
+    if (const Node* preview = graph.FindNode(previewNodeId);
+        preview != nullptr && IsMeshNodeKind(preview->kind)) {
+        compiled.active = true;
+        appendChain(preview);
+        return compiled;
+    }
+    for (const auto& node : graph.Nodes()) {
+        if (node.kind != NodeKind::MeshOutput) continue;
+        compiled.active = true;
+        appendChain(node.inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node.inputs.front().id));
     }
     return compiled;
 }

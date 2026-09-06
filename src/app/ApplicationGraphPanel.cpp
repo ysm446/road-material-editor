@@ -244,8 +244,14 @@ void Application::SetPreviewGraphNode(graph::GraphId nodeId, graph::GraphId outp
 }
 
 void Application::SyncMeshGraph() {
-    if (m_meshGraphRevision == m_graph.Revision()) return;
-    auto compiled = graph::CompileMeshGraph(m_graph);
+    // 途中のメッシュノード（Road / Lane Marking / Decal）を見ているときは、そのノードまでの鎖を出す。
+    graph::GraphId previewMeshNode = 0;
+    if (const graph::Node* node = m_graph.FindNode(m_previewGraphNode);
+        node != nullptr && graph::IsMeshNodeKind(node->kind)) {
+        previewMeshNode = node->id;
+    }
+    if (m_meshGraphRevision == m_graph.Revision() && m_meshGraphPreviewNode == previewMeshNode) return;
+    auto compiled = graph::CompileMeshGraph(m_graph, previewMeshNode);
     const bool uploaded = compiled.active
         ? m_renderer.SetGeneratedMeshScene(m_device, compiled.scene)
         : (!m_meshGraphActive || m_renderer.RestoreAuthoredMeshScene(m_device));
@@ -256,15 +262,17 @@ void Application::SyncMeshGraph() {
         m_meshSelection = MeshSelectionState{};
     }
     m_meshGraphRevision = m_graph.Revision();
+    m_meshGraphPreviewNode = previewMeshNode;
 }
 
 void Application::SyncGraphStack() {
     // プレビューの対象。**出力ピンのクリックで決める**（選択とは別）。
     // 0 のときは出力ノードのチェーン。
+    // メッシュノードのプレビューは SyncMeshGraph が受け持つので、2D の合成は出力ノードのままにする。
     graph::GraphId target = 0;
     if (const graph::Node* node = m_graph.FindNode(m_previewGraphNode);
         node != nullptr && graph::IsPreviewableNodeKind(node->kind)) {
-        target = node->id;
+        if (!graph::IsMeshNodeKind(node->kind)) target = node->id;
     } else {
         m_previewGraphNode = 0;
         m_previewGraphPin = 0;
@@ -1032,11 +1040,21 @@ void Application::DrawGraphPanel() {
     // **プレビュー対象は選択とは別。** どれが画面に出ているかをここに出し、
     // 出力へ戻す手段も置く（出力ピンのクリックで切り替わる、と気づけるように）。
     if (m_meshGraphActive) {
+        // 途中のメッシュノードを見ているときは、そのノード名を出して Mesh Output へ戻す手段を置く。
+        const graph::Node* previewMeshNode = m_graph.FindNode(m_meshGraphPreviewNode);
         if (ui::BeginPropertyTable("meshGraphPreviewRow")) {
-            ui::PropertyValue("プレビュー", "%s", "Mesh Output");
+            ui::PropertyValue("プレビュー", "%s",
+                              previewMeshNode != nullptr ? NodeDisplayName(*previewMeshNode) : "Mesh Output");
             ui::EndPropertyTable();
         }
-        ui::HintText("Mesh Outputへ接続した道路を表示中。Pathを選択するとカーブを編集できます。");
+        if (previewMeshNode != nullptr) {
+            ui::HintText("このノードまでの道路メッシュを表示中。出力ピンのクリックで切り替わる。");
+            if (ui::Button("Mesh Output へ戻す", ui::kWideButtonWidth)) {
+                SetPreviewGraphNode(0);
+            }
+        } else {
+            ui::HintText("Mesh Outputへ接続した道路を表示中。Pathを選択するとカーブを編集できます。");
+        }
     } else {
         const graph::Node* previewNode = m_graph.FindNode(m_previewGraphNode);
         const char* previewName =

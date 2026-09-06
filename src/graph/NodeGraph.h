@@ -175,6 +175,8 @@ struct PathNodeSettings {
 struct RoadNodeSettings {
     float widthMeters = 6.0f;
     float uvRepeatMeters = 1.0f;
+    // Material のハイトで路面を押し出す量（m）。ハイト 0〜1 の全幅がこの高さになる。
+    float displacementMeters = 0.0f;
 };
 
 // 道路網に共通の設定。走行側は道路ごとではなくプロジェクトで 1 つ。

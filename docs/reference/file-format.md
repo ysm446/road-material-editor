@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 01:29
+更新日時: 2026-09-07 01:42
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -264,6 +264,7 @@ inputsはRoadSurface（Mesh）、Materialの順、outputsはRoadSurface（Mesh�
 
 - `graph.roadNetwork: { "leftHandTraffic": true }` — 走行側。プロジェクトで 1 つ。
 - `roadMarking` の `arrows`（既定 true）、`arrowInterval`（30）、`arrowLength`（5）— 進行方向の矢印。
+- `road.displacement`（既定 0）— Material のハイトで路面を押し出す量（m）。
 
 ## `.tgproj`
 

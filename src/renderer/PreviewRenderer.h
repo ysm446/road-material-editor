@@ -250,6 +250,8 @@ public:
     float PlaneSize() const { return m_planeSize; }
     bool& ShowRoadGrid() { return m_showRoadGrid; }
     bool& ShowUvChecker() { return m_showUvChecker; }
+    // メッシュシーンにワイヤーフレームを重ねる。テセレーションと変位の後の辺を見る。
+    bool& ShowWireframe() { return m_showWireframe; }
     bool& ShowReferenceGrid() { return m_showReferenceGrid; }
     // マスクのプレビューで、0 か 1 に張り付いた所へ斜線を引くか（設定）。
     bool& MaskSaturationHatch() { return m_maskSaturationHatch; }
@@ -346,6 +348,7 @@ private:
     bool m_showReferenceGrid = true;
     bool m_showRoadGrid = false;
     bool m_showUvChecker = false;
+    bool m_showWireframe = false;
     bool m_maskSaturationHatch = kPreviewDefaults.maskSaturationHatch;
     bool m_maskPreviewActive = false;
     bool m_skyRebuildRequested = false;

@@ -34,6 +34,8 @@ struct SceneMesh {
     float roadMetersPerUv = 0.0f;
     // 道路の1 mグリッドを重ねるか。白線などの帯は道路面の目盛りを持たない。
     bool roadGridOverlay = true;
+    // 材質のハイトで法線方向へ押し出す量（m）。0 なら形は変えない。材質が無ければ効かない。
+    float displacementMeters = 0.0f;
     // 接続から導出した材質。GPU参照や保存対象ではない。
     std::optional<compositor::MaterialStack> materialStack;
 };

@@ -138,6 +138,17 @@ void Application::DrawMaterialPanel() {
                 m_graph.SetRoadNetwork(settings);
                 MarkDocumentChanged();
             }
+            // 道路も平面と同じ HS / DS で割る。変位量は Road ノードごと（材質が違うため）。
+            ui::PropertyBool("テセレーション", &m_renderer.TessellationEnabled(),
+                             renderer::kPreviewDefaults.tessellationEnabled,
+                             "画面上の辺が長いところだけメッシュを細かく割る。"
+                             "Road の変位量を上げたときに形がなめらかになる。分割後の辺は"
+                             "表示メニューのワイヤーフレームで確認できる");
+            if (m_renderer.TessellationEnabled()) {
+                ui::PropertyFloat("分割の上限", &m_renderer.TessellationFactor(), 1.0f, 16.0f,
+                                  renderer::kPreviewDefaults.tessellationFactor,
+                                  "1 辺をこの回数まで割る。上げるほど重くなる", "%.0f", 0, 1.0f);
+            }
             ui::EndPropertyTable();
         }
 

@@ -432,6 +432,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             mesh.geometry = chain.road.surface;
             mesh.material.roughness = 0.85f;
             mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
+            mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
             AttachMaterial(graph, *node, mesh);
             chain.meshes.push_back(std::move(mesh));
             success = true;

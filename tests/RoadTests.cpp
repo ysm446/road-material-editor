@@ -96,6 +96,11 @@ void RunRoadTests() {
           compiled.scene.meshes[0].materialStack->Layers().back().roughness == 0.23f &&
           compiled.scene.meshes[0].materialStack->SizeMeters() == 1.0f,
           "road compiles connected material at UV tile scale");
+    std::get<graph::RoadNodeSettings>(graph.FindMutableNode(roadId)->settings).displacementMeters = 0.05f;
+    compiled = graph::CompileMeshGraph(graph);
+    Check(compiled.scene.meshes.size() == 1 && compiled.scene.meshes[0].displacementMeters == 0.05f,
+          "road displacement reaches the scene mesh");
+    std::get<graph::RoadNodeSettings>(graph.FindMutableNode(roadId)->settings).displacementMeters = 0.0f;
     DocumentSnapshot before;
     before.graphNodes = graph.Nodes(); before.graphLinks = graph.Links();
     UndoHistory history;

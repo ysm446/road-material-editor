@@ -101,7 +101,8 @@ void AppSettings::Load() {
             m_display.showStats = showStats->get<bool>();
         }
         for (const auto& setting : {std::pair{"showRoadGrid", &m_display.showRoadGrid},
-                                     std::pair{"showUvChecker", &m_display.showUvChecker}}) {
+                                     std::pair{"showUvChecker", &m_display.showUvChecker},
+                                     std::pair{"showWireframe", &m_display.showWireframe}}) {
             const auto it = display->find(setting.first);
             if (it != display->end() && it->is_boolean()) *setting.second = it->get<bool>();
         }
@@ -155,6 +156,7 @@ bool AppSettings::Save() const {
     display["showReferenceGrid"] = m_display.showReferenceGrid;
     display["showRoadGrid"] = m_display.showRoadGrid;
     display["showUvChecker"] = m_display.showUvChecker;
+    display["showWireframe"] = m_display.showWireframe;
     display["showAssetBand"] = m_display.showAssetBand;
     display["frameRateLimit"] = m_display.frameRateLimit;
     display["inactiveFrameRateLimit"] = m_display.inactiveFrameRateLimit;

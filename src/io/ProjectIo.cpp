@@ -1195,7 +1195,8 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
             item["maskPath"] = WritePathMask(mask->pathMask);
             item["maskArea"] = WriteAreaMask(mask->areaMask);
         } else if (const auto* road = std::get_if<graph::RoadNodeSettings>(&node.settings)) {
-            item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters}};
+            item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters},
+                            {"displacement", road->displacementMeters}};
         } else if (const auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&node.settings)) {
             item["roadMarking"] = {{"lineWidth", marking->lineWidthMeters},
                                    {"centerLine", marking->centerLine},
@@ -1346,6 +1347,7 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                 if (const json* road = FindMember(item, "road"); road && road->is_object()) {
                     settings.widthMeters = ReadFloat(*road, "width", settings.widthMeters);
                     settings.uvRepeatMeters = ReadFloat(*road, "uvRepeat", settings.uvRepeatMeters);
+                    settings.displacementMeters = std::clamp(ReadFloat(*road, "displacement", 0.0f), 0.0f, 5.0f);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::RoadMarking) {

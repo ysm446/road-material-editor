@@ -42,6 +42,8 @@ struct DisplaySettings {
     bool showReferenceGrid = true;
     bool showRoadGrid = false;
     bool showUvChecker = false;
+    // メッシュシーンにワイヤーフレームを重ねるか。
+    bool showWireframe = false;
     // アセットの帯（テクスチャ / マテリアル / 天球）を出すか。畳むとビューポートが縦に広がる。
     bool showAssetBand = true;
     // 前面にあるときの FPS 上限。0 で上限なし。

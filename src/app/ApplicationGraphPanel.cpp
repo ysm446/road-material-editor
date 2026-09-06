@@ -1060,6 +1060,10 @@ void Application::DrawGraphPanel() {
                 defaults.widthMeters, "中心線から左右へ半分ずつ広げる全幅", "%.2f m");
             changed |= ui::PropertyFloat("UV反復長", &road->uvRepeatMeters, 0.1f, 100.0f,
                 defaults.uvRepeatMeters, "UVが1増える実距離。道路の長さと幅の両方に適用する", "%.2f m");
+            changed |= ui::PropertyFloat("変位量", &road->displacementMeters, 0.0f, 1.0f,
+                defaults.displacementMeters,
+                "Materialのハイトで路面を法線方向へ押し出す量。ハイト0〜1の全幅がこの高さ（m）。"
+                "0なら形は変わらない。テセレーションはプレビュー設定の「道路」で", "%.3f m", 0, 0.005f);
             ui::PropertyValue("走行側", "%s", m_graph.RoadNetwork().leftHandTraffic ? "左側通行" : "右側通行");
             ui::EndPropertyTable();
         }

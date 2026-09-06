@@ -118,6 +118,8 @@ float SampleMaterialScalar(Texture2D<float> map, float2 uv)
 // 頂点 / ドメインシェーダ用（微分が無いので SampleLevel）。
 float SampleMaterialScalarLevel(Texture2D<float> map, float2 uv)
 {
+    // 道路は実距離 UV でタイルを繰り返す。
+    if (g_mesh.roadMetersPerUv > 0.0f) return map.SampleLevel(g_samplerAnisoWrap, uv, 0.0f);
     return map.SampleLevel(g_samplerLinearClamp, uv, 0.0f);
 }
 
@@ -343,6 +345,13 @@ float3 ApplyRoadGrid(float3 color, float2 uv)
     if ((g_mesh.meshDisplayFlags & 1u) != 0u && g_mesh.roadMetersPerUv > 0.0f)
         color *= lerp(1.0f, 0.12f, GridLine(uv * g_mesh.roadMetersPerUv));
     return color;
+}
+
+// ワイヤーフレームの重ね描き。トーンマップ後の表示用テクスチャへ表示色のまま描く。
+// 本描画と同じ VS / HS / DS を通るので、テセレーションと変位の後の辺が出る。
+float4 PsWireframe(VsOutput input) : SV_Target0
+{
+    return float4(0.55f, 0.85f, 1.0f, 0.85f);
 }
 
 PsOutput PsMain(VsOutput input)

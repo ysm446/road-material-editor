@@ -412,6 +412,7 @@ int Application::Run() {
         m_renderer.ShowReferenceGrid() = m_settings.Display().showReferenceGrid;
         m_renderer.ShowRoadGrid() = m_settings.Display().showRoadGrid;
         m_renderer.ShowUvChecker() = m_settings.Display().showUvChecker;
+        m_renderer.ShowWireframe() = m_settings.Display().showWireframe;
 
         // グラフをレイヤー列へコンパイルした結果で評価する。
         SyncGraphStack();

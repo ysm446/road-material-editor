@@ -729,7 +729,8 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     meshPipelineDesc.layout = rhi::VertexLayout::MeshStandard;
     meshPipelineDesc.cullMode = D3D12_CULL_MODE_BACK;
     // テセレーションを使うときは、頂点シェーダを制御点の出力だけに差し替える。
-    const bool useTessellation = !m_meshSceneEnabled && m_tessellationEnabled;
+    // メッシュシーン（道路）でも同じ HS / DS で割る。分割量は画面上の辺の長さで決まる。
+    const bool useTessellation = m_tessellationEnabled;
     if (useTessellation) {
         meshPipelineDesc.vertexEntry = L"VsControl";
         meshPipelineDesc.hullEntry = L"HsMain";
@@ -818,6 +819,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 XMStoreFloat4x4(&drawConstants.model, XMMatrixIdentity());
                 XMStoreFloat4x4(&drawConstants.normalMatrix, XMMatrixIdentity());
                 drawConstants.roadMetersPerUv = m_meshScene.meshes[i].roadMetersPerUv;
+                drawConstants.displacementScale = m_meshScene.meshes[i].displacementMeters;
                 if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;
                 const auto& material = m_meshScene.meshes[i].material;
                 drawConstants.baseColor = material.baseColor;
@@ -1063,6 +1065,38 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     commandList->Dispatch(rhi::DispatchCount(m_width), rhi::DispatchCount(m_height), 1);
 
     PIXEndEvent(commandList);
+
+    // ワイヤーフレームの重ね描き。本描画と同じ VS / HS / DS を通し、表示色で線だけを描く。
+    if (m_meshSceneEnabled && m_showWireframe) {
+        rhi::GraphicsPipelineDesc wireDesc;
+        wireDesc.shaderPath = L"MeshPbr.hlsl";
+        wireDesc.vertexEntry = useTessellation ? L"VsControl" : L"VsMain";
+        if (useTessellation) {
+            wireDesc.hullEntry = L"HsMain";
+            wireDesc.domainEntry = L"DsMain";
+        }
+        wireDesc.pixelEntry = L"PsWireframe";
+        wireDesc.rtvFormat = kOutputFormat;
+        wireDesc.dsvFormat = kDepthFormat;
+        wireDesc.layout = rhi::VertexLayout::MeshStandard;
+        wireDesc.cullMode = D3D12_CULL_MODE_BACK;
+        wireDesc.fillMode = D3D12_FILL_MODE_WIREFRAME;
+        wireDesc.depthTest = true;
+        wireDesc.depthWrite = false;
+        wireDesc.alphaBlend = true;
+        if (ID3D12PipelineState* wirePipeline = pipelineCache.GetGraphics(wireDesc)) {
+            PIXBeginEvent(commandList, PIX_COLOR(160, 200, 240), "PreviewWireframe");
+            TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            TransitionIfNeeded(commandList, m_depth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            const D3D12_CPU_DESCRIPTOR_HANDLE outputRtv = m_output.rtv.cpu;
+            const D3D12_CPU_DESCRIPTOR_HANDLE depthDsv = m_depth.dsv.cpu;
+            commandList->OMSetRenderTargets(1, &outputRtv, FALSE, &depthDsv);
+            commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
+            commandList->SetPipelineState(wirePipeline);
+            drawMeshes(constants);
+            PIXEndEvent(commandList);
+        }
+    }
 
     // 作業グリッド。シーンの深度でテストするため、ImGui ではなくここで描く。
     DrawGuideOverlay(device, pipelineCache, commandList);

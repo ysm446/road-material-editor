@@ -1147,6 +1147,22 @@ void Application::DrawGraphPanel() {
         if (ui::BeginPropertyTable("roadRows")) {
             changed |= ui::PropertyFloat("道路幅", &road->widthMeters, 0.1f, 50.0f,
                 defaults.widthMeters, "中心線から左右へ半分ずつ広げる全幅", "%.2f m");
+            {
+                int forward = static_cast<int>(road->lanesForward);
+                int backward = static_cast<int>(road->lanesBackward);
+                if (ui::PropertyInt("車線数（進行方向）", &forward, 1, 8, static_cast<int>(defaults.lanesForward),
+                                    "線形の向きへ進む車線の数。どちら側に並ぶかは走行側で決まる")) {
+                    road->lanesForward = static_cast<uint32_t>(forward);
+                    changed = true;
+                }
+                if (ui::PropertyInt("車線数（対向）", &backward, 0, 8, static_cast<int>(defaults.lanesBackward),
+                                    "対向車線の数。0 で一方通行（中央線は出ない）")) {
+                    road->lanesBackward = static_cast<uint32_t>(backward);
+                    changed = true;
+                }
+                ui::PropertyValue("車線幅", "%.2f m",
+                                  road->widthMeters / static_cast<float>(std::max(1u, road->lanesForward) + road->lanesBackward));
+            }
             changed |= ui::PropertyFloat("UV反復長", &road->uvRepeatMeters, 0.1f, 100.0f,
                 defaults.uvRepeatMeters, "UVが1増える実距離。道路の長さと幅の両方に適用する", "%.2f m");
             {
@@ -1301,9 +1317,17 @@ void Application::DrawGraphPanel() {
         const graph::RoadMarkingNodeSettings defaults;
         if (ui::BeginPropertyTable("roadMarkingRows")) {
             changed |= ui::PropertyBool("中央線", &marking->centerLine, defaults.centerLine,
-                "道路の中心に1本引く");
+                "進行方向と対向の境に1本引く。Road の車線数で位置が決まる。一方通行なら出ない");
             changed |= ui::PropertyBool("外側線", &marking->edgeLines, defaults.edgeLines,
                 "左右の道路端の手前に1本ずつ引く");
+            changed |= ui::PropertyBool("車線境界線", &marking->laneLines, defaults.laneLines,
+                "同方向の車線の間に破線で引く。Road の車線数が片側 2 以上のときに出る");
+            if (marking->laneLines) {
+                changed |= ui::PropertyFloat("破線の長さ", &marking->dashLengthMeters, 0.1f, 50.0f,
+                    defaults.dashLengthMeters, "破線 1 本の長さ", "%.1f m");
+                changed |= ui::PropertyFloat("破線の間隔", &marking->dashGapMeters, 0.0f, 50.0f,
+                    defaults.dashGapMeters, "破線と破線の間の空き。0 で実線", "%.1f m");
+            }
             changed |= ui::PropertyFloat("線幅", &marking->lineWidthMeters, 0.05f, 1.0f,
                 defaults.lineWidthMeters, "帯の幅", "%.2f m");
             changed |= ui::PropertyFloat("端からの距離", &marking->edgeInsetMeters, 0.0f, 5.0f,
@@ -1322,7 +1346,7 @@ void Application::DrawGraphPanel() {
                 }
             }
             changed |= ui::PropertyBool("進行方向の矢印", &marking->arrows, defaults.arrows,
-                "左右の車線の中央に矢印を置く。走行側の車線は線形の向き、対向車線は逆向き");
+                "各車線の中央に矢印を置く。進行方向の車線は線形の向き、対向車線は逆向き");
             if (marking->arrows) {
                 changed |= ui::PropertyFloat("矢印の間隔", &marking->arrowIntervalMeters, 1.0f, 200.0f,
                     defaults.arrowIntervalMeters, "矢印を置く間隔", "%.0f m");

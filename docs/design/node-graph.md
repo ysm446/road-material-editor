@@ -1,7 +1,7 @@
 # node-graph — ノードグラフの設計
 
 作成日時: 2026-09-02 12:50
-更新日時: 2026-09-07 07:20
+更新日時: 2026-09-07 08:30
 
 `src/graph/` とグラフパネル（`src/app/ApplicationGraphPanel.cpp`）の設計。
 ノード編集と移行前の評価経路、Road / Mesh Output による道路メッシュの評価を記録する。
@@ -266,6 +266,15 @@ Roadは約1 m四方のセルを三角形2枚で構成する。カーブ・端の
   以前は列 0 を Left と呼んでいたが物理的に逆だったので改めた。ピンの順序は変えていない。
 - 左側通行では Left の車線が線形の向き（Path の from → to）へ進み、Right が対向。右側通行は逆。
   Lane Marking の進行方向の矢印はこの判定で向きを決める。標識などの向きも同じ判定を使う。
+
+### 車線数（2026-09-07）
+
+- Road は `lanesForward`（進行方向、1〜8）と `lanesBackward`（対向、0〜8）を持つ。車線幅は全幅÷合計で、車線ごとの幅は持たない。
+- `ComputeRoadLanes(settings, leftHandTraffic)` が Right 端から順に車線の中央と向きを並べる。右側通行なら進行方向の車線が Right 側、左側通行なら対向が Right 側。
+  進行方向と対向の境が `centerLateral`（中央線の位置）、同方向の車線の間が `dividers`（破線の位置）。対向 0 なら中央線は無い。
+- Lane Marking の中央線は `centerLateral` に引く（道路の中心とは限らない）。車線境界線は `dividers` に破線（長さ・間隔、間隔 0 で実線）で引く。
+  破線は `SampleRoadSurface` で距離ごとに帯を作り、行をまたぐ区間は行ごとに刻む。矢印は各車線の中央に、車線の向きで置く。
+- Road Mask の轍（`laneOffsetMeters`）はまだ手入力。車線数から自動で置くのは今後。
 
 ## Lane Marking（白線）
 

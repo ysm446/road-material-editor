@@ -16,7 +16,9 @@ XMFLOAT3 Position(const PathCurveSample& p) { return {p.x, p.y, p.z}; }
 XMVECTOR Load(const XMFLOAT3& p) { return XMLoadFloat3(&p); }
 float Length(XMVECTOR p) { return XMVectorGetX(XMVector3Length(p)); }
 void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
-                        bool leftHandTraffic, renderer::MeshData& result);
+                        const RoadLanes& lanes, renderer::MeshData& result);
+void BuildDashedStrip(const RoadGeometry& road, const RoadMarkingNodeSettings& settings, float lateral,
+                      renderer::MeshData& result);
 void AddBoundaryPoint(PathSettings& path, const XMFLOAT3& p) {
     const auto previous = path.points.empty() ? 0 : path.points.back().id;
     const auto id = AddPathPoint(path, p.x, p.z, 0);
@@ -409,18 +411,24 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
         !std::isfinite(settings.uvRepeatMeters) || settings.uvRepeatMeters < 0.1f ||
         settings.uvRepeatMeters > 100.0f)
         return fail("線幅は0.05〜1 m、浮かせ量は0〜0.1 m、UV反復長は0.1〜100 mにしてください");
-    // 帯の中心の横位置（m）。負が左、正が右。
+    // 帯の中心の横位置（m）。正が Left（列末尾側）。
+    const RoadLanes lanes = ComputeRoadLanes(road.settings, leftHandTraffic);
+    if (lanes.laneWidthMeters < line * 2.0f) return fail("車線幅に対して線幅が大きすぎます。車線数か線幅を見直してください");
     std::vector<float> offsets;
-    if (settings.centerLine) offsets.push_back(0.0f);
+    if (settings.centerLine && lanes.hasCenter) offsets.push_back(lanes.centerLateral);
     if (settings.edgeLines) {
         const float edge = width * 0.5f - settings.edgeInsetMeters;
         if (edge - line * 0.5f < 0.0f) return fail("外側線が中心を越えています。端からの距離を小さくしてください");
-        if (settings.centerLine && edge - line * 0.5f < line * 0.5f)
+        if (settings.centerLine && lanes.hasCenter && edge - line * 0.5f < std::abs(lanes.centerLateral) + line * 0.5f)
             return fail("道路幅に対して線が重なります。線幅か端からの距離を見直してください");
         offsets.push_back(-edge);
         offsets.push_back(edge);
     }
-    if (offsets.empty() && !settings.arrows) return fail("中央線・外側線・矢印のどれかを有効にしてください");
+    const bool dashed = settings.laneLines && !lanes.dividers.empty();
+    if (dashed && (!std::isfinite(settings.dashLengthMeters) || settings.dashLengthMeters < 0.1f ||
+                   !std::isfinite(settings.dashGapMeters) || settings.dashGapMeters < 0.0f))
+        return fail("破線の長さは0.1 m以上、間隔は0 m以上にしてください");
+    if (offsets.empty() && !dashed && !settings.arrows) return fail("中央線・外側線・車線境界線・矢印のどれかを有効にしてください");
     if (settings.arrows && (!std::isfinite(settings.arrowIntervalMeters) || settings.arrowIntervalMeters < 1.0f ||
                             !std::isfinite(settings.arrowLengthMeters) || settings.arrowLengthMeters < 0.5f ||
                             settings.arrowLengthMeters > 20.0f))
@@ -465,7 +473,10 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
             }
         }
     }
-    if (settings.arrows) BuildArrowMarkings(road, settings, leftHandTraffic, result);
+    if (dashed) {
+        for (const float divider : lanes.dividers) BuildDashedStrip(road, settings, divider, result);
+    }
+    if (settings.arrows) BuildArrowMarkings(road, settings, lanes, result);
     return true;
 }
 
@@ -499,20 +510,60 @@ SurfaceSample SampleRoadSurface(const RoadGeometry& road, float distance, float 
     return sample;
 }
 
-// 進行方向の矢印。左右の車線の中央に一定間隔で置く。走行側の車線は線形の向き、対向車線は逆向き。
+// 同方向の車線の間の破線。距離 [start, end) ごとに帯を 1 枚ずつ作り、行をまたぐ区間は行ごとに刻む。
+void BuildDashedStrip(const RoadGeometry& road, const RoadMarkingNodeSettings& settings, float lateral,
+                      renderer::MeshData& result) {
+    const float total = road.rowDistances.empty() ? 0.0f : road.rowDistances.back();
+    const float width = road.settings.widthMeters;
+    const float line = settings.lineWidthMeters;
+    const float period = settings.dashLengthMeters + settings.dashGapMeters;
+    const auto addRing = [&](float distance) {
+        for (int side = 0; side < 2; ++side) {
+            const float at = lateral + (side == 0 ? -line : line) * 0.5f;
+            const SurfaceSample sample = SampleRoadSurface(road, distance, at);
+            renderer::MeshVertex vertex{};
+            XMStoreFloat3(&vertex.position, XMVectorAdd(sample.position, XMVectorScale(sample.normal, settings.liftMeters)));
+            XMStoreFloat3(&vertex.normal, sample.normal);
+            const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(sample.across,
+                XMVectorScale(sample.normal, XMVectorGetX(XMVector3Dot(sample.normal, sample.across)))));
+            XMStoreFloat4(&vertex.tangent, tangent);
+            vertex.tangent.w = -1.0f;
+            vertex.uv = {static_cast<float>(side), distance / settings.uvRepeatMeters};
+            if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
+            vertex.roadUv = {(width * 0.5f + at) / road.settings.uvRepeatMeters, distance / road.settings.uvRepeatMeters};
+            if (road.settings.uvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
+            result.vertices.push_back(vertex);
+        }
+    };
+    for (float start = 0.0f; start < total; start += period) {
+        const float end = std::min(start + settings.dashLengthMeters, total);
+        if (end - start < 1e-3f) break;
+        if (result.vertices.size() + road.rowDistances.size() * 2 > 65536 * 4) break;
+        const uint32_t first = static_cast<uint32_t>(result.vertices.size());
+        addRing(start);
+        for (const float rowDistance : road.rowDistances) {
+            if (rowDistance > start + 1e-4f && rowDistance < end - 1e-4f) addRing(rowDistance);
+        }
+        addRing(end);
+        const uint32_t rings = (static_cast<uint32_t>(result.vertices.size()) - first) / 2;
+        for (uint32_t ring = 1; ring < rings; ++ring) {
+            const uint32_t a = first + (ring - 1) * 2;
+            result.indices.insert(result.indices.end(), {a, a + 2, a + 1, a + 1, a + 2, a + 3});
+        }
+    }
+}
+
+// 進行方向の矢印。各車線の中央に一定間隔で置く。進行方向の車線は線形の向き、対向車線は逆向き。
 void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
-                        bool leftHandTraffic, renderer::MeshData& result) {
+                        const RoadLanes& lanes, renderer::MeshData& result) {
     const float total = road.rowDistances.empty() ? 0.0f : road.rowDistances.back();
     const float width = road.settings.widthMeters;
     const float length = settings.arrowLengthMeters;
     if (total < length + 1.0f) return;
-    const float headHalf = std::clamp(width * 0.09f, 0.2f, 0.6f);
+    const float headHalf = std::clamp(lanes.laneWidthMeters * 0.18f, 0.2f, 0.6f);
     const float shaftHalf = headHalf * 0.4f;
     const float headLength = length * 0.4f;
     const float base = length * 0.5f - headLength;
-    // 車線の中央。正が Left 側。左側通行なら Left の車線が線形の向きへ進む。
-    const float laneCenters[2] = {width * 0.25f, -width * 0.25f};
-    const bool laneForward[2] = {leftHandTraffic, !leftHandTraffic};
     struct Local { float s, t, u, w; };
     const Local shape[7] = {
         {-length * 0.5f, -shaftHalf, 0.5f - shaftHalf / (2.0f * headHalf), 0.0f},
@@ -527,12 +578,12 @@ void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings&
     for (float center = settings.arrowIntervalMeters * 0.5f; center + length * 0.5f <= total;
          center += settings.arrowIntervalMeters) {
         if (center - length * 0.5f < 0.0f) continue;
-        for (int lane = 0; lane < 2; ++lane) {
-            const float direction = laneForward[lane] ? 1.0f : -1.0f;
+        for (size_t lane = 0; lane < lanes.laneCenters.size(); ++lane) {
+            const float direction = lanes.laneForward[lane] ? 1.0f : -1.0f;
             const uint32_t first = static_cast<uint32_t>(result.vertices.size());
             for (const Local& local : shape) {
                 const SurfaceSample sample =
-                    SampleRoadSurface(road, center + local.s * direction, laneCenters[lane] + local.t * direction);
+                    SampleRoadSurface(road, center + local.s * direction, lanes.laneCenters[lane] + local.t * direction);
                 renderer::MeshVertex vertex{};
                 XMStoreFloat3(&vertex.position, XMVectorAdd(sample.position, XMVectorScale(sample.normal, settings.liftMeters)));
                 XMStoreFloat3(&vertex.normal, sample.normal);
@@ -542,7 +593,7 @@ void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings&
                 vertex.tangent.w = -1.0f;
                 vertex.uv = {local.u, local.w};
                 if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
-                vertex.roadUv = {(width * 0.5f + laneCenters[lane] + local.t * direction) / road.settings.uvRepeatMeters,
+                vertex.roadUv = {(width * 0.5f + lanes.laneCenters[lane] + local.t * direction) / road.settings.uvRepeatMeters,
                                  (center + local.s * direction) / road.settings.uvRepeatMeters};
                 if (road.settings.uvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
                 result.vertices.push_back(vertex);
@@ -564,6 +615,31 @@ void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings&
 bool EvaluateRoad(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result, std::string& error) {
     std::unordered_set<GraphId> visiting;
     return Evaluate(graph, nodeId, result, error, visiting);
+}
+
+RoadLanes ComputeRoadLanes(const RoadNodeSettings& settings, bool leftHandTraffic) {
+    RoadLanes lanes;
+    const uint32_t forward = std::max(1u, settings.lanesForward);
+    const uint32_t backward = settings.lanesBackward;
+    const uint32_t total = forward + backward;
+    lanes.laneWidthMeters = settings.widthMeters / static_cast<float>(total);
+    // Right 端（横位置 -幅/2）から順に並べる。右側通行なら進行方向の車線が Right 側、左側通行なら対向が Right 側。
+    const uint32_t rightSideCount = leftHandTraffic ? backward : forward;
+    for (uint32_t i = 0; i < total; ++i) {
+        lanes.laneCenters.push_back(-settings.widthMeters * 0.5f + lanes.laneWidthMeters * (static_cast<float>(i) + 0.5f));
+        const bool onRightSide = i < rightSideCount;
+        lanes.laneForward.push_back(leftHandTraffic ? !onRightSide : onRightSide);
+    }
+    for (uint32_t i = 1; i < total; ++i) {
+        const float boundary = -settings.widthMeters * 0.5f + lanes.laneWidthMeters * static_cast<float>(i);
+        if (i == rightSideCount && backward > 0) {
+            lanes.hasCenter = true;
+            lanes.centerLateral = boundary;
+        } else {
+            lanes.dividers.push_back(boundary);
+        }
+    }
+    return lanes;
 }
 
 namespace {

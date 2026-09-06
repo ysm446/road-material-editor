@@ -1216,6 +1216,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
             item["maskArea"] = WriteAreaMask(mask->areaMask);
         } else if (const auto* road = std::get_if<graph::RoadNodeSettings>(&node.settings)) {
             item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters},
+                            {"lanesForward", road->lanesForward}, {"lanesBackward", road->lanesBackward},
                             {"displacement", road->displacementMeters}, {"uvAlongU", road->uvAlongU},
                             {"layerWorldUv", json::array({road->layerWorldUv[0], road->layerWorldUv[1],
                                                           road->layerWorldUv[2], road->layerWorldUv[3]})},
@@ -1258,6 +1259,9 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                    {"centerLine", marking->centerLine},
                                    {"edgeLines", marking->edgeLines},
                                    {"edgeInset", marking->edgeInsetMeters},
+                                   {"laneLines", marking->laneLines},
+                                   {"dashLength", marking->dashLengthMeters},
+                                   {"dashGap", marking->dashGapMeters},
                                    {"lift", marking->liftMeters},
                                    {"uvRepeat", marking->uvRepeatMeters},
                                    {"arrows", marking->arrows},
@@ -1416,6 +1420,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                 graph::RoadNodeSettings settings;
                 if (const json* road = FindMember(item, "road"); road && road->is_object()) {
                     settings.widthMeters = ReadFloat(*road, "width", settings.widthMeters);
+                    settings.lanesForward = static_cast<uint32_t>(std::clamp(ReadInt(*road, "lanesForward", static_cast<int>(settings.lanesForward)), 1, 8));
+                    settings.lanesBackward = static_cast<uint32_t>(std::clamp(ReadInt(*road, "lanesBackward", static_cast<int>(settings.lanesBackward)), 0, 8));
                     settings.uvRepeatMeters = ReadFloat(*road, "uvRepeat", settings.uvRepeatMeters);
                     settings.displacementMeters = std::clamp(ReadFloat(*road, "displacement", 0.0f), 0.0f, 5.0f);
                     settings.uvAlongU = ReadBool(*road, "uvAlongU", settings.uvAlongU);
@@ -1490,6 +1496,9 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.centerLine = ReadBool(*marking, "centerLine", settings.centerLine);
                     settings.edgeLines = ReadBool(*marking, "edgeLines", settings.edgeLines);
                     settings.edgeInsetMeters = ReadFloat(*marking, "edgeInset", settings.edgeInsetMeters);
+                    settings.laneLines = ReadBool(*marking, "laneLines", settings.laneLines);
+                    settings.dashLengthMeters = ReadFloat(*marking, "dashLength", settings.dashLengthMeters);
+                    settings.dashGapMeters = ReadFloat(*marking, "dashGap", settings.dashGapMeters);
                     settings.liftMeters = ReadFloat(*marking, "lift", settings.liftMeters);
                     settings.uvRepeatMeters = ReadFloat(*marking, "uvRepeat", settings.uvRepeatMeters);
                     settings.arrows = ReadBool(*marking, "arrows", settings.arrows);

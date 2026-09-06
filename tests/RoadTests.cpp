@@ -351,6 +351,67 @@ void RunRoadTests() {
     }
 
 
+    tests::Section("Lanes and dashed lane lines");
+    {
+        // 幅 9 m、進行方向 2 車線＋対向 1 車線 → 車線幅 3 m。
+        graph::RoadNodeSettings laneSettings;
+        laneSettings.widthMeters = 9.0f;
+        laneSettings.lanesForward = 2;
+        laneSettings.lanesBackward = 1;
+        const graph::RoadLanes rightHand = graph::ComputeRoadLanes(laneSettings, false);
+        const graph::RoadLanes leftHand = graph::ComputeRoadLanes(laneSettings, true);
+        Check(rightHand.laneWidthMeters == 3.0f && rightHand.laneCenters.size() == 3, "three lanes of 3 m");
+        // 右側通行: Right 側（負）に進行方向 2 車線。中央線は +1.5、破線は -1.5。
+        Check(rightHand.hasCenter && rightHand.centerLateral == 1.5f && rightHand.dividers.size() == 1 &&
+              rightHand.dividers[0] == -1.5f && rightHand.laneForward[0] && rightHand.laneForward[1] && !rightHand.laneForward[2],
+              "right-hand traffic puts the forward lanes on the right with the centre line at +1.5");
+        // 左側通行: Left 側（正）に進行方向 2 車線。中央線は -1.5、破線は +1.5。
+        Check(leftHand.hasCenter && leftHand.centerLateral == -1.5f && leftHand.dividers.size() == 1 &&
+              leftHand.dividers[0] == 1.5f && !leftHand.laneForward[0] && leftHand.laneForward[1] && leftHand.laneForward[2],
+              "left-hand traffic mirrors the layout");
+        laneSettings.lanesBackward = 0;
+        const graph::RoadLanes oneWay = graph::ComputeRoadLanes(laneSettings, true);
+        Check(!oneWay.hasCenter && oneWay.dividers.size() == 1 && oneWay.laneForward[0] && oneWay.laneForward[1],
+              "one-way road has no centre line and all lanes forward");
+        // 破線の帯。長さ 5 m、間隔 5 m で 10 m の道路なら 1 本（0〜5 m）。
+        laneSettings.lanesBackward = 1;
+        graph::RoadGeometry laneRoad;
+        Check(graph::BuildRoad(path, laneSettings, laneRoad, error), "three-lane road builds");
+        graph::RoadMarkingNodeSettings dashes;
+        dashes.centerLine = dashes.edgeLines = dashes.arrows = false;
+        dashes.laneLines = true;
+        dashes.dashLengthMeters = 5.0f;
+        dashes.dashGapMeters = 5.0f;
+        renderer::MeshData dashMesh;
+        Check(graph::BuildRoadMarkings(laneRoad, dashes, true, dashMesh, error) && !dashMesh.vertices.empty(), "dashed lane line builds");
+        if (!error.empty()) std::printf("Dash error: %s\n", error.c_str());
+        float minZ = 1e9f, maxZ = -1e9f, minX = 1e9f, maxX = -1e9f;
+        for (const auto& v : dashMesh.vertices) {
+            minZ = std::min(minZ, v.position.z); maxZ = std::max(maxZ, v.position.z);
+            minX = std::min(minX, v.position.x); maxX = std::max(maxX, v.position.x);
+        }
+        // 道路は 10.2 m なので 0〜5 m の 1 本と、10 m から末尾までの短い 1 本。5〜10 m は空く。
+        size_t inGap = 0;
+        for (const auto& v : dashMesh.vertices) if (v.position.z > 5.0f && v.position.z < 9.7f) ++inGap;
+        Check(std::abs(minZ) < 1e-3f && inGap == 0 && maxZ > 9.7f, "dashes leave the 5 m gap empty");
+        Check(std::abs(minX - (1.5f - 0.075f)) < 1e-3f && std::abs(maxX - (1.5f + 0.075f)) < 1e-3f,
+              "left-hand traffic dash sits between the two forward lanes at +1.5");
+        dashes.dashGapMeters = 0.0f;
+        Check(graph::BuildRoadMarkings(laneRoad, dashes, true, dashMesh, error), "zero gap builds a continuous line");
+        float fullMaxZ = -1e9f;
+        for (const auto& v : dashMesh.vertices) fullMaxZ = std::max(fullMaxZ, v.position.z);
+        Check(std::abs(fullMaxZ - 10.0f) < 1e-3f, "zero gap reaches the end of the road");
+        // 矢印は車線ごと。3 車線なら 1 間隔あたり 3 本。
+        graph::RoadMarkingNodeSettings laneArrows;
+        laneArrows.centerLine = laneArrows.edgeLines = laneArrows.laneLines = false;
+        laneArrows.arrows = true;
+        laneArrows.arrowIntervalMeters = 8.0f;  // 中心 4 m の 1 組だけ（次の 12 m は道路の外）
+        laneArrows.arrowLengthMeters = 3.0f;
+        renderer::MeshData arrowMesh;
+        Check(graph::BuildRoadMarkings(laneRoad, laneArrows, true, arrowMesh, error) && arrowMesh.vertices.size() == 21,
+              "one arrow per lane");
+    }
+
     tests::Section("Traffic side and arrows");
     {
         graph::RoadGeometry straightRoad;

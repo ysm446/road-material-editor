@@ -19,6 +19,18 @@ struct RoadGeometry {
 };
 bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
                RoadGeometry& result, std::string& error);
+// 車線の並び。横位置は正が Left（列末尾側）。走行側で進行方向の車線がどちらに並ぶかが決まり、
+// Right 端から順に laneCenters / laneForward を並べる。centerLateral は進行方向と対向の境
+// （一方通行なら hasCenter が偽）。dividers は同方向の車線の間（破線の位置）。
+struct RoadLanes {
+    float laneWidthMeters = 0.0f;
+    std::vector<float> laneCenters;
+    std::vector<bool> laneForward;
+    bool hasCenter = false;
+    float centerLateral = 0.0f;
+    std::vector<float> dividers;
+};
+RoadLanes ComputeRoadLanes(const RoadNodeSettings& settings, bool leftHandTraffic);
 // RoadのLeft/Rightも実寸Pathとして解決できる。循環と過大な依存は拒否する。
 bool EvaluateRoad(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result,
                   std::string& error);

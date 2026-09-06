@@ -188,6 +188,10 @@ inline constexpr int kRoadMaterialSlots = 4;
 struct RoadNodeSettings {
     float widthMeters = 6.0f;
     float uvRepeatMeters = 1.0f;
+    // 車線数。線形の向きへ進む車線（forward）と対向車線（backward）。車線幅は全幅÷合計。
+    // どちら側に並ぶかは走行側（RoadNetworkSettings）で決まる。対向 0 で一方通行。
+    uint32_t lanesForward = 1;
+    uint32_t lanesBackward = 1;
     // Material のハイトで路面を押し出す量（m）。ハイト 0〜1 の全幅がこの高さになる。
     float displacementMeters = 0.0f;
     // 真なら道路の長さ方向を U にする（既定は V）。横長のテクスチャを道路に沿わせるとき。
@@ -276,9 +280,14 @@ struct RoadNetworkSettings {
 // 白線（Lane Marking）。寸法は m。外側線は道路端から中心線側へ edgeInsetMeters の位置に置く。
 struct RoadMarkingNodeSettings {
     float lineWidthMeters = 0.15f;
+    // 中央線（進行方向と対向の境）。一方通行なら出ない。
     bool centerLine = true;
     bool edgeLines = true;
     float edgeInsetMeters = 0.5f;
+    // 車線境界線。同方向の車線の間に破線で引く。
+    bool laneLines = true;
+    float dashLengthMeters = 5.0f;
+    float dashGapMeters = 5.0f;
     // 進行方向の矢印。左右の車線の中央に一定間隔で置き、走行側に応じて向きを決める。
     bool arrows = true;
     float arrowIntervalMeters = 30.0f;

@@ -100,6 +100,7 @@ road_editor.exe [--project <path>] [--save-project <path>]
 - [進捗と検証状況](docs/plan/progress.md)
 - [構想書](docs/reference/road-editor-project-proposal.md)
 - [UI 設計ガイド](docs/design/design-guide.md)
+- [道路材質のレイヤー構造](docs/design/road-material-layers.md)
 - [保存形式](docs/reference/file-format.md)
 - [変更履歴](docs/changelog.md)
 

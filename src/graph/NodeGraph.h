@@ -177,12 +177,22 @@ struct RoadNodeSettings {
     float uvRepeatMeters = 1.0f;
 };
 
+// 道路網に共通の設定。走行側は道路ごとではなくプロジェクトで 1 つ。
+// 車線の進行方向・矢印・標識の向きの判定に使う。
+struct RoadNetworkSettings {
+    bool leftHandTraffic = true;
+};
+
 // 白線（Lane Marking）。寸法は m。外側線は道路端から中心線側へ edgeInsetMeters の位置に置く。
 struct RoadMarkingNodeSettings {
     float lineWidthMeters = 0.15f;
     bool centerLine = true;
     bool edgeLines = true;
     float edgeInsetMeters = 0.5f;
+    // 進行方向の矢印。左右の車線の中央に一定間隔で置き、走行側に応じて向きを決める。
+    bool arrows = true;
+    float arrowIntervalMeters = 30.0f;
+    float arrowLengthMeters = 5.0f;
     // 路面との重なりによるちらつきを避けるため、法線方向へ浮かせる量。
     float liftMeters = 0.005f;
     // 帯の長さ方向でVが1増える実距離。幅方向のUは帯の左端0〜右端1。
@@ -259,6 +269,10 @@ public:
     // 読み込み用。ID はファイルの値をそのまま使い、次の採番を max+1 に合わせる。
     void Replace(std::vector<Node> nodes, std::vector<Link> links);
 
+    // 道路網の共通設定（走行側）。変えたら再生成の対象なので改版する。
+    const RoadNetworkSettings& RoadNetwork() const { return m_roadNetwork; }
+    void SetRoadNetwork(const RoadNetworkSettings& settings) { m_roadNetwork = settings; MarkDirty(); }
+
     // グラフをレイヤー列（下から上）とマスクの op の列へ落とす。
     // 出力ノードの「下地」チェーンを遡る。
     // チェーンが空なら下地 1 枚（MaterialStack::MakeBaseLayer と同じもの）を返す。
@@ -298,6 +312,7 @@ public:
 
 private:
     GraphId AllocateGraphId() { return m_nextGraphId++; }
+    RoadNetworkSettings m_roadNetwork;
     void RebuildNextGraphId();
     // top から「下地」チェーンを遡る（上から下の順）。
     std::vector<const Node*> ChainFrom(const Node* top) const;

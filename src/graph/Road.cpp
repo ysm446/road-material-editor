@@ -14,6 +14,8 @@ using namespace DirectX;
 XMFLOAT3 Position(const PathCurveSample& p) { return {p.x, p.y, p.z}; }
 XMVECTOR Load(const XMFLOAT3& p) { return XMLoadFloat3(&p); }
 float Length(XMVECTOR p) { return XMVectorGetX(XMVector3Length(p)); }
+void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
+                        bool leftHandTraffic, renderer::MeshData& result);
 void AddBoundaryPoint(PathSettings& path, const XMFLOAT3& p) {
     const auto previous = path.points.empty() ? 0 : path.points.back().id;
     const auto id = AddPathPoint(path, p.x, p.z, 0);
@@ -138,13 +140,14 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
         }
         if (i > 0) distance += Length(XMVectorSubtract(Load(centers[i]), Load(centers[i-1])));
         if (path.bankEnabled) {
-            // バンク。接線まわりに横ベクトルを回す。正で Left（列 0）側が上がる。
+            // バンク。接線まわりに横ベクトルを回す。right は列末尾（Left 側）へ向くベクトルなので、
+            // 正のバンク（Left 側が上がる）では up 側へ回す。
             const float bank = EvaluateBankAngleRadians(path, centerline, centerline.arcLengths[i]);
             if (std::abs(bank) > 1e-6f) {
                 const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(
                     Load(centers[std::min(i + 1, centers.size() - 1)]), Load(centers[i == 0 ? 0 : i - 1])));
                 const XMVECTOR up = XMVector3Normalize(XMVector3Cross(tangent, right));
-                right = XMVectorSubtract(XMVectorScale(right, std::cos(bank)), XMVectorScale(up, std::sin(bank)));
+                right = XMVectorAdd(XMVectorScale(right, std::cos(bank)), XMVectorScale(up, std::sin(bank)));
             }
         }
         const XMVECTOR offset = XMVectorScale(right, settings.widthMeters * 0.5f * miter);
@@ -155,8 +158,9 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
             vertex.uv = {across * settings.widthMeters / settings.uvRepeatMeters,
                          distance / settings.uvRepeatMeters};
             built.surface.vertices.push_back(vertex);
-            if (column == 0) AddBoundaryPoint(built.left, vertex.position);
-            if (column == columns) AddBoundaryPoint(built.right, vertex.position);
+            // 列 0 は進行方向に向かって右（右手系 Y-up で (dz, 0, -dx) は左を向く）。
+            if (column == 0) AddBoundaryPoint(built.right, vertex.position);
+            if (column == columns) AddBoundaryPoint(built.left, vertex.position);
         }
         if (i > 0) {
             for (uint32_t column = 0; column < columns; ++column) {
@@ -227,7 +231,7 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
 }
 
 bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
-                       renderer::MeshData& result, std::string& error) {
+                       bool leftHandTraffic, renderer::MeshData& result, std::string& error) {
     result = {};
     error.clear();
     const auto fail = [&](const char* message) { error = message; return false; };
@@ -254,7 +258,11 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
         offsets.push_back(-edge);
         offsets.push_back(edge);
     }
-    if (offsets.empty()) return fail("中央線か外側線のどちらかを有効にしてください");
+    if (offsets.empty() && !settings.arrows) return fail("中央線・外側線・矢印のどれかを有効にしてください");
+    if (settings.arrows && (!std::isfinite(settings.arrowIntervalMeters) || settings.arrowIntervalMeters < 1.0f ||
+                            !std::isfinite(settings.arrowLengthMeters) || settings.arrowLengthMeters < 0.5f ||
+                            settings.arrowLengthMeters > 20.0f))
+        return fail("矢印の間隔は1 m以上、長さは0.5〜20 mにしてください");
     for (const float offset : offsets)
         if (std::abs(offset) + line * 0.5f > width * 0.5f + 1e-4f)
             return fail("線が道路の外に出ます。線幅か端からの距離を見直してください");
@@ -290,8 +298,100 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
             }
         }
     }
+    if (settings.arrows) BuildArrowMarkings(road, settings, leftHandTraffic, result);
     return true;
 }
+
+namespace {
+// 道路面上の任意の点（距離と横位置）。行の間は線形補間する。横位置は正が Left（列末尾）側。
+struct SurfaceSample {
+    XMVECTOR position;
+    XMVECTOR normal;
+    XMVECTOR across;
+};
+SurfaceSample SampleRoadSurface(const RoadGeometry& road, float distance, float lateral) {
+    const auto& v = road.surface.vertices;
+    const size_t rows = v.size() / road.stride;
+    const float metersPerUv = road.settings.uvRepeatMeters;
+    const auto rowDistance = [&](size_t row) { return v[row * road.stride].uv.y * metersPerUv; };
+    size_t upper = 1;
+    while (upper + 1 < rows && rowDistance(upper) < distance) ++upper;
+    const size_t lower = upper - 1;
+    const float span = rowDistance(upper) - rowDistance(lower);
+    const float t = span > 1e-6f ? std::clamp((distance - rowDistance(lower)) / span, 0.0f, 1.0f) : 0.0f;
+    const auto at = [&](size_t row, uint32_t column) { return &v[row * road.stride + column]; };
+    const auto lerp3 = [&](const XMFLOAT3& a, const XMFLOAT3& b) { return XMVectorLerp(Load(a), Load(b), t); };
+    const XMVECTOR left = lerp3(at(lower, 0)->position, at(upper, 0)->position);
+    const XMVECTOR right = lerp3(at(lower, road.stride - 1)->position, at(upper, road.stride - 1)->position);
+    const XMVECTOR leftNormal = lerp3(at(lower, 0)->normal, at(upper, 0)->normal);
+    const XMVECTOR rightNormal = lerp3(at(lower, road.stride - 1)->normal, at(upper, road.stride - 1)->normal);
+    const float s = lateral / road.settings.widthMeters;
+    SurfaceSample sample;
+    sample.across = XMVectorSubtract(right, left);
+    sample.position = XMVectorAdd(XMVectorScale(XMVectorAdd(left, right), 0.5f), XMVectorScale(sample.across, s));
+    sample.normal = XMVector3Normalize(XMVectorLerp(leftNormal, rightNormal, s + 0.5f));
+    return sample;
+}
+
+// 進行方向の矢印。左右の車線の中央に一定間隔で置く。走行側の車線は線形の向き、対向車線は逆向き。
+void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
+                        bool leftHandTraffic, renderer::MeshData& result) {
+    const auto& v = road.surface.vertices;
+    const size_t rows = v.size() / road.stride;
+    const float total = v[(rows - 1) * road.stride].uv.y * road.settings.uvRepeatMeters;
+    const float width = road.settings.widthMeters;
+    const float length = settings.arrowLengthMeters;
+    if (total < length + 1.0f) return;
+    const float headHalf = std::clamp(width * 0.09f, 0.2f, 0.6f);
+    const float shaftHalf = headHalf * 0.4f;
+    const float headLength = length * 0.4f;
+    const float base = length * 0.5f - headLength;
+    // 車線の中央。正が Left 側。左側通行なら Left の車線が線形の向きへ進む。
+    const float laneCenters[2] = {width * 0.25f, -width * 0.25f};
+    const bool laneForward[2] = {leftHandTraffic, !leftHandTraffic};
+    struct Local { float s, t, u, w; };
+    const Local shape[7] = {
+        {-length * 0.5f, -shaftHalf, 0.5f - shaftHalf / (2.0f * headHalf), 0.0f},
+        {base, -shaftHalf, 0.5f - shaftHalf / (2.0f * headHalf), (base + length * 0.5f) / length},
+        {base, shaftHalf, 0.5f + shaftHalf / (2.0f * headHalf), (base + length * 0.5f) / length},
+        {-length * 0.5f, shaftHalf, 0.5f + shaftHalf / (2.0f * headHalf), 0.0f},
+        {base, -headHalf, 0.0f, (base + length * 0.5f) / length},
+        {base, headHalf, 1.0f, (base + length * 0.5f) / length},
+        {length * 0.5f, 0.0f, 0.5f, 1.0f},
+    };
+    const uint32_t triangles[3][3] = {{0, 1, 3}, {1, 2, 3}, {4, 6, 5}};
+    for (float center = settings.arrowIntervalMeters * 0.5f; center + length * 0.5f <= total;
+         center += settings.arrowIntervalMeters) {
+        if (center - length * 0.5f < 0.0f) continue;
+        for (int lane = 0; lane < 2; ++lane) {
+            const float direction = laneForward[lane] ? 1.0f : -1.0f;
+            const uint32_t first = static_cast<uint32_t>(result.vertices.size());
+            for (const Local& local : shape) {
+                const SurfaceSample sample =
+                    SampleRoadSurface(road, center + local.s * direction, laneCenters[lane] + local.t * direction);
+                renderer::MeshVertex vertex{};
+                XMStoreFloat3(&vertex.position, XMVectorAdd(sample.position, XMVectorScale(sample.normal, settings.liftMeters)));
+                XMStoreFloat3(&vertex.normal, sample.normal);
+                const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(sample.across,
+                    XMVectorScale(sample.normal, XMVectorGetX(XMVector3Dot(sample.normal, sample.across)))));
+                XMStoreFloat4(&vertex.tangent, tangent);
+                vertex.tangent.w = -1.0f;
+                vertex.uv = {local.u, local.w};
+                result.vertices.push_back(vertex);
+            }
+            for (const auto& triangle : triangles) {
+                uint32_t a = first + triangle[0], b = first + triangle[1], c = first + triangle[2];
+                // 向きを反転した矢印は巻きも反転するので、法線が路面と同じ側を向くよう並べ直す。
+                const XMVECTOR n = XMVector3Cross(
+                    XMVectorSubtract(Load(result.vertices[b].position), Load(result.vertices[a].position)),
+                    XMVectorSubtract(Load(result.vertices[c].position), Load(result.vertices[a].position)));
+                if (XMVectorGetX(XMVector3Dot(n, Load(result.vertices[a].normal))) < 0.0f) std::swap(b, c);
+                result.indices.insert(result.indices.end(), {a, b, c});
+            }
+        }
+    }
+}
+}  // namespace
 
 bool EvaluateRoad(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result, std::string& error) {
     std::unordered_set<GraphId> visiting;
@@ -342,7 +442,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             error = "Lane MarkingにRoadSurfaceを接続してください";
         } else if (EvaluateMeshChain(graph, upstream, chain, error, visiting)) {
             renderer::SceneMesh mesh;
-            if (BuildRoadMarkings(chain.road, *marking, mesh.geometry, error)) {
+            if (BuildRoadMarkings(chain.road, *marking, graph.RoadNetwork().leftHandTraffic, mesh.geometry, error)) {
                 mesh.material.baseColor = {0.85f, 0.85f, 0.82f};
                 mesh.material.roughness = 0.6f;
                 mesh.roadMetersPerUv = marking->uvRepeatMeters;

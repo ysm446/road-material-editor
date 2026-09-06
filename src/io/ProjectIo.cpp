@@ -1202,7 +1202,10 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                    {"edgeLines", marking->edgeLines},
                                    {"edgeInset", marking->edgeInsetMeters},
                                    {"lift", marking->liftMeters},
-                                   {"uvRepeat", marking->uvRepeatMeters}};
+                                   {"uvRepeat", marking->uvRepeatMeters},
+                                   {"arrows", marking->arrows},
+                                   {"arrowInterval", marking->arrowIntervalMeters},
+                                   {"arrowLength", marking->arrowLengthMeters}};
         } else if (const auto* path = std::get_if<graph::PathNodeSettings>(&node.settings)) {
             item["path"] = WritePath(path->path);
         }
@@ -1219,6 +1222,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
         links.push_back(std::move(item));
     }
     out["links"] = std::move(links);
+    out["roadNetwork"] = {{"leftHandTraffic", graphData.RoadNetwork().leftHandTraffic}};
     return out;
 }
 
@@ -1353,6 +1357,9 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.edgeInsetMeters = ReadFloat(*marking, "edgeInset", settings.edgeInsetMeters);
                     settings.liftMeters = ReadFloat(*marking, "lift", settings.liftMeters);
                     settings.uvRepeatMeters = ReadFloat(*marking, "uvRepeat", settings.uvRepeatMeters);
+                    settings.arrows = ReadBool(*marking, "arrows", settings.arrows);
+                    settings.arrowIntervalMeters = ReadFloat(*marking, "arrowInterval", settings.arrowIntervalMeters);
+                    settings.arrowLengthMeters = ReadFloat(*marking, "arrowLength", settings.arrowLengthMeters);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::Path) {
@@ -1401,6 +1408,13 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
     }
     // Replace が壊れたリンクの除去と次の採番の再構築を行う。
     graphData.Replace(std::move(nodes), std::move(links));
+    {
+        graph::RoadNetworkSettings roadNetwork;
+        if (const json* network = FindMember(node, "roadNetwork"); network != nullptr && network->is_object()) {
+            roadNetwork.leftHandTraffic = ReadBool(*network, "leftHandTraffic", roadNetwork.leftHandTraffic);
+        }
+        graphData.SetRoadNetwork(roadNetwork);
+    }
     return true;
 }
 

@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-07 00:44
+更新日時: 2026-09-07 01:29
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -19,6 +19,15 @@ R3 は白線（中央線と外側線の帯ポリゴン）を実装した。R2 �
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
+
+### 2026-09-07 01:29 — 走行側と進行方向の矢印
+
+- `RoadNetworkSettings.leftHandTraffic` を NodeGraph に追加し、`graph.roadNetwork` へ保存、DocumentSnapshot に含めてアンドゥ対象にした。
+- プレビュー設定「道路」で切り替え、Road / Lane Marking のプロパティに表示。Lane Marking に矢印（間隔・長さ）を追加。
+- Road の Left / Right が右手系で逆だったのを修正（列 0 = Right）。バンクの回転と曲がり向きの符号もこれに合わせた。
+- Debug / Release ビルド・テスト（矢印と走行側 10 項目を追加）が成功。保存往復で JSON が一致。
+- `data/road-profile-check/traffic-left.tgproj` / `traffic-right.tgproj` の UI 画像で、左右の車線の矢印が走行側で反転することを確認。
+- 注意: ユーザーの settings.json で作業グリッドがオフになっていたため、検証画像にはグリッドが写っていない。
 
 ### 2026-09-07 00:44 — 縦断曲線とバンク角
 

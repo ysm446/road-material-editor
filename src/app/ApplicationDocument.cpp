@@ -31,6 +31,7 @@ DocumentSnapshot Application::CaptureDocument() const {
     DocumentSnapshot snapshot;
     snapshot.graphNodes = m_graph.Nodes();
     snapshot.graphLinks = m_graph.Links();
+    snapshot.roadNetwork = m_graph.RoadNetwork();
     snapshot.selectedGraphNode = m_selectedGraphNode;
     snapshot.selectedMaterial = m_selectedMaterial;
 
@@ -115,6 +116,7 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
         }
     }
     m_graph.Replace(std::move(nodes), snapshot.graphLinks);
+    m_graph.SetRoadNetwork(snapshot.roadNetwork);
     // ノードの位置も一緒に戻すので、エディタへ流し込み直す。視点は動かさない。
     RequestGraphNodePlacement(false);
 

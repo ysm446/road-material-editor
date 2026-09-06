@@ -125,6 +125,22 @@ void Application::DrawMaterialPanel() {
             ui::EndPropertyTable();
         }
 
+        // 道路網に共通の設定。走行側は道路ごとに変えるものではないのでここに 1 つ置く。
+        ui::SectionHeader("道路");
+        if (ui::BeginPropertyTable("roadNetworkRows")) {
+            static const char* const kTrafficSideLabels[] = {"左側通行", "右側通行"};
+            int side = m_graph.RoadNetwork().leftHandTraffic ? 0 : 1;
+            if (ui::PropertyCombo("走行側", &side, kTrafficSideLabels, IM_ARRAYSIZE(kTrafficSideLabels), 0,
+                                  "車線の進行方向と、矢印・標識の向きを決める。左側通行では進行方向に向かって左の車線が"
+                                  "線形の向きへ進む")) {
+                graph::RoadNetworkSettings settings = m_graph.RoadNetwork();
+                settings.leftHandTraffic = (side == 0);
+                m_graph.SetRoadNetwork(settings);
+                MarkDocumentChanged();
+            }
+            ui::EndPropertyTable();
+        }
+
         ui::SectionHeader("カメラ");
         if (ui::BeginPropertyTable("cameraRows")) {
             // 露出を絞り / シャッター / ISO で決めているので、レンズも同じ言葉で扱う。

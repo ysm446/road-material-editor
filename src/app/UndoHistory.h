@@ -51,6 +51,7 @@ struct MaterialSnapshot {
 struct DocumentSnapshot {
     std::vector<graph::Node> graphNodes;
     std::vector<graph::Link> graphLinks;
+    graph::RoadNetworkSettings roadNetwork;
     std::vector<MaterialSnapshot> materials;
     graph::GraphId selectedGraphNode = 0;
     int selectedMaterial = 0;

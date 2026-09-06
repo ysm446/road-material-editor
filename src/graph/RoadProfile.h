@@ -12,8 +12,8 @@
 // - 縦断: 線形を距離軸へ展開し、始点・縦断ポイント・終点をガイド点にして前後勾配を放物線でつなぐ。
 //   ポイントのオフセットは「制御点から決まる高さ」への加算。ポイントが無ければ高さは変えない。
 // - バンク: 自動は XZ 平面の曲率半径・設計速度・摩擦係数から求め、曲がる向きの符号を掛ける。
-//   手動ポイントがある区間はポイント間で線形補間する。正で Left 側（列 0）が上がる。
-//   右カーブ（Right 側へ曲がる）では自動で正になり、内側の Right が下がる。
+//   手動ポイントがある区間はポイント間で線形補間する。正で Left 側（進行方向に向かって左）が上がる。
+//   右カーブでは自動で正になり、内側の Right が下がる。
 namespace tg::graph {
 
 // 距離パラメータ付きの折れ線。
@@ -39,7 +39,7 @@ float ComputeAutoBankRadians(float radius, float designSpeedKmh, float friction)
 struct ProfileFrame {
     DirectX::XMFLOAT3 position{};
     DirectX::XMFLOAT3 tangent{0.0f, 0.0f, 1.0f};
-    DirectX::XMFLOAT3 right{1.0f, 0.0f, 0.0f};  // 水平の Right 側（バンク前）
+    DirectX::XMFLOAT3 right{1.0f, 0.0f, 0.0f};  // 進行方向に向かって右（水平、バンク前）
     DirectX::XMFLOAT3 up{0.0f, 1.0f, 0.0f};
     float distance = 0.0f;
     float bankRadians = 0.0f;

@@ -26,8 +26,10 @@ void RunRoadTests() {
     renderer::MeshScene scene;
     scene.meshes.push_back({road.surface,{}});
     Check(renderer::ValidateMeshScene(scene), "finite orthonormal mesh with valid indices");
+    // 進行方向 +Z に向かって右は -X（右手系 Y-up）。
     Check(road.left.worldSpace && road.left.points.back().y == 2 &&
-          road.right.points.back().x == 3, "boundaries preserve world coordinates and height");
+          road.right.points.back().x == -3 && road.left.points.back().x == 3,
+          "boundaries preserve world coordinates, height, and handedness");
     bool metreCells = true;
     for (size_t i = 0; i < road.surface.vertices.size(); ++i) {
         if (i % 7 != 6) metreCells &= std::abs(road.surface.vertices[i+1].position.x-road.surface.vertices[i].position.x) <= 1.001f;
@@ -113,8 +115,8 @@ void RunRoadTests() {
     Check(std::get<graph::RoadNodeSettings>(graph.FindNode(roadId)->settings).widthMeters == 8, "redo restores road settings");
     auto child = graph.CreateNode(graph::NodeKind::Road);
     graph.CreateLink(graph.FindNode(roadId)->outputs[1].id, graph.FindNode(child)->inputs[0].id);
-    Check(graph::EvaluateRoad(graph, child, road, error) && road.surface.vertices[0].position.x == -7,
-          "left boundary is a usable downstream path");
+    Check(graph::EvaluateRoad(graph, child, road, error) && road.surface.vertices[0].position.x == 1,
+          "left boundary (x = +4) is a usable downstream path");
     Check(!graph.CanCreateLink(graph.FindNode(child)->outputs[1].id, graph.FindNode(roadId)->inputs[0].id), "road dependency cycle is rejected");
     const auto childOut = graph.CreateNode(graph::NodeKind::MeshOutput);
     graph.CreateLink(graph.FindNode(child)->outputs[0].id, graph.FindNode(childOut)->inputs[0].id);
@@ -132,8 +134,9 @@ void RunRoadTests() {
     graph::RoadGeometry straight;
     Check(graph::BuildRoad(path, settings, straight, error) && straight.stride == 7, "road exposes row stride");
     graph::RoadMarkingNodeSettings marking;
+    marking.arrows = false;
     renderer::MeshData lines;
-    Check(graph::BuildRoadMarkings(straight, marking, lines, error), "default centre and edge lines build");
+    Check(graph::BuildRoadMarkings(straight, marking, true, lines, error), "default centre and edge lines build");
     if (!error.empty()) std::printf("Marking error: %s\n", error.c_str());
     const size_t rows = straight.surface.vertices.size() / straight.stride;
     Check(lines.vertices.size() == rows * 6 && lines.indices.size() == (rows - 1) * 18,
@@ -153,18 +156,21 @@ void RunRoadTests() {
         Check(renderer::ValidateMeshScene(lineScene), "marking mesh has valid indices and tangents");
     }
     marking.uvRepeatMeters = 2.0f;
-    Check(graph::BuildRoadMarkings(straight, marking, lines, error) &&
+    Check(graph::BuildRoadMarkings(straight, marking, true, lines, error) &&
           std::abs(lines.vertices[rows*2-1].uv.y - std::sqrt(104.0f) * 0.5f) < 1e-4f, "UV repeat scales V");
     marking = {};
+    marking.arrows = false;
     marking.edgeInsetMeters = 3.0f;
-    Check(!graph::BuildRoadMarkings(straight, marking, lines, error), "edge line past the centre is rejected");
+    Check(!graph::BuildRoadMarkings(straight, marking, true, lines, error), "edge line past the centre is rejected");
     marking = {};
+    marking.arrows = false;
     marking.centerLine = false;
     marking.edgeLines = false;
-    Check(!graph::BuildRoadMarkings(straight, marking, lines, error), "no enabled lines is rejected");
+    Check(!graph::BuildRoadMarkings(straight, marking, true, lines, error), "no enabled lines is rejected");
     marking = {};
+    marking.arrows = false;
     Check(graph::BuildRoad(curve, settings, straight, error) &&
-          graph::BuildRoadMarkings(straight, marking, lines, error), "curved road markings build");
+          graph::BuildRoadMarkings(straight, marking, true, lines, error), "curved road markings build");
     {
         renderer::MeshScene curvedScene;
         curvedScene.meshes.push_back({lines, {}});
@@ -250,22 +256,22 @@ void RunRoadTests() {
         const float expected = graph::ComputeAutoBankRadians(40.0f, 60.0f, 0.15f);
         Check(expected > 0.05f && std::abs(std::abs(autoBank) - expected) < 0.05f,
               "auto bank matches the design speed formula for the arc radius");
-        // 進行方向 +X から +Z へ曲がる。Right 側は (dz, 0, -dx) = -Z なので Left へ曲がる左カーブ = 負。
-        Check(autoBank < 0.0f, "turning toward the Left side gives a negative bank");
+        // 進行方向 +X から +Z へ曲がる。右手系 Y-up で右は (-dz, 0, dx) = +Z なので右カーブ = 正。
+        Check(autoBank > 0.0f, "turning toward the right gives a positive bank");
         graph::RoadGeometry banked;
         Check(graph::BuildRoad(arc, settings, banked, error), "banked road builds");
-        bool rightHigher = true;
+        bool leftHigher = true;
         for (size_t row = 3; row + 3 < banked.surface.vertices.size() / banked.stride; ++row) {
-            const auto& left = banked.surface.vertices[row * banked.stride];
-            const auto& right = banked.surface.vertices[row * banked.stride + banked.stride - 1];
-            rightHigher &= right.position.y > left.position.y + 0.1f;
+            const auto& right = banked.surface.vertices[row * banked.stride];
+            const auto& left = banked.surface.vertices[row * banked.stride + banked.stride - 1];
+            leftHigher &= left.position.y > right.position.y + 0.1f;
         }
-        Check(rightHigher, "negative bank raises the outer Right boundary above the inner Left boundary");
+        Check(leftHigher, "positive bank raises the outer Left boundary above the inner Right boundary");
         renderer::MeshScene bankedScene;
         bankedScene.meshes.push_back({banked.surface, {}});
         Check(renderer::ValidateMeshScene(bankedScene), "banked mesh is valid");
         renderer::MeshData bankedLines;
-        Check(graph::BuildRoadMarkings(banked, graph::RoadMarkingNodeSettings{}, bankedLines, error) &&
+        Check(graph::BuildRoadMarkings(banked, graph::RoadMarkingNodeSettings{}, true, bankedLines, error) &&
               bankedLines.vertices[bankedLines.vertices.size() / 2].position.y != 0.0f,
               "markings follow the banked surface");
         arc.bankEnabled = false;
@@ -279,22 +285,90 @@ void RunRoadTests() {
         graph::FindBankPoint(arc, bid)->angleDegrees = -20.0f;
         const float manual = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.5f);
         Check(std::abs(manual + 20.0f * 3.14159265f / 180.0f) < 1e-4f, "manual point overrides the angle at its position");
+        Check(graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.9f) < 0.0f,
+              "manual negative angle holds past the last point");
         Check(std::abs(graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.25f) - manual) < 1e-4f,
               "first manual point holds before its position");
         const auto autoId = graph::AddBankPoint(arc, 0.1f);
         const float between = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.3f);
         const float atAuto = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.1f);
-        Check(atAuto < 0.0f && between > std::min(atAuto, manual) + 1e-4f && between < std::max(atAuto, manual) - 1e-4f,
+        Check(atAuto > 0.0f && between > std::min(atAuto, manual) + 1e-4f && between < std::max(atAuto, manual) - 1e-4f,
               "auto point before a manual point interpolates toward it");
         graph::DeleteProfilePoint(arc, autoId);
-        Check(graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.9f) < 0.0f,
-              "last manual point holds past its position");
         arc.smoothBank = true;
         arc.bankSmoothMeters = 20.0f;
         const float smoothed = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.5f);
-        Check(std::isfinite(smoothed) && smoothed < 0.0f, "smoothing keeps the sign");
+        Check(std::isfinite(smoothed) && smoothed < 0.0f, "smoothing keeps the sign of the manual point");
         const auto frame = graph::EvaluateProfileFrame(arc, arcCurve, 0.5f);
         Check(std::abs(frame.up.y) > 0.9f && std::abs(frame.right.y) < 1e-4f, "profile frame is horizontal before banking");
         Check(graph::DeleteProfilePoint(arc, bid) && !graph::DeleteProfilePoint(arc, bid), "profile points delete once");
+    }
+
+
+    tests::Section("Traffic side and arrows");
+    {
+        graph::RoadGeometry straightRoad;
+        Check(graph::BuildRoad(path, settings, straightRoad, error), "straight road for arrows");
+        graph::RoadMarkingNodeSettings arrowsOnly;
+        arrowsOnly.centerLine = arrowsOnly.edgeLines = false;
+        arrowsOnly.arrows = true;
+        arrowsOnly.arrowIntervalMeters = 5.0f;
+        arrowsOnly.arrowLengthMeters = 3.0f;
+        // 進行方向 +Z。左側通行では左（+X）の車線が +Z へ、右（-X）の車線が -Z へ向く。
+        const auto tipDirection = [&](const renderer::MeshData& mesh, bool leftLane) {
+            float bestZ = leftLane ? -1e9f : 1e9f;
+            float tipX = 0.0f;
+            bool any = false;
+            for (const auto& vertex : mesh.vertices) {
+                const bool onLeft = vertex.position.x > 0.0f;
+                if (onLeft != leftLane) continue;
+                any = true;
+                // 先端は車線の中央（x = ±1.5）にある唯一の頂点。左車線なら最大 z、右車線なら最小 z を見る。
+                if (leftLane ? vertex.position.z > bestZ : vertex.position.z < bestZ) {
+                    bestZ = vertex.position.z;
+                    tipX = vertex.position.x;
+                }
+            }
+            return any && std::abs(std::abs(tipX) - 1.5f) < 1e-3f;
+        };
+        renderer::MeshData arrows;
+        Check(graph::BuildRoadMarkings(straightRoad, arrowsOnly, true, arrows, error) && !arrows.vertices.empty(),
+              "arrow markings build");
+        if (!error.empty()) std::printf("Arrow error: %s\n", error.c_str());
+        Check(arrows.vertices.size() % 7 == 0 && arrows.indices.size() == arrows.vertices.size() / 7 * 9,
+              "each arrow is seven vertices and three triangles");
+        Check(tipDirection(arrows, true) && tipDirection(arrows, false),
+              "left-hand traffic: left lane points forward, right lane points backward");
+        renderer::MeshScene arrowScene;
+        arrowScene.meshes.push_back({arrows, {}});
+        Check(renderer::ValidateMeshScene(arrowScene), "arrow mesh is valid");
+        bool upward = true;
+        for (size_t i = 0; i < arrows.indices.size(); i += 3) {
+            const auto& pa = arrows.vertices[arrows.indices[i]].position;
+            const auto& pb = arrows.vertices[arrows.indices[i + 1]].position;
+            const auto& pc = arrows.vertices[arrows.indices[i + 2]].position;
+            const float ny = (pb.z - pa.z) * (pc.x - pa.x) - (pb.x - pa.x) * (pc.z - pa.z);
+            upward &= ny > 0.0f;
+        }
+        Check(upward, "arrow triangles wind upward in both directions");
+        renderer::MeshData rightHand;
+        Check(graph::BuildRoadMarkings(straightRoad, arrowsOnly, false, rightHand, error) &&
+              !tipDirection(rightHand, true) && !tipDirection(rightHand, false),
+              "right-hand traffic flips both lanes");
+        graph::NodeGraph network;
+        Check(network.RoadNetwork().leftHandTraffic, "new graphs default to left-hand traffic");
+        graph::RoadNetworkSettings rhs;
+        rhs.leftHandTraffic = false;
+        const auto revision = network.Revision();
+        network.SetRoadNetwork(rhs);
+        Check(!network.RoadNetwork().leftHandTraffic && network.Revision() != revision,
+              "changing the traffic side marks the graph dirty");
+        DocumentSnapshot trafficBefore;
+        trafficBefore.roadNetwork = graph::RoadNetworkSettings{};
+        UndoHistory trafficHistory;
+        trafficHistory.Push(trafficBefore, 0);
+        DocumentSnapshot trafficAfter;
+        trafficAfter.roadNetwork = rhs;
+        Check(trafficHistory.Undo(trafficAfter).roadNetwork.leftHandTraffic, "undo restores the traffic side");
     }
 }

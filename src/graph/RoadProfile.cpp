@@ -29,12 +29,13 @@ float CurvatureRadiusXZ(XMFLOAT3 p0, XMFLOAT3 p1, XMFLOAT3 p2) {
     return radius > 1e-6f ? radius : 0.0f;
 }
 
-// 曲がる向き。Right 側（Road の列末尾側 = (dz, 0, -dx)）へ曲がるなら +1、Left 側なら -1、直線なら 0。
+// 曲がる向き。進行方向に向かって右（右手系 Y-up で (-dz, 0, dx)）へ曲がるなら +1、左なら -1、直線なら 0。
+// 右カーブでは外側の Left が上がるので、正のバンク（Left 側上がり）になる。
 float TurnSignXZ(XMFLOAT3 p0, XMFLOAT3 p1, XMFLOAT3 p2) {
     p0.y = p1.y = p2.y = 0.0f;
     const XMVECTOR a = XMVector3Normalize(XMVectorSubtract(Load(p1), Load(p0)));
     const XMVECTOR b = XMVector3Normalize(XMVectorSubtract(Load(p2), Load(p1)));
-    const XMFLOAT3 right{XMVectorGetZ(a), 0.0f, -XMVectorGetX(a)};
+    const XMFLOAT3 right{-XMVectorGetZ(a), 0.0f, XMVectorGetX(a)};
     const float toward = XMVectorGetX(XMVector3Dot(b, Load(right)));
     if (std::abs(toward) <= 1e-5f) return 0.0f;
     return toward > 0.0f ? 1.0f : -1.0f;
@@ -271,12 +272,13 @@ ProfileFrame EvaluateProfileFrame(const PathSettings& path, const ProfileCurve& 
     if (XMVectorGetX(XMVector3Length(tangent)) < 1e-6f) tangent = XMVectorSet(0, 0, 1, 0);
     tangent = XMVector3Normalize(tangent);
     frame.tangent = Store(tangent);
-    XMFLOAT3 right{frame.tangent.z, 0.0f, -frame.tangent.x};
+    // 進行方向に向かって右（右手系 Y-up）。
+    XMFLOAT3 right{-frame.tangent.z, 0.0f, frame.tangent.x};
     const float horizontal = std::hypot(right.x, right.z);
     if (horizontal < 1e-6f) right = {1.0f, 0.0f, 0.0f};
     else { right.x /= horizontal; right.z /= horizontal; }
     frame.right = right;
-    frame.up = Store(XMVector3Normalize(XMVector3Cross(tangent, Load(right))));
+    frame.up = Store(XMVector3Normalize(XMVector3Cross(Load(right), tangent)));
     frame.bankRadians = EvaluateBankAngleRadians(path, centerline, frame.distance);
     return frame;
 }

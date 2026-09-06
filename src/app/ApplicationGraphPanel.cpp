@@ -1060,9 +1060,10 @@ void Application::DrawGraphPanel() {
                 defaults.widthMeters, "中心線から左右へ半分ずつ広げる全幅", "%.2f m");
             changed |= ui::PropertyFloat("UV反復長", &road->uvRepeatMeters, 0.1f, 100.0f,
                 defaults.uvRepeatMeters, "UVが1増える実距離。道路の長さと幅の両方に適用する", "%.2f m");
+            ui::PropertyValue("走行側", "%s", m_graph.RoadNetwork().leftHandTraffic ? "左側通行" : "右側通行");
             ui::EndPropertyTable();
         }
-        ui::HintText("MaterialにSurfaceなどのResultを接続して材質を適用。RoadSurfaceはMesh Outputへ、Left / Rightは左右境界Path。");
+        ui::HintText("MaterialにSurfaceなどのResultを接続して材質を適用。RoadSurfaceはMesh Outputへ、Left / Rightは進行方向に向かって左右の境界Path。走行側はプレビュー設定の「道路」で切り替える。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&selected->settings)) {
         bool changed = false;
@@ -1080,9 +1081,18 @@ void Application::DrawGraphPanel() {
                 defaults.liftMeters, "路面から法線方向へ持ち上げる量。0だと路面とちらつく", "%.3f m");
             changed |= ui::PropertyFloat("UV反復長", &marking->uvRepeatMeters, 0.1f, 100.0f,
                 defaults.uvRepeatMeters, "帯の長さ方向でVが1増える実距離。幅方向のUは0〜1", "%.2f m");
+            changed |= ui::PropertyBool("進行方向の矢印", &marking->arrows, defaults.arrows,
+                "左右の車線の中央に矢印を置く。走行側の車線は線形の向き、対向車線は逆向き");
+            if (marking->arrows) {
+                changed |= ui::PropertyFloat("矢印の間隔", &marking->arrowIntervalMeters, 1.0f, 200.0f,
+                    defaults.arrowIntervalMeters, "矢印を置く間隔", "%.0f m");
+                changed |= ui::PropertyFloat("矢印の長さ", &marking->arrowLengthMeters, 0.5f, 20.0f,
+                    defaults.arrowLengthMeters, "矢印の全長。幅は道路幅から決める", "%.1f m");
+            }
+            ui::PropertyValue("走行側", "%s", m_graph.RoadNetwork().leftHandTraffic ? "左側通行" : "右側通行");
             ui::EndPropertyTable();
         }
-        ui::HintText("RoadのRoadSurfaceを接続し、出力のRoadSurfaceをMesh Outputへ。Materialに塗料の材質を接続できる。未接続は白。");
+        ui::HintText("RoadのRoadSurfaceを接続し、出力のRoadSurfaceをMesh Outputへ。Materialに塗料の材質を接続できる。未接続は白。走行側はプレビュー設定の「道路」で切り替える。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (selected->kind == graph::NodeKind::MeshOutput) {
         ui::HintText("RoadSurfaceを接続すると道路を表示する。複数のMesh Outputを同時に表示できる。");

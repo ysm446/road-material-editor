@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 00:44
+更新日時: 2026-09-07 01:29
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -58,7 +58,7 @@ material-mixer 時代の `.mmproj` / `.mmmat` も**読み込みだけ**受け付
 | 8 | `road` / `meshOutput` ノードを追加した |
 | 9 | Road に Material 入力ピンを追加した |
 | 10 | `roadMarking` ノード（白線）を追加した |
-| 11 | Path に縦断ポイント・バンクポイントを追加した |
+| 11 | Path に縦断ポイント・バンクポイントを追加した。`graph.roadNetwork` と Lane Marking の矢印はキー追加のみ |
 
 **版を上げる基準は「キーが増えたか」ではなく「既存のキーの意味が変わったか」。**
 キーが増えただけなら、古いビルドはそれを無視して正しく読める。意味が変わった場合は、
@@ -259,6 +259,11 @@ inputsはRoadSurface（Mesh）、Materialの順、outputsはRoadSurface（Mesh�
 | smoothBank / bankSmoothDistance | ガウス平滑化とその距離（20 m） |
 
 ポイントの id は点・エッジと同じ `nextId` の空間。旧アプリが線形を平坦・水平に読んで黙って違う道路を出すため版を上げた。
+
+同じ版でキーだけ追加したもの（無ければ既定値）:
+
+- `graph.roadNetwork: { "leftHandTraffic": true }` — 走行側。プロジェクトで 1 つ。
+- `roadMarking` の `arrows`（既定 true）、`arrowInterval`（30）、`arrowLength`（5）— 進行方向の矢印。
 
 ## `.tgproj`
 

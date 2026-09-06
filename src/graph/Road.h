@@ -67,6 +67,9 @@ bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t inn
                    const ShoulderNodeSettings& settings, RoadGeometry& result, std::string& error);
 // Shoulder ノードを評価する。Path 入力の上流（Road の Left / Right、Shoulder の Outer）をたどる。
 bool EvaluateShoulder(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result, std::string& error);
+// ひび割れ。lanes は轍寄せの横位置と横向きの長さの上限（車線幅）に使う。同じ設定と種なら同じ結果。
+bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNodeSettings& settings,
+                 renderer::MeshData& result, std::string& error);
 // 面上のパス（surfaceSpace）に沿った帯。uv は幅方向 0〜1、長さ方向はパスに沿った実距離÷UV反復長。
 bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const DecalNodeSettings& settings,
                 renderer::MeshData& result, std::string& error);

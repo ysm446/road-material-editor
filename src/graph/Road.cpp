@@ -948,6 +948,26 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 AppendChainMesh(chain, std::move(mesh), node->id);
             }
         }
+    } else if (const auto* crack = std::get_if<CrackNodeSettings>(&node->settings)) {
+        const Node* upstream = node->inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node->inputs.front().id);
+        if (!upstream) {
+            error = "CrackにRoadSurfaceを接続してください";
+        } else if (EvaluateMeshChain(graph, upstream, chain, errors, visiting)) {
+            success = true;  // 道路面はある。ひび割れが失敗しても道路は残す。
+            renderer::SceneMesh mesh;
+            const RoadLanes lanes = ComputeRoadLanes(chain.road.settings, graph.RoadNetwork().leftHandTraffic);
+            if (BuildCracks(chain.road, lanes, *crack, mesh.geometry, error) && !mesh.geometry.vertices.empty()) {
+                mesh.material.baseColor = {0.2f, 0.2f, 0.2f};
+                mesh.material.roughness = 0.8f;
+                mesh.roadMetersPerUv = crack->uvRepeatMeters;
+                mesh.roadGridOverlay = false;
+                mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
+                mesh.displacementSource = chain.roadIndex;
+                mesh.useBlendMode = true;
+                AttachMaterial(graph, *node, mesh);
+                AppendChainMesh(chain, std::move(mesh), node->id);
+            }
+        }
     } else if (node->kind == NodeKind::Shoulder) {
         // 路肩は Road とは別の枝。以後の白線・Decal は路肩の面に乗る。
         if (EvaluateShoulder(graph, node->id, chain.road, error)) {
@@ -964,7 +984,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             success = true;
         }
     } else {
-        error = "Mesh OutputにはRoad / Lane Marking / Decal / Shoulder / MergeのRoadSurfaceを接続してください";
+        error = "Mesh OutputにはRoad / Lane Marking / Decal / Shoulder / Merge / CrackのRoadSurfaceを接続してください";
     }
     if (!error.empty()) { const NodeDefinition* def = FindNodeDefinition(node->kind); AppendError(errors, std::string(def ? def->title : "?") + ": " + error); }
     visiting.erase(node->id);
@@ -1062,6 +1082,93 @@ const Node* FindSurfaceRoad(const NodeGraph& graph, const Node& pathNode) {
     return nullptr;
 }
 
+namespace {
+// 道路座標の折れ線（横位置・実距離・面からの高さ・帯の幅）。
+struct SurfaceStripPoint {
+    float lateral;
+    float distance;
+    float height;
+    float width;
+};
+// 折れ線を約 0.25 m で刻み直し、点ごとの幅を補間して帯にする。幅方向の U は 0〜1、V は折れ線に沿った実距離÷反復長。
+// 道路面と同じ位置の道路 UV を持ち、押し出しに追従する。2 点未満なら何もしない。
+bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStripPoint>& input, float lift,
+                        float uvRepeat, bool uvAlongU, renderer::MeshData& result, std::string& error) {
+    std::vector<SurfaceStripPoint> points;
+    for (const auto& p : input) {
+        if (points.empty() || std::hypot(p.lateral - points.back().lateral, p.distance - points.back().distance) > 1e-5f)
+            points.push_back(p);
+    }
+    if (points.size() < 2) return true;
+    std::vector<float> lengths(points.size(), 0.0f);
+    for (size_t i = 1; i < points.size(); ++i)
+        lengths[i] = lengths[i - 1] + std::hypot(points[i].lateral - points[i - 1].lateral, points[i].distance - points[i - 1].distance);
+    const float total = lengths.back();
+    if (!(total > 1e-4f) || total > 16000.0f) { error = "帯のパスが短すぎるか長すぎます"; return false; }
+    const size_t steps = std::max<size_t>(1, static_cast<size_t>(std::ceil(total / 0.25f)));
+    constexpr uint32_t stride = 2;
+    if (result.vertices.size() + (steps + 1) * stride > 400000) { error = "帯の頂点数が多すぎます"; return false; }
+    std::vector<SurfaceStripPoint> uniform;
+    size_t segment = 1;
+    for (size_t i = 0; i <= steps; ++i) {
+        const float along = total * static_cast<float>(i) / static_cast<float>(steps);
+        while (segment + 1 < lengths.size() && lengths[segment] < along) ++segment;
+        const float span = lengths[segment] - lengths[segment - 1];
+        const float t = span > 1e-6f ? (along - lengths[segment - 1]) / span : 0.0f;
+        const auto& a = points[segment - 1];
+        const auto& b = points[segment];
+        uniform.push_back({a.lateral + (b.lateral - a.lateral) * t, a.distance + (b.distance - a.distance) * t,
+                           a.height + (b.height - a.height) * t, std::max(0.002f, a.width + (b.width - a.width) * t)});
+    }
+    const uint32_t base = static_cast<uint32_t>(result.vertices.size());
+    for (size_t i = 0; i < uniform.size(); ++i) {
+        const auto& p = uniform[i];
+        const auto& prev = uniform[i == 0 ? 0 : i - 1];
+        const auto& next = uniform[std::min(i + 1, uniform.size() - 1)];
+        // 道路座標の平面での接線と、その法線（帯の横方向）。
+        float tx = next.lateral - prev.lateral;
+        float tz = next.distance - prev.distance;
+        const float tl = std::hypot(tx, tz);
+        if (tl < 1e-6f) { tx = 0.0f; tz = 1.0f; } else { tx /= tl; tz /= tl; }
+        const float nx = -tz, nz = tx;
+        const float along = total * static_cast<float>(i) / static_cast<float>(steps);
+        for (int side = 0; side < 2; ++side) {
+            const float offset = (side == 0 ? -0.5f : 0.5f) * p.width;
+            const float lateral = p.lateral + nx * offset;
+            const float distance = p.distance + nz * offset;
+            const SurfaceSample sample = SampleRoadSurface(road, distance, lateral);
+            renderer::MeshVertex vertex{};
+            XMStoreFloat3(&vertex.position, XMVectorAdd(sample.position, XMVectorScale(sample.normal, lift + p.height)));
+            XMStoreFloat3(&vertex.normal, sample.normal);
+            const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(sample.across,
+                XMVectorScale(sample.normal, XMVectorGetX(XMVector3Dot(sample.normal, sample.across)))));
+            XMStoreFloat4(&vertex.tangent, tangent);
+            vertex.tangent.w = -1.0f;
+            vertex.uv = {static_cast<float>(side), along / uvRepeat};
+            if (uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
+            vertex.roadUv = {(road.settings.widthMeters * 0.5f + lateral) / road.settings.uvRepeatMeters,
+                             distance / road.settings.uvRepeatMeters};
+            if (road.settings.uvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
+            result.vertices.push_back(vertex);
+        }
+        if (i > 0) {
+            const uint32_t a = base + static_cast<uint32_t>(i - 1) * stride;
+            const uint32_t tris[2][3] = {{a, a + 2, a + 1}, {a + 1, a + 2, a + 3}};
+            for (const auto& tri : tris) {
+                uint32_t x = tri[0], y = tri[1], z = tri[2];
+                // パスが道路を逆走する区間では巻きが反転するので、法線が路面側を向くよう並べ直す。
+                const XMVECTOR n = XMVector3Cross(
+                    XMVectorSubtract(Load(result.vertices[y].position), Load(result.vertices[x].position)),
+                    XMVectorSubtract(Load(result.vertices[z].position), Load(result.vertices[x].position)));
+                if (XMVectorGetX(XMVector3Dot(n, Load(result.vertices[x].normal))) < 0.0f) std::swap(y, z);
+                result.indices.insert(result.indices.end(), {x, y, z});
+            }
+        }
+    }
+    return true;
+}
+}  // namespace
+
 bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const DecalNodeSettings& settings,
                 renderer::MeshData& result, std::string& error) {
     result = {};
@@ -1075,81 +1182,137 @@ bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const
         return fail("幅は0.05〜50 m、浮かせ量は0〜0.1 m、UV反復長は0.05〜100 mにしてください");
     const auto strands = BuildPathStrands(surfacePath);
     if (strands.empty()) return fail("Path に点を置いてください");
-    const uint32_t stride = 2;
     for (const auto& strand : strands) {
-        // 道路座標（x = 横位置, z = 実距離）で曲線を割り、約 0.25 m で刻み直す。
-        std::vector<XMFLOAT3> points;
+        // 道路座標（x = 横位置, z = 実距離）で曲線を割る。帯の幅は一定。
+        std::vector<SurfaceStripPoint> points;
         for (const auto& sample : SamplePathStrand(surfacePath, strand, 24)) {
-            const XMFLOAT3 p{sample.x, sample.y, sample.z};
-            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return fail("Path の座標が不正です");
-            if (points.empty() || std::hypot(p.x - points.back().x, p.z - points.back().z) > 1e-5f) points.push_back(p);
+            if (!std::isfinite(sample.x) || !std::isfinite(sample.y) || !std::isfinite(sample.z)) return fail("Path の座標が不正です");
+            points.push_back({sample.x, sample.z, sample.y, settings.widthMeters});
         }
-        if (points.size() < 2) continue;
-        std::vector<float> lengths(points.size(), 0.0f);
-        for (size_t i = 1; i < points.size(); ++i)
-            lengths[i] = lengths[i - 1] + std::hypot(points[i].x - points[i - 1].x, points[i].z - points[i - 1].z);
-        const float total = lengths.back();
-        if (!(total > 1e-4f) || total > 16000.0f) return fail("デカールのパスが短すぎるか長すぎます");
-        const size_t steps = std::max<size_t>(1, static_cast<size_t>(std::ceil(total / 0.25f)));
-        if (result.vertices.size() + (steps + 1) * stride > 200000) return fail("デカールの頂点数が多すぎます");
-        std::vector<XMFLOAT3> uniform;
-        size_t segment = 1;
-        for (size_t i = 0; i <= steps; ++i) {
-            const float distance = total * static_cast<float>(i) / static_cast<float>(steps);
-            while (segment + 1 < lengths.size() && lengths[segment] < distance) ++segment;
-            const float span = lengths[segment] - lengths[segment - 1];
-            const float t = span > 1e-6f ? (distance - lengths[segment - 1]) / span : 0.0f;
-            XMFLOAT3 p;
-            XMStoreFloat3(&p, XMVectorLerp(Load(points[segment - 1]), Load(points[segment]), t));
-            uniform.push_back(p);
-        }
-        const uint32_t base = static_cast<uint32_t>(result.vertices.size());
-        for (size_t i = 0; i < uniform.size(); ++i) {
-            const XMFLOAT3& p = uniform[i];
-            const XMFLOAT3& prev = uniform[i == 0 ? 0 : i - 1];
-            const XMFLOAT3& next = uniform[std::min(i + 1, uniform.size() - 1)];
-            // 道路座標の平面での接線と、その法線（帯の横方向）。
-            float tx = next.x - prev.x;
-            float tz = next.z - prev.z;
-            const float tl = std::hypot(tx, tz);
-            if (tl < 1e-6f) { tx = 0.0f; tz = 1.0f; } else { tx /= tl; tz /= tl; }
-            const float nx = -tz, nz = tx;
-            const float along = total * static_cast<float>(i) / static_cast<float>(steps);
-            for (int side = 0; side < 2; ++side) {
-                const float offset = (side == 0 ? -0.5f : 0.5f) * settings.widthMeters;
-                const float lateral = p.x + nx * offset;
-                const float distance = p.z + nz * offset;
-                const SurfaceSample sample = SampleRoadSurface(road, distance, lateral);
-                renderer::MeshVertex vertex{};
-                XMStoreFloat3(&vertex.position, XMVectorAdd(sample.position, XMVectorScale(sample.normal, settings.liftMeters + p.y)));
-                XMStoreFloat3(&vertex.normal, sample.normal);
-                const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(sample.across,
-                    XMVectorScale(sample.normal, XMVectorGetX(XMVector3Dot(sample.normal, sample.across)))));
-                XMStoreFloat4(&vertex.tangent, tangent);
-                vertex.tangent.w = -1.0f;
-                vertex.uv = {static_cast<float>(side), along / settings.uvRepeatMeters};
-                if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
-                vertex.roadUv = {(road.settings.widthMeters * 0.5f + lateral) / road.settings.uvRepeatMeters,
-                                 distance / road.settings.uvRepeatMeters};
-                if (road.settings.uvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
-                result.vertices.push_back(vertex);
-            }
-            if (i > 0) {
-                const uint32_t a = base + static_cast<uint32_t>(i - 1) * stride;
-                const uint32_t tris[2][3] = {{a, a + 2, a + 1}, {a + 1, a + 2, a + 3}};
-                for (const auto& tri : tris) {
-                    uint32_t x = tri[0], y = tri[1], z = tri[2];
-                    // パスが道路を逆走する区間では巻きが反転するので、法線が路面側を向くよう並べ直す。
-                    const XMVECTOR n = XMVector3Cross(
-                        XMVectorSubtract(Load(result.vertices[y].position), Load(result.vertices[x].position)),
-                        XMVectorSubtract(Load(result.vertices[z].position), Load(result.vertices[x].position)));
-                    if (XMVectorGetX(XMVector3Dot(n, Load(result.vertices[x].normal))) < 0.0f) std::swap(y, z);
-                    result.indices.insert(result.indices.end(), {x, y, z});
-                }
-            }
-        }
+        if (!AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU, result, error))
+            return false;
     }
     if (result.vertices.empty()) return fail("Path に 2 点以上の線を置いてください");
+    return true;
+}
+
+namespace {
+// 決定的な乱数（xorshift32）。同じ種なら同じ並び。
+struct CrackRandom {
+    uint32_t state;
+    explicit CrackRandom(uint32_t seed) : state(seed * 2654435761u + 0x9E3779B9u) { if (state == 0) state = 1; }
+    uint32_t Next() { state ^= state << 13; state ^= state >> 17; state ^= state << 5; return state; }
+    float Unit() { return static_cast<float>(Next() & 0xFFFFFFu) / static_cast<float>(0x1000000u); }
+    float Range(float lo, float hi) { return lo + (hi - lo) * Unit(); }
+    int Int(int lo, int hi) { return lo + static_cast<int>(Next() % static_cast<uint32_t>(hi - lo + 1)); }
+    bool Chance(float p) { return Unit() < p; }
+};
+}  // namespace
+
+bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNodeSettings& settings,
+                 renderer::MeshData& result, std::string& error) {
+    result = {};
+    error.clear();
+    const auto fail = [&](const char* message) { error = message; return false; };
+    if (road.stride < 2 || road.surface.vertices.size() < road.stride * 2 || road.rowDistances.size() < 2)
+        return fail("道路面が生成されていません");
+    if (!std::isfinite(settings.densityPer100m) || settings.densityPer100m < 0.0f || settings.densityPer100m > 200.0f ||
+        !std::isfinite(settings.lengthMinMeters) || !std::isfinite(settings.lengthMaxMeters) ||
+        settings.lengthMinMeters < 0.5f || settings.lengthMaxMeters < settings.lengthMinMeters || settings.lengthMaxMeters > 30.0f ||
+        !std::isfinite(settings.trunkWidthMeters) || settings.trunkWidthMeters < 0.01f || settings.trunkWidthMeters > 1.0f ||
+        settings.branchesMax < settings.branchesMin || settings.branchesMax > 12u ||
+        !std::isfinite(settings.liftMeters) || settings.liftMeters < 0.0f || settings.liftMeters > 0.1f ||
+        !std::isfinite(settings.uvRepeatMeters) || settings.uvRepeatMeters < 0.05f || settings.uvRepeatMeters > 100.0f)
+        return fail("密度は0〜200、長さは0.5〜30 m、幹の幅は0.01〜1 m、枝は最大12本、浮かせ量は0〜0.1 m、UV反復長は0.05〜100 mにしてください");
+    const float total = road.rowDistances.back();
+    const float width = road.settings.widthMeters;
+    const float margin = std::min(0.15f, width * 0.1f);
+    const float halfInside = width * 0.5f - margin;
+    if (total < 2.0f || halfInside <= 0.0f) return true;  // 短すぎる・狭すぎる面には置かない
+    CrackRandom rng(settings.seed);
+    const float expected = settings.densityPer100m * total / 100.0f;
+    int count = static_cast<int>(std::floor(expected));
+    if (rng.Chance(expected - static_cast<float>(count))) ++count;
+    count = std::min(count, 2000);
+    const float jitter = DirectX::XMConvertToRadians(std::clamp(settings.angleJitterDegrees, 0.0f, 90.0f));
+    const float stepMeters = 0.4f;
+    // 道路座標の平面で、向き theta（0 が長さ方向、+ が Left 側へ曲がる）のランダムウォーク。
+    // 幅は 0〜1 の進み具合で決める。
+    const auto walk = [&](float lateral, float distance, float theta, float length,
+                          const auto& widthAt) {
+        std::vector<SurfaceStripPoint> points;
+        float walked = 0.0f;
+        points.push_back({lateral, distance, 0.0f, widthAt(0.0f)});
+        while (walked < length) {
+            const float step = std::min(stepMeters, length - walked);
+            theta += rng.Range(-jitter * 0.9f, jitter * 0.9f);
+            lateral = std::clamp(lateral + std::sin(theta) * step, -halfInside, halfInside);
+            distance = std::clamp(distance + std::cos(theta) * step, 0.05f, total - 0.05f);
+            walked += step;
+            points.push_back({lateral, distance, 0.0f, widthAt(std::min(1.0f, walked / length))});
+            if (points.size() > 256) break;
+        }
+        return points;
+    };
+    const auto headingAt = [](const std::vector<SurfaceStripPoint>& points, size_t index) {
+        const auto& a = points[index == 0 ? 0 : index - 1];
+        const auto& b = points[std::min(index + 1, points.size() - 1)];
+        return std::atan2(b.lateral - a.lateral, b.distance - a.distance);
+    };
+    const auto emit = [&](const std::vector<SurfaceStripPoint>& points) {
+        return AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU, result, error);
+    };
+    for (int cluster = 0; cluster < count; ++cluster) {
+        // 中心。横位置は分布に従う。
+        const float center = rng.Range(1.0f, total - 1.0f);
+        float lateral = rng.Range(-halfInside, halfInside);
+        if (settings.placement == CrackPlacement::WheelTracks && !lanes.laneCenters.empty()) {
+            const float laneCenter = lanes.laneCenters[static_cast<size_t>(rng.Int(0, static_cast<int>(lanes.laneCenters.size()) - 1))];
+            lateral = std::clamp(laneCenter + (rng.Chance(0.5f) ? 0.75f : -0.75f) + rng.Range(-0.2f, 0.2f), -halfInside, halfInside);
+        } else if (settings.placement == CrackPlacement::Edges) {
+            lateral = std::clamp((rng.Chance(0.5f) ? 1.0f : -1.0f) * (halfInside - 0.3f) + rng.Range(-0.2f, 0.2f), -halfInside, halfInside);
+        }
+        const bool transverse = settings.orientation == CrackOrientation::Transverse ||
+                                (settings.orientation == CrackOrientation::Mixed && rng.Chance(std::clamp(settings.transverseRatio, 0.0f, 1.0f)));
+        float length = rng.Range(settings.lengthMinMeters, settings.lengthMaxMeters);
+        if (transverse && lanes.laneWidthMeters > 0.5f) length = std::min(length, lanes.laneWidthMeters);
+        float theta = transverse ? DirectX::XM_PIDIV2 : 0.0f;
+        if (rng.Chance(0.5f)) theta += DirectX::XM_PI;
+        theta += rng.Range(-jitter, jitter);
+        // 幹。中心から半分戻った所から歩く。両端を 30% まで細くする。
+        const float trunkWidth = settings.trunkWidthMeters;
+        const auto trunkWidthAt = [&](float t) {
+            const float taper = t < 0.15f ? 0.3f + 0.7f * (t / 0.15f) : (t > 0.85f ? 0.3f + 0.7f * ((1.0f - t) / 0.15f) : 1.0f);
+            return trunkWidth * taper;
+        };
+        const float startLateral = std::clamp(lateral - std::sin(theta) * length * 0.5f, -halfInside, halfInside);
+        const float startDistance = std::clamp(center - std::cos(theta) * length * 0.5f, 0.05f, total - 0.05f);
+        const std::vector<SurfaceStripPoint> trunk = walk(startLateral, startDistance, theta, length, trunkWidthAt);
+        if (trunk.size() < 3) continue;
+        if (!emit(trunk)) return false;
+        // 枝。幹の途中から 30〜70° で分かれ、先端で幅 0 へ絞る。半分の確率で 1 段だけ子枝を出す。
+        const int branches = rng.Int(static_cast<int>(settings.branchesMin), static_cast<int>(settings.branchesMax));
+        for (int b = 0; b < branches; ++b) {
+            const size_t at = static_cast<size_t>(rng.Int(1, static_cast<int>(trunk.size()) - 2));
+            const float side = rng.Chance(0.5f) ? 1.0f : -1.0f;
+            const float branchTheta = headingAt(trunk, at) + side * DirectX::XMConvertToRadians(rng.Range(30.0f, 70.0f));
+            const float branchLength = length * std::clamp(settings.branchLengthRatio, 0.05f, 2.0f) * rng.Range(0.6f, 1.2f);
+            const float branchWidth = trunkWidth * std::clamp(settings.branchWidthRatio, 0.05f, 1.0f);
+            const auto branchWidthAt = [&](float t) { return branchWidth * (1.0f - t); };
+            const std::vector<SurfaceStripPoint> branch = walk(trunk[at].lateral, trunk[at].distance, branchTheta, branchLength, branchWidthAt);
+            if (branch.size() < 2) continue;
+            if (!emit(branch)) return false;
+            if (branch.size() >= 4 && rng.Chance(0.5f)) {
+                const size_t mid = branch.size() / 2;
+                const float childTheta = headingAt(branch, mid) - side * DirectX::XMConvertToRadians(rng.Range(30.0f, 60.0f));
+                const float childWidth = branchWidthAt(static_cast<float>(mid) / static_cast<float>(branch.size() - 1));
+                const auto childWidthAt = [&](float t) { return childWidth * (1.0f - t); };
+                const std::vector<SurfaceStripPoint> child = walk(branch[mid].lateral, branch[mid].distance, childTheta, branchLength * 0.5f, childWidthAt);
+                if (child.size() >= 2 && !emit(child)) return false;
+            }
+        }
+        if (result.vertices.size() > 400000) return fail("ひび割れの頂点数が多すぎます。密度を下げてください");
+    }
     return true;
 }
 

@@ -43,7 +43,8 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 13: Path の Surface 入力（Mesh 型）と surfaceSpace、decal ノード。
 // 14: shoulder ノード。旧ビルドが路肩を読み飛ばして Outer 以降のリンクを失うことを防ぐ。
 // 15: merge ノード（入力数が可変）。旧ビルドが Merge を読み飛ばして Mesh Output との接続を失うことを防ぐ。
-constexpr int kProjectFormatVersion = 15;
+// 16: crack ノード。
+constexpr int kProjectFormatVersion = 16;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -1228,6 +1229,18 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
         } else if (const auto* decal = std::get_if<graph::DecalNodeSettings>(&node.settings)) {
             item["decal"] = {{"width", decal->widthMeters}, {"lift", decal->liftMeters},
                              {"uvRepeat", decal->uvRepeatMeters}, {"uvAlongU", decal->uvAlongU}};
+        } else if (const auto* crack = std::get_if<graph::CrackNodeSettings>(&node.settings)) {
+            static const char* const kCrackOrientationNames[] = {"longitudinal", "transverse", "mixed"};
+            static const char* const kCrackPlacementNames[] = {"uniform", "wheelTracks", "edges"};
+            item["crack"] = {{"seed", crack->seed}, {"density", crack->densityPer100m},
+                             {"lengthMin", crack->lengthMinMeters}, {"lengthMax", crack->lengthMaxMeters},
+                             {"orientation", EnumName(kCrackOrientationNames, static_cast<uint32_t>(crack->orientation))},
+                             {"transverseRatio", crack->transverseRatio}, {"angleJitter", crack->angleJitterDegrees},
+                             {"placement", EnumName(kCrackPlacementNames, static_cast<uint32_t>(crack->placement))},
+                             {"trunkWidth", crack->trunkWidthMeters},
+                             {"branchesMin", crack->branchesMin}, {"branchesMax", crack->branchesMax},
+                             {"branchLengthRatio", crack->branchLengthRatio}, {"branchWidthRatio", crack->branchWidthRatio},
+                             {"lift", crack->liftMeters}, {"uvRepeat", crack->uvRepeatMeters}, {"uvAlongU", crack->uvAlongU}};
         } else if (const auto* shoulder = std::get_if<graph::ShoulderNodeSettings>(&node.settings)) {
             item["shoulder"] = {{"width", shoulder->widthMeters}, {"crossSlope", shoulder->crossSlopePercent},
                                 {"stepHeight", shoulder->stepHeightMeters}, {"stepWidth", shoulder->stepWidthMeters},
@@ -1449,6 +1462,31 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.liftMeters = ReadFloat(*decal, "lift", settings.liftMeters);
                     settings.uvRepeatMeters = ReadFloat(*decal, "uvRepeat", settings.uvRepeatMeters);
                     settings.uvAlongU = ReadBool(*decal, "uvAlongU", settings.uvAlongU);
+                }
+                created.settings = settings;
+            } else if (created.kind == graph::NodeKind::Crack) {
+                graph::CrackNodeSettings settings;
+                if (const json* crack = FindMember(item, "crack"); crack && crack->is_object()) {
+                    static const char* const kCrackOrientationNames[] = {"longitudinal", "transverse", "mixed"};
+                    static const char* const kCrackPlacementNames[] = {"uniform", "wheelTracks", "edges"};
+                    settings.seed = static_cast<uint32_t>(std::max(0, ReadInt(*crack, "seed", static_cast<int>(settings.seed))));
+                    settings.densityPer100m = ReadFloat(*crack, "density", settings.densityPer100m);
+                    settings.lengthMinMeters = ReadFloat(*crack, "lengthMin", settings.lengthMinMeters);
+                    settings.lengthMaxMeters = ReadFloat(*crack, "lengthMax", settings.lengthMaxMeters);
+                    settings.orientation = static_cast<graph::CrackOrientation>(
+                        EnumValue(kCrackOrientationNames, *crack, "orientation", static_cast<uint32_t>(settings.orientation)));
+                    settings.transverseRatio = ReadFloat(*crack, "transverseRatio", settings.transverseRatio);
+                    settings.angleJitterDegrees = ReadFloat(*crack, "angleJitter", settings.angleJitterDegrees);
+                    settings.placement = static_cast<graph::CrackPlacement>(
+                        EnumValue(kCrackPlacementNames, *crack, "placement", static_cast<uint32_t>(settings.placement)));
+                    settings.trunkWidthMeters = ReadFloat(*crack, "trunkWidth", settings.trunkWidthMeters);
+                    settings.branchesMin = static_cast<uint32_t>(std::clamp(ReadInt(*crack, "branchesMin", static_cast<int>(settings.branchesMin)), 0, 12));
+                    settings.branchesMax = static_cast<uint32_t>(std::clamp(ReadInt(*crack, "branchesMax", static_cast<int>(settings.branchesMax)), 0, 12));
+                    settings.branchLengthRatio = ReadFloat(*crack, "branchLengthRatio", settings.branchLengthRatio);
+                    settings.branchWidthRatio = ReadFloat(*crack, "branchWidthRatio", settings.branchWidthRatio);
+                    settings.liftMeters = ReadFloat(*crack, "lift", settings.liftMeters);
+                    settings.uvRepeatMeters = ReadFloat(*crack, "uvRepeat", settings.uvRepeatMeters);
+                    settings.uvAlongU = ReadBool(*crack, "uvAlongU", settings.uvAlongU);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::Shoulder) {

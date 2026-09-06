@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 09:30
+更新日時: 2026-09-07 10:00
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -63,6 +63,7 @@ material-mixer 時代の `.mmproj` / `.mmmat` も**読み込みだけ**受け付
 | 13 | Path の入力を Surface（Mesh 型）にし、`surfaceSpace` と `decal` ノードを追加した |
 | 14 | `shoulder` ノード（路肩）を追加した |
 | 15 | `merge` ノード（入力数が可変）を追加した |
+| 16 | `crack` ノード（ひび割れ）を追加した |
 
 **版を上げる基準は「キーが増えたか」ではなく「既存のキーの意味が変わったか」。**
 キーが増えただけなら、古いビルドはそれを無視して正しく読める。意味が変わった場合は、
@@ -301,6 +302,13 @@ Path には Road の Left / Right か別の shoulder の Outer を繋ぐ。旧�
 リンクを読んだ後に「繋がった入力を順に残して空きを 1 本」に整える（`NodeGraph::NormalizeVariablePins`）。outputs は RoadSurface。
 旧ビルドは merge を読み飛ばして Mesh Output との接続を失うため版を上げた。
 
+### 版 16 — crack ノード
+
+`kind: "crack"` は `crack: { seed, density, lengthMin, lengthMax, orientation（longitudinal / transverse / mixed）, transverseRatio,
+angleJitter, placement（uniform / wheelTracks / edges）, trunkWidth, branchesMin, branchesMax, branchLengthRatio, branchWidthRatio,
+lift, uvRepeat, uvAlongU }` を持つ（長さは m、角度は度、density は 100 m あたりの塊の数）。inputs は RoadSurface、Material の順、outputs は RoadSurface。
+生成結果は保存しない（設定と種から毎回作る）。
+
 同じ版でキーだけ追加したもの（無ければ既定値）:
 
 - 材質の `opacity`（既定 1）、`blendMode`（`opaque` / `masked` / `translucent`、既定 opaque）、`maskThreshold`（0.5）、`maps.opacity`（テクスチャ + チャンネル）。`.tgmat` も同じ。
@@ -422,7 +430,7 @@ RGB をそのまま使うマップ（ベースカラー / 法線）はテクス�
   並びで、ピンの型やラベルはノードの定義から再生成する（ファイルには書かない）。
 - `kind` は名前で書く（`surface` / `shape` / `liquid` / `heightmap` /
   `heightmapBlur` / `maskImage` / `maskFluvial` / `maskSlope` / `maskLevels` /
-  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking` / `roadMask` / `decal` / `shoulder` / `merge`）。知らない種類のノードは読み飛ばす。
+  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking` / `roadMask` / `decal` / `shoulder` / `merge` / `crack`）。知らない種類のノードは読み飛ばす。
 - レイヤー設定を持つノード（surface / shape / liquid / heightmap /
   heightmapBlur）は `layer` に
   旧 `layers[]` の要素と同じ形を持つ。テクスチャ / マテリアル / ペイントの参照も

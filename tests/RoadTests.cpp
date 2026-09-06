@@ -444,6 +444,71 @@ void RunRoadTests() {
               "one arrow per lane");
     }
 
+    tests::Section("Cracks");
+    {
+        graph::RoadNodeSettings crackRoadSettings;
+        crackRoadSettings.widthMeters = 9.0f;
+        crackRoadSettings.lanesForward = 2;
+        crackRoadSettings.lanesBackward = 1;
+        graph::PathSettings longPath;
+        longPath.worldSpace = true;
+        const auto c0 = graph::AddPathPoint(longPath, 0, 0, 0);
+        graph::AddPathPoint(longPath, 0, 100, c0);
+        graph::RoadGeometry crackRoad;
+        Check(graph::BuildRoad(longPath, crackRoadSettings, crackRoad, error), "100 m road for cracks");
+        const graph::RoadLanes crackLanes = graph::ComputeRoadLanes(crackRoadSettings, true);
+        graph::CrackNodeSettings cracks;
+        cracks.densityPer100m = 6.0f;
+        cracks.seed = 7;
+        renderer::MeshData crackMesh;
+        Check(graph::BuildCracks(crackRoad, crackLanes, cracks, crackMesh, error) && !crackMesh.vertices.empty() &&
+              crackMesh.indices.size() % 3 == 0, "cracks build on a 100 m road");
+        if (!error.empty()) std::printf("Crack error: %s\n", error.c_str());
+        bool inside = true;
+        for (const auto& v : crackMesh.vertices) {
+            inside &= v.position.x > -4.6f && v.position.x < 4.6f && v.position.z > -0.5f && v.position.z < 100.5f;
+        }
+        Check(inside, "all crack vertices stay on the road");
+        renderer::MeshData again;
+        Check(graph::BuildCracks(crackRoad, crackLanes, cracks, again, error) && again.vertices.size() == crackMesh.vertices.size() &&
+              again.indices == crackMesh.indices, "same seed gives the same mesh");
+        cracks.seed = 8;
+        renderer::MeshData other;
+        Check(graph::BuildCracks(crackRoad, crackLanes, cracks, other, error) &&
+              (other.vertices.size() != crackMesh.vertices.size() ||
+               std::abs(other.vertices[0].position.z - crackMesh.vertices[0].position.z) > 1e-3f),
+              "another seed gives a different mesh");
+        cracks.densityPer100m = 0.0f;
+        Check(graph::BuildCracks(crackRoad, crackLanes, cracks, other, error) && other.vertices.empty(), "zero density places nothing");
+        // 横向きは車線幅（3 m）が上限なので、横位置の広がりが 3 m を大きく超えない塊になる。
+        cracks.densityPer100m = 1.0f;
+        cracks.orientation = graph::CrackOrientation::Transverse;
+        cracks.branchesMax = 0;
+        cracks.branchesMin = 0;
+        cracks.angleJitterDegrees = 0.0f;
+        cracks.seed = 3;
+        Check(graph::BuildCracks(crackRoad, crackLanes, cracks, other, error) && !other.vertices.empty(), "transverse crack builds");
+        if (!other.vertices.empty()) {
+            float minX = 1e9f, maxX = -1e9f;
+            for (const auto& v : other.vertices) { minX = std::min(minX, v.position.x); maxX = std::max(maxX, v.position.x); }
+            Check(maxX - minX < 3.3f && maxX - minX > 1.0f, "transverse trunk is capped at the lane width");
+        }
+        // グラフ: Road → Crack → Mesh Output。
+        graph::NodeGraph cg;
+        const auto cPath = cg.CreateNode(graph::NodeKind::Path);
+        const auto cRoad = cg.CreateNode(graph::NodeKind::Road);
+        const auto cCrack = cg.CreateNode(graph::NodeKind::Crack);
+        const auto cOut = cg.CreateNode(graph::NodeKind::MeshOutput);
+        std::get<graph::PathNodeSettings>(cg.FindMutableNode(cPath)->settings).path = longPath;
+        std::get<graph::RoadNodeSettings>(cg.FindMutableNode(cRoad)->settings) = crackRoadSettings;
+        cg.CreateLink(cg.FindNode(cPath)->outputs[0].id, cg.FindNode(cRoad)->inputs[0].id);
+        Check(cg.CreateLink(cg.FindNode(cRoad)->outputs[0].id, cg.FindNode(cCrack)->inputs[0].id), "RoadSurface connects to Crack");
+        Check(cg.CreateLink(cg.FindNode(cCrack)->outputs[0].id, cg.FindNode(cOut)->inputs[0].id), "Crack connects to Mesh Output");
+        auto crackCompiled = graph::CompileMeshGraph(cg);
+        Check(crackCompiled.error.empty() && crackCompiled.scene.meshes.size() == 2 && crackCompiled.scene.meshes[1].useBlendMode &&
+              crackCompiled.scene.meshes[1].displacementSource == 0, "road and cracks reach the Mesh Output as a decal pass mesh");
+    }
+
     tests::Section("Traffic side and arrows");
     {
         graph::RoadGeometry straightRoad;

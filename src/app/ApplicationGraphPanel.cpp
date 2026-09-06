@@ -84,6 +84,8 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.70f, 0.64f, 0.52f, 1.0f);
         case graph::NodeKind::Merge:
             return ImVec4(0.62f, 0.70f, 0.66f, 1.0f);
+        case graph::NodeKind::Crack:
+            return ImVec4(0.66f, 0.58f, 0.62f, 1.0f);
         case graph::NodeKind::MaskPath:
         case graph::NodeKind::MaskArea:
             return ImVec4(0.58f, 0.74f, 0.82f, 1.0f);
@@ -926,6 +928,7 @@ void Application::DrawGraphEditor() {
         addNodeMenuItem(graph::NodeKind::Decal, "Decal — 面上のPathに沿って模様の帯を貼る");
         addNodeMenuItem(graph::NodeKind::Shoulder, "Shoulder — 道路の境界から外側へ路肩を張る");
         addNodeMenuItem(graph::NodeKind::Merge, "Merge — 複数のRoadSurfaceを1つにまとめる");
+        addNodeMenuItem(graph::NodeKind::Crack, "Crack — ひび割れの塊を乱数で配置する");
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Heightmap, "Heightmap — 画像を地形として読み込む");
@@ -1246,6 +1249,83 @@ void Application::DrawGraphPanel() {
         ui::HintText("PathにRoadのLeft / Right（または別のShoulderのOuter）を接続する。境界の頂点を共有するので道路と水密。"
                      "材質スロットとMask 2〜4はRoadと同じ。Road Maskの「側」は路肩では 右＝境界側、左＝外側。"
                      "出力のRoadSurfaceをMesh Outputへ、Outerは次の路肩や縁石へ。走行側には依存しない。");
+        if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
+    } else if (auto* crack = std::get_if<graph::CrackNodeSettings>(&selected->settings)) {
+        bool changed = false;
+        const graph::CrackNodeSettings defaults;
+        if (ui::BeginPropertyTable("crackRows")) {
+            {
+                int seed = static_cast<int>(crack->seed);
+                if (ui::PropertyInt("乱数種", &seed, 0, 99999, static_cast<int>(defaults.seed), "変えると配置と形が変わる")) {
+                    crack->seed = static_cast<uint32_t>(std::max(0, seed));
+                    changed = true;
+                }
+            }
+            changed |= ui::PropertyFloat("密度", &crack->densityPer100m, 0.0f, 200.0f, defaults.densityPer100m,
+                                         "100 m あたりの塊の数", "%.1f /100m");
+            changed |= ui::PropertyFloat("長さ（最小）", &crack->lengthMinMeters, 0.5f, 30.0f, defaults.lengthMinMeters,
+                                         "幹の長さの下限", "%.1f m");
+            changed |= ui::PropertyFloat("長さ（最大）", &crack->lengthMaxMeters, 0.5f, 30.0f, defaults.lengthMaxMeters,
+                                         "幹の長さの上限。横向きは車線幅が上限", "%.1f m");
+            if (crack->lengthMaxMeters < crack->lengthMinMeters) { crack->lengthMaxMeters = crack->lengthMinMeters; changed = true; }
+            {
+                static const char* const kOrientationLabels[] = {"縦（長さ方向）", "横（車線を横切る）", "混合"};
+                int orientation = static_cast<int>(crack->orientation);
+                if (ui::PropertyCombo("向き", &orientation, kOrientationLabels, IM_ARRAYSIZE(kOrientationLabels), 2,
+                                      "幹の向き。混合は割合で混ぜる")) {
+                    crack->orientation = static_cast<graph::CrackOrientation>(orientation);
+                    changed = true;
+                }
+                if (crack->orientation == graph::CrackOrientation::Mixed) {
+                    changed |= ui::PropertyFloat("横の割合", &crack->transverseRatio, 0.0f, 1.0f, defaults.transverseRatio,
+                                                 "混合のときに横向きになる割合", "%.2f");
+                }
+            }
+            changed |= ui::PropertyFloat("向きのばらつき", &crack->angleJitterDegrees, 0.0f, 90.0f, defaults.angleJitterDegrees,
+                                         "幹の向きと曲がり方のばらつき", "%.0f°");
+            {
+                static const char* const kPlacementLabels[] = {"一様", "轍寄り", "端寄り"};
+                int placement = static_cast<int>(crack->placement);
+                if (ui::PropertyCombo("横位置", &placement, kPlacementLabels, IM_ARRAYSIZE(kPlacementLabels), 0,
+                                      "塊の横位置の分布。轍寄りは Road の車線から決める")) {
+                    crack->placement = static_cast<graph::CrackPlacement>(placement);
+                    changed = true;
+                }
+            }
+            changed |= ui::PropertyFloat("幹の幅", &crack->trunkWidthMeters, 0.01f, 1.0f, defaults.trunkWidthMeters,
+                                         "幹の帯の幅。素材のアルファで割れ目の細さが決まるので、帯は少し広め", "%.3f m", 0, 0.005f);
+            {
+                int lo = static_cast<int>(crack->branchesMin);
+                int hi = static_cast<int>(crack->branchesMax);
+                if (ui::PropertyInt("枝の数（最小）", &lo, 0, 12, static_cast<int>(defaults.branchesMin), "幹から分かれる枝の本数の下限")) {
+                    crack->branchesMin = static_cast<uint32_t>(lo); changed = true;
+                }
+                if (ui::PropertyInt("枝の数（最大）", &hi, 0, 12, static_cast<int>(defaults.branchesMax), "枝の本数の上限。半分の枝がさらに 1 本の子枝を出す")) {
+                    crack->branchesMax = static_cast<uint32_t>(hi); changed = true;
+                }
+                if (crack->branchesMax < crack->branchesMin) { crack->branchesMax = crack->branchesMin; changed = true; }
+            }
+            changed |= ui::PropertyFloat("枝の長さ", &crack->branchLengthRatio, 0.05f, 2.0f, defaults.branchLengthRatio,
+                                         "幹の長さに対する枝の長さの比", "%.2f");
+            changed |= ui::PropertyFloat("枝の幅", &crack->branchWidthRatio, 0.05f, 1.0f, defaults.branchWidthRatio,
+                                         "幹の幅に対する枝の根元の幅の比。先端で 0 へ絞る", "%.2f");
+            changed |= ui::PropertyFloat("浮かせ量", &crack->liftMeters, 0.0f, 0.1f, defaults.liftMeters,
+                                         "路面から法線方向へ持ち上げる量", "%.3f m");
+            changed |= ui::PropertyFloat("UV反復長", &crack->uvRepeatMeters, 0.05f, 100.0f, defaults.uvRepeatMeters,
+                                         "帯の長さ方向で UV が 1 増える実距離。幅方向は 0〜1", "%.2f m");
+            {
+                static const char* const kUvAxisLabels[] = {"長さ方向 = V（縦）", "長さ方向 = U（横）"};
+                int axis = crack->uvAlongU ? 1 : 0;
+                if (ui::PropertyCombo("UVの向き", &axis, kUvAxisLabels, IM_ARRAYSIZE(kUvAxisLabels), 0,
+                                      "テクスチャのどの軸を帯の長さ方向に沿わせるか。1024×128 のような横長素材は U")) {
+                    crack->uvAlongU = (axis == 1);
+                    changed = true;
+                }
+            }
+            ui::EndPropertyTable();
+        }
+        ui::HintText("RoadのRoadSurfaceを接続すると、3〜6 m の枝分かれしたひび割れを乱数で置く。Materialに割れ目の材質（マスク抜き）を繋ぐ。"
+                     "個別に置きたいものは面上のPath＋Decalで描く。出力のRoadSurfaceをMergeかMesh Outputへ。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (selected->kind == graph::NodeKind::Merge) {
         if (ui::BeginPropertyTable("mergeRows")) {

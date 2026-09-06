@@ -56,6 +56,8 @@ enum class NodeKind : uint32_t {
     Shoulder = 29,
     // 複数の Mesh の枝を 1 つの RoadSurface にまとめる。同じノード由来のメッシュは 1 回だけ積む。
     Merge = 30,
+    // ひび割れ。道路面の上に 3〜6 m の枝分かれした割れ目の塊を乱数で配置し、帯メッシュで貼る。
+    Crack = 31,
     Surface = 0,
     Shape = 1,
     Liquid = 2,
@@ -244,6 +246,39 @@ struct ShoulderNodeSettings {
 // Merge。設定は持たない。Mesh 1〜4 に繋いだ枝を順に積み、下流の白線・Decal は最初の枝の面に乗る。
 struct MergeNodeSettings {};
 
+// ひび割れの向き。縦は道路の長さ方向、横は車線を横切る。
+enum class CrackOrientation : uint32_t {
+    Longitudinal = 0,
+    Transverse = 1,
+    Mixed = 2,
+};
+// ひび割れの横位置の分布。
+enum class CrackPlacement : uint32_t {
+    Uniform = 0,      // 道路幅に一様
+    WheelTracks = 1,  // 各車線の轍の位置
+    Edges = 2,        // 道路端の近く
+};
+// ひび割れ。乱数種と密度から塊を置き、幹（ランダムウォークの折れ線）と枝を Decal と同じ帯メッシュで貼る。
+// 生成結果は保存せず、設定から毎回作る。個別に直したいものは面上の Path ＋ Decal で手描きする。
+struct CrackNodeSettings {
+    uint32_t seed = 1u;
+    float densityPer100m = 4.0f;
+    float lengthMinMeters = 3.0f;
+    float lengthMaxMeters = 6.0f;
+    CrackOrientation orientation = CrackOrientation::Mixed;
+    float transverseRatio = 0.3f;      // 混合のときの横向きの割合
+    float angleJitterDegrees = 20.0f;  // 向きのばらつき
+    CrackPlacement placement = CrackPlacement::Uniform;
+    float trunkWidthMeters = 0.08f;    // 幹の帯の幅。枝は branchWidthRatio 倍から先端で 0 へ絞る
+    uint32_t branchesMin = 2u;
+    uint32_t branchesMax = 4u;
+    float branchLengthRatio = 0.45f;   // 幹の長さに対する枝の長さ
+    float branchWidthRatio = 0.6f;
+    float liftMeters = 0.008f;
+    float uvRepeatMeters = 1.0f;
+    bool uvAlongU = false;
+};
+
 // 端の減衰をどちらの端に出すか。左右は Path の進行方向基準（Road の Left / Right と同じ）。走行側には依存しない。
 enum class RoadMaskSide : uint32_t {
     Both = 0,
@@ -332,7 +367,7 @@ struct OutputNodeSettings {};
 using NodeSettings =
     std::variant<LayerNodeSettings, MaskNodeSettings, OutputNodeSettings, PathNodeSettings, RoadNodeSettings,
                  RoadMarkingNodeSettings, RoadMaskNodeSettings, DecalNodeSettings, ShoulderNodeSettings,
-                 MergeNodeSettings>;
+                 MergeNodeSettings, CrackNodeSettings>;
 
 struct Node {
     GraphId id = 0;
@@ -501,7 +536,7 @@ bool IsHeightMaskNodeKind(NodeKind kind);
 // この 3 つの Mask は「そのレイヤーを合成した時点の作業用テクスチャ」から焼くので、
 // 出どころがチェーンの中で走っていないと結果が残らない。
 bool IsLayerMaskSourceKind(NodeKind kind);
-// 道路メッシュの鎖を成す種類か（Road / Lane Marking / Decal / Shoulder / Merge）。Mesh Output は含まない。
+// 道路メッシュの鎖を成す種類か（Road / Lane Marking / Decal / Shoulder / Merge / Crack）。Mesh Output は含まない。
 // 出力ピンを選ぶと、そのノードまでの鎖がメッシュシーンに出る。
 bool IsMeshNodeKind(NodeKind kind);
 // 選ぶとプレビューの対象になる種類か。レイヤーに加えて、

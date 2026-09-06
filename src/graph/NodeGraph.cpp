@@ -144,6 +144,12 @@ constexpr std::array<PinDefinition, 10> kShoulderPins = {{
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Path, "Outer"},
 }};
+// ひび割れのピン。Decal と同じく RoadSurface を受けて RoadSurface を返す。Material は幹の材質。
+constexpr std::array<PinDefinition, 3> kCrackPins = {{
+    {PinKind::Input, ValueType::Mesh, "RoadSurface"},
+    {PinKind::Input, ValueType::Material, "Material"},
+    {PinKind::Output, ValueType::Mesh, "RoadSurface"},
+}};
 // Merge のピン。入力は可変で、繋ぐたびに空きが 1 本増える（NormalizeVariablePins）。
 constexpr std::array<PinDefinition, 2> kMergePins = {{
     {PinKind::Input, ValueType::Mesh, "Mesh 1"},
@@ -191,12 +197,13 @@ constexpr std::array<PinDefinition, 3> kRoadMarkingPins = {{
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 
-constexpr std::array<NodeDefinition, 31> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 32> kNodeDefinitions = {{
     {NodeKind::Road, "road", "Road", kRoadPins},
     {NodeKind::RoadMask, "roadMask", "Road Mask", kRoadMaskPins},
     {NodeKind::Decal, "decal", "Decal", kDecalPins},
     {NodeKind::Shoulder, "shoulder", "Shoulder", kShoulderPins},
     {NodeKind::Merge, "merge", "Merge", kMergePins},
+    {NodeKind::Crack, "crack", "Crack", kCrackPins},
     {NodeKind::RoadMarking, "roadMarking", "Lane Marking", kRoadMarkingPins},
     {NodeKind::MeshOutput, "meshOutput", "Mesh Output", kMeshOutputPins},
     {NodeKind::Heightmap, "heightmap", "Heightmap", kSourceNodePins},
@@ -284,7 +291,7 @@ bool IsLayerMaskSourceKind(NodeKind kind) {
 
 bool IsMeshNodeKind(NodeKind kind) {
     return kind == NodeKind::Road || kind == NodeKind::RoadMarking || kind == NodeKind::Decal ||
-           kind == NodeKind::Shoulder || kind == NodeKind::Merge;
+           kind == NodeKind::Shoulder || kind == NodeKind::Merge || kind == NodeKind::Crack;
 }
 
 bool IsPreviewableNodeKind(NodeKind kind) {
@@ -521,6 +528,8 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = ShoulderNodeSettings{};
     } else if (kind == NodeKind::Merge) {
         node.settings = MergeNodeSettings{};
+    } else if (kind == NodeKind::Crack) {
+        node.settings = CrackNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
         std::get<PathNodeSettings>(node.settings).path.worldSpace = true;

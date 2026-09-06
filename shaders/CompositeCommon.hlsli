@@ -166,9 +166,10 @@ float DownsampleHeight(Texture2D<float> source, uint2 cell, uint gridResolution)
 // 暗部の色が壊れる（このアプリの合成はリニアで回している）。
 //   色相: 灰色の軸（1,1,1）まわりの回転。灰色は灰色のまま残る
 //   彩度: 輝度（Rec.709）へ寄せる / 離す。1 でそのまま、0 で無彩色
+//   明るさ: 最後に掛ける倍率。1 を超えた成分は 1 で止める（暗い素材を持ち上げる用）
 //
-// 回転はわずかに負の成分を作ることがあるので、最後に 0 で止める。
-float3 AdjustBaseColor(float3 color, float hueRadians, float saturation)
+// 回転はわずかに負の成分を作ることがあるので、最後に 0〜1 で止める。
+float3 AdjustBaseColor(float3 color, float hueRadians, float saturation, float brightness)
 {
     if (hueRadians != 0.0f)
     {
@@ -184,7 +185,7 @@ float3 AdjustBaseColor(float3 color, float hueRadians, float saturation)
         const float luma = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
         color = lerp(float3(luma, luma, luma), color, saturation);
     }
-    return max(color, 0.0f);
+    return saturate(color * brightness);
 }
 
 #endif  // TG_COMPOSITE_COMMON_HLSLI

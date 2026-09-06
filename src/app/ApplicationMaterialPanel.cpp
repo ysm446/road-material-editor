@@ -208,6 +208,9 @@ bool Application::DrawMaterialProperties(compositor::MaterialAsset& asset) {
         changed |= ui::PropertyFloat("彩度", &asset.saturation, 0.0f, 2.0f,
                                      kDefaultAsset.saturation,
                                      "ベースカラーの鮮やかさ。0 で白黒、1 でそのまま", "%.2f");
+        changed |= ui::PropertyFloat("明るさ", &asset.brightness, 0.0f, 4.0f,
+                                     kDefaultAsset.brightness,
+                                     "ベースカラーに掛ける倍率。1 でそのまま。1 を超えた成分は 1 で止める", "%.2f");
         changed |= ui::PropertyFloat("ラフネス", &asset.roughnessValue, 0.0f, 1.0f,
                                      kDefaultAsset.roughnessValue, "マップが無いときの値",
                                      "%.2f");

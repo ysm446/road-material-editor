@@ -143,6 +143,10 @@ struct MeshConstants {
     float roadMaskScale[2];    // (1/幅, 1/長さ)。道路座標（m）→ マスク UV
     float roadUvMetersPerUv;   // roadUv 1 あたりの実距離（道路のスロット 1 の反復長）
     uint32_t shadeLayers;      // 1 ならピクセルもレイヤーでブレンドする（道路面）
+    // 下地のハイトで絞る。HLSL 側と同じ並び。
+    uint32_t layerHeightGate[4];
+    float layerHeightGateThreshold[4];
+    float layerHeightGateSoftness[4];
 };
 
 // 道路空間マスク（RGBA8）を GPU へ上げる。ミップは持たない（低解像度でぼかして読む）。
@@ -1005,6 +1009,9 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                         drawConstants.layerHeightIndex[slot] = kNoShadowIndex;
                         drawConstants.layerWorldUv[slot] = lm.layerWorldUv[static_cast<size_t>(slot)] ? 1u : 0u;
                         drawConstants.layerUvRepeat[slot] = slot == 0 ? lm.roadMetersPerUv : lm.layerUvRepeat[static_cast<size_t>(slot)];
+                        drawConstants.layerHeightGate[slot] = slot == 0 ? 0u : lm.layerHeightGate[static_cast<size_t>(slot)];
+                        drawConstants.layerHeightGateThreshold[slot] = lm.layerHeightGateThreshold[static_cast<size_t>(slot)];
+                        drawConstants.layerHeightGateSoftness[slot] = lm.layerHeightGateSoftness[static_cast<size_t>(slot)];
                         const compositor::MaterialEvaluator* evaluator =
                             slot == 0 ? lsm.evaluator.get() : lsm.layerEvaluators[static_cast<size_t>(slot - 1)].get();
                         if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {

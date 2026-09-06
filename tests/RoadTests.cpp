@@ -892,6 +892,16 @@ void RunRoadTests() {
                   layered.scene.meshes[0].displacementMeters == 0.03f && layered.scene.meshes[0].layerUvRepeat[1] == 2.0f &&
                   layered.scene.meshes[0].layerWorldUv[0],
                   "shoulder compiles base, slot 2 with its mask, displacement, and world XZ coordinates");
+            // 下地のハイトで絞る設定がメッシュへ届く。範囲外の値は丸める。
+            shoulderSettings.layerHeightGate[1] = 2;
+            shoulderSettings.layerHeightGateThreshold[1] = 0.35f;
+            shoulderSettings.layerHeightGateSoftness[1] = 0.0f;
+            layered = graph::CompileMeshGraph(sg);
+            Check(layered.scene.meshes.size() == 1 && layered.scene.meshes[0].layerHeightGate[1] == 2u &&
+                  layered.scene.meshes[0].layerHeightGateThreshold[1] == 0.35f &&
+                  layered.scene.meshes[0].layerHeightGateSoftness[1] == 0.001f,
+                  "height gate settings reach the scene mesh with clamped softness");
+            shoulderSettings.layerHeightGate[1] = 0;
             shoulderSettings.displacementMeters = 0.0f;
         }
         auto shoulderCompiled = graph::CompileMeshGraph(sg);

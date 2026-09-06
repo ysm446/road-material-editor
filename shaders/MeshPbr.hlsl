@@ -97,6 +97,10 @@ struct MeshConstants
     float2 roadMaskScale;
     float roadUvMetersPerUv;
     uint shadeLayers;
+    // 下地のハイトで絞る。0 = 使わない、1 = 下地の高い所、2 = 下地の低い所。
+    uint4 layerHeightGate;
+    float4 layerHeightGateThreshold;
+    float4 layerHeightGateSoftness;
 };
 
 
@@ -161,6 +165,32 @@ float4 LayerCoverage(float2 meters)
     return weights;
 }
 
+// 下地のハイトで被覆率を絞る。Road Mask が「だいたいこの辺」、下地の凹凸が「その中のどこ」。
+// 下地（スロット 1）の重みは残りで埋め直す。
+float4 ApplyHeightGate(float4 coverage, float baseHeight)
+{
+    [unroll]
+    for (uint slot = 1; slot < 4; ++slot)
+    {
+        const uint mode = g_mesh.layerHeightGate[slot];
+        if (mode == 0u || coverage[slot] <= 0.0f)
+        {
+            continue;
+        }
+        const float softness = max(g_mesh.layerHeightGateSoftness[slot], 1e-3f);
+        const float signedDelta = (mode == 1u) ? (baseHeight - g_mesh.layerHeightGateThreshold[slot])
+                                               : (g_mesh.layerHeightGateThreshold[slot] - baseHeight);
+        coverage[slot] *= saturate(signedDelta / softness + 0.5f);
+    }
+    coverage.x = saturate(1.0f - (coverage.y + coverage.z + coverage.w));
+    return coverage;
+}
+
+bool AnyHeightGate()
+{
+    return (g_mesh.layerHeightGate.y | g_mesh.layerHeightGate.z | g_mesh.layerHeightGate.w) != 0u;
+}
+
 // ハイトで競合させた重み。被覆率 0 のスロットは出さない。
 float4 LayerHeightBlend(float4 coverage, float4 heights)
 {
@@ -182,10 +212,19 @@ float LayerHeightLevel(uint slot, float2 uv)
 float BlendedHeightLevel(float2 roadUv, float3 worldPosition)
 {
     const float2 meters = RoadMetersFromUv(roadUv);
-    const float4 coverage = LayerCoverage(meters);
+    float4 coverage = LayerCoverage(meters);
     float4 heights = 0.5f;
+    // 下地のハイトは絞りに使うので、被覆率に関わらず先に読む。
+    if (g_mesh.layerHeightIndex[0] != kNoTextureIndex)
+    {
+        heights[0] = LayerHeightLevel(0, LayerUv(0, meters, worldPosition));
+        if (AnyHeightGate())
+        {
+            coverage = ApplyHeightGate(coverage, heights[0]);
+        }
+    }
     [unroll]
-    for (uint slot = 0; slot < 4; ++slot)
+    for (uint slot = 1; slot < 4; ++slot)
     {
         if (coverage[slot] > 0.0f && g_mesh.layerHeightIndex[slot] != kNoTextureIndex)
         {
@@ -526,13 +565,27 @@ PsOutput PsMain(VsOutput input)
     {
         // 道路面。スロット 1〜4 を道路空間マスクの被覆率とハイトで競合させて混ぜる。
         const float2 meters = RoadMetersFromUv(input.roadUv);
-        const float4 coverage = LayerCoverage(meters);
+        float4 coverage = LayerCoverage(meters);
         float2 uvs[4];
         float4 heights = 0.5f;
         [unroll]
         for (uint slot = 0; slot < 4; ++slot)
         {
             uvs[slot] = LayerUv(slot, meters, input.worldPosition);
+        }
+        // 下地のハイトは絞りに使うので、被覆率に関わらず先に読む。
+        if (g_mesh.layerHeightIndex[0] != kNoTextureIndex)
+        {
+            Texture2D<float> baseHeightMap = ResourceDescriptorHeap[g_mesh.layerHeightIndex[0]];
+            heights[0] = baseHeightMap.Sample(g_samplerAnisoWrap, uvs[0]);
+            if (AnyHeightGate())
+            {
+                coverage = ApplyHeightGate(coverage, heights[0]);
+            }
+        }
+        [unroll]
+        for (uint slot = 1; slot < 4; ++slot)
+        {
             if (coverage[slot] > 0.0f && g_mesh.layerHeightIndex[slot] != kNoTextureIndex)
             {
                 Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.layerHeightIndex[slot]];

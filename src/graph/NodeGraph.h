@@ -204,6 +204,11 @@ struct RoadNodeSettings {
     float layerUvRepeatMeters[kRoadMaterialSlots] = {1.0f, 1.0f, 1.0f, 1.0f};
     // ハイトで競合させるときの境界の柔らかさ（ハイト 0〜1 の単位）。
     float layerBlendRange = 0.2f;
+    // 下地のハイトで絞る（スロット 2〜4）。0 = 使わない、1 = 下地の高い所、2 = 下地の低い所。
+    // Road Mask が「だいたいこの辺」を決め、下地（スロット 1）の凹凸が「その中のどこ」を決める。
+    uint32_t layerHeightGate[kRoadMaterialSlots] = {0, 0, 0, 0};
+    float layerHeightGateThreshold[kRoadMaterialSlots] = {0.5f, 0.5f, 0.5f, 0.5f};
+    float layerHeightGateSoftness[kRoadMaterialSlots] = {0.2f, 0.2f, 0.2f, 0.2f};
 };
 
 // 道路空間マスクの形。
@@ -242,6 +247,11 @@ struct ShoulderNodeSettings {
     bool layerWorldUv[kRoadMaterialSlots] = {true, true, true, true};
     float layerUvRepeatMeters[kRoadMaterialSlots] = {1.0f, 1.0f, 1.0f, 1.0f};
     float layerBlendRange = 0.2f;
+    // 下地のハイトで絞る（スロット 2〜4）。0 = 使わない、1 = 下地の高い所、2 = 下地の低い所。
+    // Road Mask が「だいたいこの辺」を決め、下地（スロット 1）の凹凸が「その中のどこ」を決める。
+    uint32_t layerHeightGate[kRoadMaterialSlots] = {0, 0, 0, 0};
+    float layerHeightGateThreshold[kRoadMaterialSlots] = {0.5f, 0.5f, 0.5f, 0.5f};
+    float layerHeightGateSoftness[kRoadMaterialSlots] = {0.2f, 0.2f, 0.2f, 0.2f};
 };
 
 // Merge。設定は持たない。Mesh 1〜4 に繋いだ枝を順に積み、下流の白線・Decal は最初の枝の面に乗る。

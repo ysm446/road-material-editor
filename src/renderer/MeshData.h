@@ -61,6 +61,10 @@ struct SceneMesh {
     std::array<bool, 4> layerWorldUv{false, false, false, false};
     std::array<float, 4> layerUvRepeat{1.0f, 1.0f, 1.0f, 1.0f};
     float layerBlendRange = 0.2f;
+    // 下地のハイトで絞る。0 = 使わない、1 = 高い所、2 = 低い所。しきい値と柔らかさはハイト 0〜1 の単位。
+    std::array<uint32_t, 4> layerHeightGate{0u, 0u, 0u, 0u};
+    std::array<float, 4> layerHeightGateThreshold{0.5f, 0.5f, 0.5f, 0.5f};
+    std::array<float, 4> layerHeightGateSoftness{0.2f, 0.2f, 0.2f, 0.2f};
     // 道路の幅・長さ（m）と、道路 UV の向き。マスクの座標と変位の共有に使う。
     float roadWidthMeters = 0.0f;
     float roadLengthMeters = 0.0f;

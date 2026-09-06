@@ -205,7 +205,8 @@ int ToGraphId(uintptr_t id) {
 // 材質スロットの行（Road と Shoulder で共通）。1 は下地、2〜4 は Mask 2〜4 で被覆する。
 // 座標と反復長はスロットごと。変更があれば真。
 bool Application::DrawMaterialSlotRows(const graph::Node& node, bool* layerWorldUv, float* layerUvRepeatMeters,
-                                       float& layerBlendRange, float defaultBlendRange) {
+                                       float& layerBlendRange, float defaultBlendRange,
+                                       uint32_t* layerHeightGate, float* layerHeightGateThreshold, float* layerHeightGateSoftness) {
     bool changed = false;
     ui::SectionHeader("材質スロット");
     if (!ui::BeginPropertyTable("layerRows")) return false;
@@ -238,6 +239,25 @@ bool Application::DrawMaterialSlotRows(const graph::Node& node, bool* layerWorld
             std::snprintf(repeatId, sizeof(repeatId), "  UV反復長##slot%d", slot);
             changed |= ui::PropertyFloat(repeatId, &layerUvRepeatMeters[slot], 0.1f, 100.0f, 1.0f,
                                          "このスロットの材質で UV が 1 増える実距離", "%.2f m");
+            // 下地のハイトで絞る。Road Mask が「だいたいこの辺」、下地の凹凸が「その中のどこ」。
+            static const char* const kGateLabels[] = {"使わない", "下地の高い所", "下地の低い所"};
+            char gateId[32];
+            std::snprintf(gateId, sizeof(gateId), "  下地のハイト##slot%d", slot);
+            int gate = static_cast<int>(std::min(2u, layerHeightGate[slot]));
+            if (ui::PropertyCombo(gateId, &gate, kGateLabels, IM_ARRAYSIZE(kGateLabels), 0,
+                                  "スロット 1 のハイトで被覆率を絞る。高い所: 砂利の粒が顔を出す。低い所: 土や泥が溜まる")) {
+                layerHeightGate[slot] = static_cast<uint32_t>(gate);
+                changed = true;
+            }
+            if (layerHeightGate[slot] != 0u) {
+                char thresholdId[32], softnessId[32];
+                std::snprintf(thresholdId, sizeof(thresholdId), "  しきい値##gate%d", slot);
+                std::snprintf(softnessId, sizeof(softnessId), "  柔らかさ##gate%d", slot);
+                changed |= ui::PropertyFloat(thresholdId, &layerHeightGateThreshold[slot], 0.0f, 1.0f, 0.5f,
+                                             "下地のハイト（0〜1）のこの値を境にする", "%.2f");
+                changed |= ui::PropertyFloat(softnessId, &layerHeightGateSoftness[slot], 0.001f, 1.0f, 0.2f,
+                                             "境の遷移幅（ハイト 0〜1 の単位）", "%.2f");
+            }
         }
     }
     changed |= ui::PropertyFloat("ブレンド幅", &layerBlendRange, 0.0f, 1.0f, defaultBlendRange,
@@ -1186,7 +1206,8 @@ void Application::DrawGraphPanel() {
         }
         // 材質スロット。1 は下地、2〜4 は Mask 2〜4 で被覆する。座標と反復長はスロットごと。
         changed |= DrawMaterialSlotRows(*selected, road->layerWorldUv, road->layerUvRepeatMeters,
-                                        road->layerBlendRange, defaults.layerBlendRange);
+                                        road->layerBlendRange, defaults.layerBlendRange,
+                                        road->layerHeightGate, road->layerHeightGateThreshold, road->layerHeightGateSoftness);
         ui::HintText("Material にSurfaceなどのResultを接続して材質を適用。Material 2〜4 は Road Mask を Mask 2〜4 へ繋いだ所に出る。"
                      "RoadSurfaceはMesh Outputへ、Left / Rightは進行方向に向かって左右の境界Path。走行側はプレビュー設定の「道路」で切り替える。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
@@ -1245,7 +1266,8 @@ void Application::DrawGraphPanel() {
             ui::EndPropertyTable();
         }
         changed |= DrawMaterialSlotRows(*selected, shoulder->layerWorldUv, shoulder->layerUvRepeatMeters,
-                                        shoulder->layerBlendRange, defaults.layerBlendRange);
+                                        shoulder->layerBlendRange, defaults.layerBlendRange,
+                                        shoulder->layerHeightGate, shoulder->layerHeightGateThreshold, shoulder->layerHeightGateSoftness);
         ui::HintText("PathにRoadのLeft / Right（または別のShoulderのOuter）を接続する。境界の頂点を共有するので道路と水密。"
                      "材質スロットとMask 2〜4はRoadと同じ。Road Maskの「側」は路肩では 右＝境界側、左＝外側。"
                      "出力のRoadSurfaceをMesh Outputへ、Outerは次の路肩や縁石へ。走行側には依存しない。");

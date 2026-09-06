@@ -141,6 +141,9 @@ bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t inn
     for (int slot = 0; slot < kRoadMaterialSlots; ++slot) {
         built.settings.layerWorldUv[slot] = settings.layerWorldUv[slot];
         built.settings.layerUvRepeatMeters[slot] = settings.layerUvRepeatMeters[slot];
+        built.settings.layerHeightGate[slot] = settings.layerHeightGate[slot];
+        built.settings.layerHeightGateThreshold[slot] = settings.layerHeightGateThreshold[slot];
+        built.settings.layerHeightGateSoftness[slot] = settings.layerHeightGateSoftness[slot];
     }
     built.rowDistances = source.rowDistances;
     built.left.worldSpace = built.right.worldSpace = true;
@@ -796,6 +799,9 @@ void AttachRoadLayers(const NodeGraph& graph, const Node& node, const RoadNodeSe
     for (int slot = 0; slot < kRoadMaterialSlots; ++slot) {
         mesh.layerWorldUv[slot] = settings.layerWorldUv[slot];
         mesh.layerUvRepeat[slot] = slot == 0 ? settings.uvRepeatMeters : std::max(0.01f, settings.layerUvRepeatMeters[slot]);
+        mesh.layerHeightGate[slot] = std::min(2u, settings.layerHeightGate[slot]);
+        mesh.layerHeightGateThreshold[slot] = std::clamp(settings.layerHeightGateThreshold[slot], 0.0f, 1.0f);
+        mesh.layerHeightGateSoftness[slot] = std::clamp(settings.layerHeightGateSoftness[slot], 0.001f, 1.0f);
     }
     if (!materialPins.empty()) {
         compositor::MaterialStack stack;

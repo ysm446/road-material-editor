@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-07 11:00
+更新日時: 2026-09-07 11:30
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -20,6 +20,12 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
+
+### 2026-09-07 11:30 — 材質スロットを下地のハイトで絞る
+
+- `RoadNodeSettings` / `ShoulderNodeSettings` に `layerHeightGate / Threshold / Softness`（×4）。`SceneMesh` と `MeshConstants`（末尾に uint4 + float4 ×2）へ通し、`MeshPbr.hlsl` の `ApplyHeightGate` がピクセルと `BlendedHeightLevel` の両方で被覆率に掛ける。
+- `DrawMaterialSlotRows` にスロット 2〜4 の「下地のハイト」コンボとしきい値・柔らかさ。保存はキー追加のみ。テスト 1 件。
+- 確認画像 `data/road-profile-check/ui_gate_compare.png`（上: 使わない、中: 下地の高い所、下: 下地の低い所。`gate0 / gateHigh / gateLow.tgproj`）。端の砂利が下地の凹凸に沿って減る。
 
 ### 2026-09-07 11:00 — Road Mask のワールドノイズ
 

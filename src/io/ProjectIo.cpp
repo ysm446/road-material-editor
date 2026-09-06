@@ -1227,6 +1227,12 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                                           road->layerWorldUv[2], road->layerWorldUv[3]})},
                             {"layerUvRepeat", json::array({road->layerUvRepeatMeters[0], road->layerUvRepeatMeters[1],
                                                            road->layerUvRepeatMeters[2], road->layerUvRepeatMeters[3]})},
+                            {"layerHeightGate", json::array({road->layerHeightGate[0], road->layerHeightGate[1],
+                                                            road->layerHeightGate[2], road->layerHeightGate[3]})},
+                            {"layerHeightGateThreshold", json::array({road->layerHeightGateThreshold[0], road->layerHeightGateThreshold[1],
+                                                                     road->layerHeightGateThreshold[2], road->layerHeightGateThreshold[3]})},
+                            {"layerHeightGateSoftness", json::array({road->layerHeightGateSoftness[0], road->layerHeightGateSoftness[1],
+                                                                    road->layerHeightGateSoftness[2], road->layerHeightGateSoftness[3]})},
                             {"layerBlendRange", road->layerBlendRange}};
         } else if (const auto* decal = std::get_if<graph::DecalNodeSettings>(&node.settings)) {
             item["decal"] = {{"width", decal->widthMeters}, {"lift", decal->liftMeters},
@@ -1252,6 +1258,12 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                                               shoulder->layerWorldUv[2], shoulder->layerWorldUv[3]})},
                                 {"layerUvRepeat", json::array({shoulder->layerUvRepeatMeters[0], shoulder->layerUvRepeatMeters[1],
                                                                shoulder->layerUvRepeatMeters[2], shoulder->layerUvRepeatMeters[3]})},
+                            {"layerHeightGate", json::array({shoulder->layerHeightGate[0], shoulder->layerHeightGate[1],
+                                                            shoulder->layerHeightGate[2], shoulder->layerHeightGate[3]})},
+                            {"layerHeightGateThreshold", json::array({shoulder->layerHeightGateThreshold[0], shoulder->layerHeightGateThreshold[1],
+                                                                     shoulder->layerHeightGateThreshold[2], shoulder->layerHeightGateThreshold[3]})},
+                            {"layerHeightGateSoftness", json::array({shoulder->layerHeightGateSoftness[0], shoulder->layerHeightGateSoftness[1],
+                                                                    shoulder->layerHeightGateSoftness[2], shoulder->layerHeightGateSoftness[3]})},
                                 {"layerBlendRange", shoulder->layerBlendRange}};
         } else if (const auto* roadMaskSettings = std::get_if<graph::RoadMaskNodeSettings>(&node.settings)) {
             static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant", "worldNoise"};
@@ -1454,6 +1466,18 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                         for (size_t i = 0; i < repeat->size() && i < graph::kRoadMaterialSlots; ++i)
                             if ((*repeat)[i].is_number()) settings.layerUvRepeatMeters[i] = std::clamp((*repeat)[i].get<float>(), 0.1f, 100.0f);
                     }
+                    if (const json* gate = FindMember(*road, "layerHeightGate"); gate && gate->is_array()) {
+                        for (size_t i = 0; i < gate->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*gate)[i].is_number_integer()) settings.layerHeightGate[i] = static_cast<uint32_t>(std::clamp((*gate)[i].get<int>(), 0, 2));
+                    }
+                    if (const json* gate = FindMember(*road, "layerHeightGateThreshold"); gate && gate->is_array()) {
+                        for (size_t i = 0; i < gate->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*gate)[i].is_number()) settings.layerHeightGateThreshold[i] = std::clamp((*gate)[i].get<float>(), 0.0f, 1.0f);
+                    }
+                    if (const json* gate = FindMember(*road, "layerHeightGateSoftness"); gate && gate->is_array()) {
+                        for (size_t i = 0; i < gate->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*gate)[i].is_number()) settings.layerHeightGateSoftness[i] = std::clamp((*gate)[i].get<float>(), 0.001f, 1.0f);
+                    }
                     settings.layerBlendRange = std::clamp(ReadFloat(*road, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
                 }
                 created.settings = settings;
@@ -1508,6 +1532,18 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     if (const json* repeat = FindMember(*shoulder, "layerUvRepeat"); repeat && repeat->is_array()) {
                         for (size_t i = 0; i < repeat->size() && i < graph::kRoadMaterialSlots; ++i)
                             if ((*repeat)[i].is_number()) settings.layerUvRepeatMeters[i] = std::clamp((*repeat)[i].get<float>(), 0.1f, 100.0f);
+                    }
+                    if (const json* gate = FindMember(*shoulder, "layerHeightGate"); gate && gate->is_array()) {
+                        for (size_t i = 0; i < gate->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*gate)[i].is_number_integer()) settings.layerHeightGate[i] = static_cast<uint32_t>(std::clamp((*gate)[i].get<int>(), 0, 2));
+                    }
+                    if (const json* gate = FindMember(*shoulder, "layerHeightGateThreshold"); gate && gate->is_array()) {
+                        for (size_t i = 0; i < gate->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*gate)[i].is_number()) settings.layerHeightGateThreshold[i] = std::clamp((*gate)[i].get<float>(), 0.0f, 1.0f);
+                    }
+                    if (const json* gate = FindMember(*shoulder, "layerHeightGateSoftness"); gate && gate->is_array()) {
+                        for (size_t i = 0; i < gate->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*gate)[i].is_number()) settings.layerHeightGateSoftness[i] = std::clamp((*gate)[i].get<float>(), 0.001f, 1.0f);
                     }
                     settings.layerBlendRange = std::clamp(ReadFloat(*shoulder, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
                 }

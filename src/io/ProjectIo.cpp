@@ -37,7 +37,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // プロジェクトの版。4 で `layers` 節を廃止し、グラフ (`graph`) を唯一の合成にした
 // （旧ファイルの layers はグラフへ移行して読む）。
 // 5: 任意のメッシュシーン。旧ビルドが scene を無視して地形を表示することを防ぐ。
-constexpr int kProjectFormatVersion = 8;
+constexpr int kProjectFormatVersion = 9;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 

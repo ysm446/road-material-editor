@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-06 14:25
+更新日時: 2026-09-06 16:10
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -402,3 +402,7 @@ RGB をそのまま使うマップ（ベースカラー / 法線）はテクス�
 `kind: "road"` は `road: { "width": 6.0, "uvRepeat": 1.0 }` を持つ（m）。入力はPath、出力はRoadSurface / Left / Rightの順。`kind: "meshOutput"` はMesh入力1つを持つ。
 
 生成済み道路メッシュは保存せず、グラフから再構築する。既存の手入力 `scene` は独立して保持する。版7以前も読み込めるが、版8は旧アプリでの誤読を防ぐためバージョン判定で拒否される。
+
+## 版9: RoadのMaterial入力
+
+RoadのinputsはPath、Materialの順。outputsの順序はRoadSurface、Left、Rightを維持する。材質接続は既存のlinksで保存し、生成メッシュと合成テクスチャは再構築する。版8以前のRoadには、他のIDと衝突しない新しいMaterialピンを読込時に追加し、既存の接続を保つ。

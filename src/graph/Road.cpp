@@ -223,6 +223,17 @@ CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph) {
         mesh.geometry = std::move(geometry.surface);
         mesh.material.roughness = 0.85f;
         mesh.roadMetersPerUv = std::get<RoadNodeSettings>(road->settings).uvRepeatMeters;
+        for (const auto& pin : road->inputs) {
+            if (pin.valueType != ValueType::Material) continue;
+            if (const Node* source = graph.FindUpstreamNodeForPin(pin.id)) {
+                auto material = graph.CompileLayersTo(source->id);
+                mesh.materialStack.emplace();
+                mesh.materialStack->Layers() = std::move(material.layers);
+                mesh.materialStack->MaskOps() = std::move(material.maskOps);
+                // 1 UVタイルの実寸でハイト由来の法線を評価する。
+                mesh.materialStack->SetTerrainScale(mesh.roadMetersPerUv, 1.0f);
+            }
+        }
         compiled.scene.meshes.push_back(std::move(mesh));
     }
     return compiled;

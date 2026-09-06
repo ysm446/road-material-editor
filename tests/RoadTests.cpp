@@ -80,6 +80,19 @@ void RunRoadTests() {
     Check(graph.CreateLink(graph.FindNode(roadId)->outputs[0].id, graph.FindNode(outId)->inputs[0].id), "RoadSurface connects to Mesh Output");
     auto compiled = graph::CompileMeshGraph(graph);
     Check(compiled.active && compiled.error.empty() && compiled.scene.meshes.size() == 1, "mesh graph compiles road output");
+    Check(!compiled.scene.meshes[0].materialStack, "unconnected road keeps constant material");
+    const auto surfaceId = graph.CreateNode(graph::NodeKind::Surface);
+    auto& surface = std::get<graph::LayerNodeSettings>(graph.FindMutableNode(surfaceId)->settings);
+    surface.layer.roughness = 0.23f;
+    Check(graph.CreateLink(graph.FindNode(surfaceId)->outputs[0].id, graph.FindNode(roadId)->inputs[1].id),
+          "material output connects to road material");
+    Check(!graph.CanCreateLink(graph.FindNode(pathId)->outputs[0].id, graph.FindNode(roadId)->inputs[1].id),
+          "path cannot connect to material input");
+    compiled = graph::CompileMeshGraph(graph);
+    Check(compiled.scene.meshes[0].materialStack &&
+          compiled.scene.meshes[0].materialStack->Layers().back().roughness == 0.23f &&
+          compiled.scene.meshes[0].materialStack->SizeMeters() == 1.0f,
+          "road compiles connected material at UV tile scale");
     DocumentSnapshot before;
     before.graphNodes = graph.Nodes(); before.graphLinks = graph.Links();
     UndoHistory history;
@@ -102,4 +115,15 @@ void RunRoadTests() {
     Check(graph::EvaluateRoad(graph, child, road, error) && road.surface.vertices[0].position.x == -7,
           "left boundary is a usable downstream path");
     Check(!graph.CanCreateLink(graph.FindNode(child)->outputs[1].id, graph.FindNode(roadId)->inputs[0].id), "road dependency cycle is rejected");
+    const auto childOut = graph.CreateNode(graph::NodeKind::MeshOutput);
+    graph.CreateLink(graph.FindNode(child)->outputs[0].id, graph.FindNode(childOut)->inputs[0].id);
+    compiled = graph::CompileMeshGraph(graph);
+    Check(compiled.scene.meshes.size() == 2 && compiled.scene.meshes[0].materialStack &&
+          !compiled.scene.meshes[1].materialStack, "separate roads do not inherit each others material");
+    graph::GraphId materialLink = 0;
+    for (const auto& link : graph.Links())
+        if (link.endPin == graph.FindNode(roadId)->inputs[1].id) materialLink = link.id;
+    graph.DeleteLink(materialLink);
+    compiled = graph::CompileMeshGraph(graph);
+    Check(!compiled.scene.meshes[0].materialStack, "disconnect restores constant material");
 }

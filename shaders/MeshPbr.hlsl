@@ -96,27 +96,22 @@ static const float kLocalHeightGain = 16.0f;
 ConstantBuffer<MeshConstants> g_mesh : register(b1);
 
 // --- 合成結果のサンプリング ------------------------------------------------
-// 平面 + UV スケール 1（タイルしない 1 枚絵のプレビュー）ではクランプで読む。
-// wrap だと UV 端のバイリニア補間が反対側の端と混ざり、地形の縁が
-// 反対側の高さへ引っ張られる。球はシーム（経度の 0/1）の連続性に wrap が
-// 必要で、UV スケール > 1 は明示的なタイリングなので wrap のまま。
-// サンプラは三項演算子で選べない（unique global resource の制約）ので分岐で書く。
-
-// 合成結果は**タイルしない 1 枚絵**（平面 1 枚に等倍で貼る）なので、常にクランプで読む。
-// wrap だと UV 端のバイリニア補間が反対側の端と混ざり、地形の縁が
-// 反対側の高さへ引っ張られる。
+// 道路は実距離UVを反復し、旧平面プレビューは端をクランプする。
 float4 SampleMaterialColor(Texture2D<float4> map, float2 uv)
 {
+    if (g_mesh.roadMetersPerUv > 0.0f) return map.Sample(g_samplerAnisoWrap, uv);
     return map.Sample(g_samplerAnisoClamp, uv);
 }
 
 float2 SampleMaterialNormal(Texture2D<float2> map, float2 uv)
 {
+    if (g_mesh.roadMetersPerUv > 0.0f) return map.Sample(g_samplerAnisoWrap, uv);
     return map.Sample(g_samplerAnisoClamp, uv);
 }
 
 float SampleMaterialScalar(Texture2D<float> map, float2 uv)
 {
+    if (g_mesh.roadMetersPerUv > 0.0f) return map.Sample(g_samplerAnisoWrap, uv);
     return map.Sample(g_samplerAnisoClamp, uv);
 }
 

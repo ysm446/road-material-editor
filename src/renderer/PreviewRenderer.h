@@ -299,6 +299,12 @@ private:
     bool m_authoredSceneEnabled = false;
     MeshScene m_meshScene;
     std::vector<Mesh> m_sceneMeshes;
+    struct SceneMaterial {
+        compositor::MaterialStack stack;
+        std::unique_ptr<compositor::MaterialEvaluator> evaluator;
+    };
+    std::vector<SceneMaterial> m_sceneMaterials;
+    uint64_t m_sceneMaterialSourceRevision = 0;
     bool m_meshSceneEnabled = false;
     float m_meshSceneRadius = 0.1f;
 

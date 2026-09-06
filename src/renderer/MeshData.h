@@ -1,5 +1,7 @@
 #pragma once
 
+#include "compositor/MaterialStack.h"
+#include <optional>
 #include <DirectXMath.h>
 #include <cstdint>
 #include <vector>
@@ -30,6 +32,8 @@ struct SceneMesh {
     MaterialSettings material;
     // 道路の表示用メタデータ。0は道路以外。生成時に再構築する。
     float roadMetersPerUv = 0.0f;
+    // 接続から導出した材質。GPU参照や保存対象ではない。
+    std::optional<compositor::MaterialStack> materialStack;
 };
 
 struct MeshScene {

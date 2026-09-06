@@ -1059,7 +1059,7 @@ void Application::DrawGraphPanel() {
                 defaults.uvRepeatMeters, "UVが1増える実距離。道路の長さと幅の両方に適用する", "%.2f m");
             ui::EndPropertyTable();
         }
-        ui::HintText("RoadSurfaceをMesh Outputへ接続する。Left / Rightは進行方向から見た境界Path。");
+        ui::HintText("MaterialにSurfaceなどのResultを接続して材質を適用。RoadSurfaceはMesh Outputへ、Left / Rightは左右境界Path。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (selected->kind == graph::NodeKind::MeshOutput) {
         ui::HintText("RoadSurfaceを接続すると道路を表示する。複数のMesh Outputを同時に表示できる。");

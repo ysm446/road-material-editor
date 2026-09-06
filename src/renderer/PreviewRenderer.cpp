@@ -302,6 +302,38 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
             return false;
         }
     }
+    // 必要な評価器を先に確保し、失敗時は現在のシーンを保つ。
+    std::vector<std::unique_ptr<compositor::MaterialEvaluator>> created(scene.meshes.size());
+    for (size_t i = 0; i < scene.meshes.size(); ++i) {
+        if (!scene.meshes[i].materialStack ||
+            (i < m_sceneMaterials.size() && m_sceneMaterials[i].evaluator)) continue;
+        created[i] = std::make_unique<compositor::MaterialEvaluator>();
+        if (!created[i]->Create(device, m_materialResolution)) {
+            for (auto& evaluator : created) if (evaluator) evaluator->Destroy(device);
+            for (auto& mesh : uploaded) mesh.Release(device);
+            return false;
+        }
+    }
+    // 作成・破棄はフレーム開始前。GPUリソースは遅延解放する。
+    while (m_sceneMaterials.size() > scene.meshes.size()) {
+        if (m_sceneMaterials.back().evaluator) m_sceneMaterials.back().evaluator->Destroy(device);
+        m_sceneMaterials.pop_back();
+    }
+    m_sceneMaterials.resize(scene.meshes.size());
+    for (size_t i = 0; i < scene.meshes.size(); ++i) {
+        auto& target = m_sceneMaterials[i];
+        const auto& source = scene.meshes[i].materialStack;
+        if (!source) {
+            if (target.evaluator) target.evaluator->Destroy(device);
+            target.evaluator.reset();
+            continue;
+        }
+        if (created[i]) target.evaluator = std::move(created[i]);
+        target.stack.Layers() = source->Layers();
+        target.stack.MaskOps() = source->MaskOps();
+        target.stack.SetTerrainScale(source->SizeMeters(), source->HeightMeters());
+        target.stack.MarkDirty();
+    }
     for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes = std::move(uploaded);
     m_meshScene = scene;
@@ -315,6 +347,10 @@ void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
     m_authoredSceneEnabled = false;
     for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes.clear();
+    for (auto& material : m_sceneMaterials) {
+        if (material.evaluator) material.evaluator->Destroy(device);
+    }
+    m_sceneMaterials.clear();
     m_meshScene.meshes.clear();
     m_meshSceneEnabled = false;
 }
@@ -349,6 +385,10 @@ void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
     if (m_requestedMaterialResolution != m_materialResolution) {
         if (m_evaluator.Resize(device, m_requestedMaterialResolution)) {
             m_materialResolution = m_requestedMaterialResolution;
+            for (auto& material : m_sceneMaterials) {
+                if (material.evaluator && !material.evaluator->Resize(device, m_materialResolution))
+                    TG_LOG_WARN("道路マテリアルの解像度を変更できませんでした");
+            }
         } else {
             m_requestedMaterialResolution = m_materialResolution;
         }
@@ -667,6 +707,17 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         m_evaluator.Update(device, pipelineCache, commandList, stack, textures, materials, paintMasks);
     }
 
+    if (m_meshSceneEnabled) {
+        for (auto& material : m_sceneMaterials) {
+            // 素材編集・画像の再読込はグラフ構造を変えず、共通スタックの版を進める。
+            if (m_sceneMaterialSourceRevision != stack.Revision()) material.stack.MarkDirty();
+            if (material.evaluator)
+                material.evaluator->Update(device, pipelineCache, commandList, material.stack,
+                                           textures, materials, paintMasks);
+        }
+        m_sceneMaterialSourceRevision = stack.Revision();
+    }
+
     rhi::GraphicsPipelineDesc meshPipelineDesc;
     meshPipelineDesc.shaderPath = L"MeshPbr.hlsl";
     meshPipelineDesc.vertexEntry = L"VsMain";
@@ -771,6 +822,15 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 drawConstants.baseColor = material.baseColor;
                 drawConstants.roughness = material.roughness;
                 drawConstants.metallic = material.metallic;
+                const auto& evaluator = m_sceneMaterials[i].evaluator;
+                if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {
+                    const auto& maps = evaluator->Textures();
+                    drawConstants.useMaterialTextures = 1u;
+                    drawConstants.materialBaseColorIndex = maps.baseColor.SrvIndex();
+                    drawConstants.materialNormalIndex = maps.normal.SrvIndex();
+                    drawConstants.materialSurfaceIndex = maps.surface.SrvIndex();
+                    drawConstants.materialHeightIndex = maps.height.SrvIndex();
+                }
             }
             const auto allocation = device.Upload().Allocate(sizeof(MeshConstants), 256);
             if (!allocation.IsValid()) continue;

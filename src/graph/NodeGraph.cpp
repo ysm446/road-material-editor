@@ -138,8 +138,9 @@ constexpr std::array<PinDefinition, 1> kSourceNodePins = {{
     {PinKind::Output, ValueType::Material, "Result"},
 }};
 
-constexpr std::array<PinDefinition, 4> kRoadPins = {{
+constexpr std::array<PinDefinition, 5> kRoadPins = {{
     {PinKind::Input, ValueType::Path, "Path"},
+    {PinKind::Input, ValueType::Material, "Material"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Path, "Left"},
     {PinKind::Output, ValueType::Path, "Right"},

@@ -1,3 +1,4 @@
+#include "renderer/AxisProjection.h"
 // ビューポートでのパス（Path ノード）の編集。
 //
 // 操作は「クリックは選ぶ、Ctrl を押している間だけ伸ばす、ドラッグして重ねれば繋がる」
@@ -336,25 +337,17 @@ PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
         return gizmo;
     }
     gizmo.center = projectedCenter.screen;
-    // 1m だけ進めて画面上の長さを測り、見た目の長さが一定になるよう伸ばす。
-    const XMFLOAT3 axes[3] = {{1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}};
-    const float probeMeters = std::max(1.0f, planeSize * 0.01f);
+    const auto projectedAxes = renderer::ProjectMoveAxes(
+        viewProjection, center, size.x, size.y, ui::Scaled(kGizmoLength), gizmo.axisCount);
     for (int axis = 0; axis < gizmo.axisCount; ++axis) {
-        const XMFLOAT3 probe{center.x + axes[axis].x * probeMeters, center.y + axes[axis].y * probeMeters,
-                             center.z + axes[axis].z * probeMeters};
-        const ProjectedPoint projected = ProjectToViewport(viewProjection, probe, viewportMin, size);
-        if (!projected.visible) continue;
-        ImVec2 delta(projected.screen.x - gizmo.center.x, projected.screen.y - gizmo.center.y);
-        const float pixels = std::sqrt(delta.x * delta.x + delta.y * delta.y);
-        if (pixels < 1e-3f) continue;
+        const auto delta = projectedAxes.delta[axis];
+        const float length = std::hypot(delta.x, delta.y);
+        // ほぼ視線を向いた軸は、矢印や中央ハンドルに潰れるので選択対象からも外す。
+        if (length < ui::Scaled(kGizmoCenterRadius * 2.0f)) continue;
         gizmo.axisValid[axis] = true;
-        delta.x /= pixels;
-        delta.y /= pixels;
-        gizmo.direction[axis] = delta;
-        const float length = ui::Scaled(kGizmoLength);
-        gizmo.tip[axis] = ImVec2(gizmo.center.x + delta.x * length, gizmo.center.y + delta.y * length);
-        // probeMeters で pixels 動くので、1px は probeMeters / pixels（m）= その / planeSize（UV）。
-        gizmo.uvPerPixel[axis] = (probeMeters / pixels) / planeSize;
+        gizmo.direction[axis] = ImVec2(delta.x / length, delta.y / length);
+        gizmo.tip[axis] = ImVec2(gizmo.center.x + delta.x, gizmo.center.y + delta.y);
+        gizmo.uvPerPixel[axis] = 1.0f / (projectedAxes.pixelsPerMeter[axis] * planeSize);
     }
     gizmo.valid = true;
     return gizmo;

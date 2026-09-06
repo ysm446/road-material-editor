@@ -118,7 +118,12 @@ bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t inn
     built.settings.widthMeters = settings.widthMeters;
     built.settings.uvRepeatMeters = settings.uvRepeatMeters;
     built.settings.uvAlongU = settings.uvAlongU;
-    built.settings.displacementMeters = 0.0f;
+    built.settings.displacementMeters = std::max(0.0f, settings.displacementMeters);
+    built.settings.layerBlendRange = settings.layerBlendRange;
+    for (int slot = 0; slot < kRoadMaterialSlots; ++slot) {
+        built.settings.layerWorldUv[slot] = settings.layerWorldUv[slot];
+        built.settings.layerUvRepeatMeters[slot] = settings.layerUvRepeatMeters[slot];
+    }
     built.rowDistances = source.rowDistances;
     built.left.worldSpace = built.right.worldSpace = true;
     const float drop = settings.crossSlopePercent * 0.01f;
@@ -767,7 +772,10 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             mesh.material.baseColor = {0.42f, 0.38f, 0.32f};
             mesh.material.roughness = 0.9f;
             mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
-            AttachMaterial(graph, *node, mesh);
+            mesh.displacementMeters = chain.road.settings.displacementMeters;
+            // 材質スロットとマスクは Road と同じ。横位置は境界が Right、外側が Left。
+            AttachRoadLayers(graph, *node, chain.road.settings,
+                             chain.road.rowDistances.empty() ? 0.0f : chain.road.rowDistances.back(), mesh);
             chain.roadIndex = AppendChainMesh(chain, std::move(mesh), node->id);
             success = true;
         }

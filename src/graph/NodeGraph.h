@@ -226,6 +226,12 @@ struct ShoulderNodeSettings {
     float crossSlopePercent = 4.0f;
     float uvRepeatMeters = 1.0f;
     bool uvAlongU = false;
+    // 材質のレイヤー構造は Road と同じ（スロット × 4、Mask 2〜4、変位）。
+    // 路肩の横位置は境界（列 0）が Right、外側が Left。Road Mask の「側」はその向きで読む。
+    float displacementMeters = 0.0f;
+    bool layerWorldUv[kRoadMaterialSlots] = {true, true, true, true};
+    float layerUvRepeatMeters[kRoadMaterialSlots] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float layerBlendRange = 0.2f;
 };
 
 // Merge。設定は持たない。Mesh 1〜4 に繋いだ枝を順に積み、下流の白線・Decal は最初の枝の面に乗る。

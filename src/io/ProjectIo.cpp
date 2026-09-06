@@ -1227,7 +1227,13 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                              {"uvRepeat", decal->uvRepeatMeters}, {"uvAlongU", decal->uvAlongU}};
         } else if (const auto* shoulder = std::get_if<graph::ShoulderNodeSettings>(&node.settings)) {
             item["shoulder"] = {{"width", shoulder->widthMeters}, {"crossSlope", shoulder->crossSlopePercent},
-                                {"uvRepeat", shoulder->uvRepeatMeters}, {"uvAlongU", shoulder->uvAlongU}};
+                                {"uvRepeat", shoulder->uvRepeatMeters}, {"uvAlongU", shoulder->uvAlongU},
+                                {"displacement", shoulder->displacementMeters},
+                                {"layerWorldUv", json::array({shoulder->layerWorldUv[0], shoulder->layerWorldUv[1],
+                                                              shoulder->layerWorldUv[2], shoulder->layerWorldUv[3]})},
+                                {"layerUvRepeat", json::array({shoulder->layerUvRepeatMeters[0], shoulder->layerUvRepeatMeters[1],
+                                                               shoulder->layerUvRepeatMeters[2], shoulder->layerUvRepeatMeters[3]})},
+                                {"layerBlendRange", shoulder->layerBlendRange}};
         } else if (const auto* roadMaskSettings = std::get_if<graph::RoadMaskNodeSettings>(&node.settings)) {
             static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant"};
             static const char* const kRoadMaskSideNames[] = {"both", "left", "right"};
@@ -1440,6 +1446,16 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.crossSlopePercent = ReadFloat(*shoulder, "crossSlope", settings.crossSlopePercent);
                     settings.uvRepeatMeters = ReadFloat(*shoulder, "uvRepeat", settings.uvRepeatMeters);
                     settings.uvAlongU = ReadBool(*shoulder, "uvAlongU", settings.uvAlongU);
+                    settings.displacementMeters = std::clamp(ReadFloat(*shoulder, "displacement", settings.displacementMeters), 0.0f, 1.0f);
+                    if (const json* worldUv = FindMember(*shoulder, "layerWorldUv"); worldUv && worldUv->is_array()) {
+                        for (size_t i = 0; i < worldUv->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*worldUv)[i].is_boolean()) settings.layerWorldUv[i] = (*worldUv)[i].get<bool>();
+                    }
+                    if (const json* repeat = FindMember(*shoulder, "layerUvRepeat"); repeat && repeat->is_array()) {
+                        for (size_t i = 0; i < repeat->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*repeat)[i].is_number()) settings.layerUvRepeatMeters[i] = std::clamp((*repeat)[i].get<float>(), 0.1f, 100.0f);
+                    }
+                    settings.layerBlendRange = std::clamp(ReadFloat(*shoulder, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::RoadMask) {

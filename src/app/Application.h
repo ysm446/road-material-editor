@@ -147,6 +147,9 @@ private:
     // 「出力ノードのチェーン」（0）に落とす。
     // outputPin は**どの出力を見るか**。0 なら最初の出力（レイヤーなら Result）。
     void SetPreviewGraphNode(graph::GraphId nodeId, graph::GraphId outputPin = 0);
+    // 材質スロット（座標・反復長・ブレンド幅）の行。Road と Shoulder で共通。変更があれば真。
+    bool DrawMaterialSlotRows(const graph::Node& node, bool* layerWorldUv, float* layerUvRepeatMeters,
+                              float& layerBlendRange, float defaultBlendRange);
     void DrawMaterialLibraryPanel();
     // 一覧の右クリックメニュー（追加 / 複製 / 削除 / 読み込み / 書き出し）。
     // target が kNoMaterialAsset なら、対象の要る項目は出さない。

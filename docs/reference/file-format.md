@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 07:40
+更新日時: 2026-09-07 08:00
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -300,6 +300,8 @@ Path には Road の Left / Right か別の shoulder の Outer を繋ぐ。旧�
 - 材質の `opacity`（既定 1）、`blendMode`（`opaque` / `masked` / `translucent`、既定 opaque）、`maskThreshold`（0.5）、`maps.opacity`（テクスチャ + チャンネル）。`.tgmat` も同じ。
 - `preview.tessellationTargetPixels`（既定 10）— 分割する辺の長さ（px）。`tessellationFactor` は 64 まで。
 - `roadMask.edgeSide`（`both` / `left` / `right`、既定 both）— 端の減衰をどちらの端に出すか。左右は Path の進行方向基準。
+- `shoulder.displacement`（既定 0）、`shoulder.layerWorldUv`（既定 すべて true）、`shoulder.layerUvRepeat`（既定 1）、`shoulder.layerBlendRange`（既定 0.2）— 路肩の材質レイヤー。Road と同じ意味。
+  shoulder の inputs は Path、Material、Material 2〜4、Mask 2〜4 の順（版14〜15 で 2 本だった分は読込時に足す）。
 
 ## `.tgproj`
 

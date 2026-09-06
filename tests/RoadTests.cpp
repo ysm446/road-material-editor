@@ -637,6 +637,30 @@ void RunRoadTests() {
         Check(sloped, "4% cross slope drops 6 cm over 1.5 m");
         Check(upward, "shoulder normals point up on both sides");
         Check(leftGeo.left.points.size() == sRows && leftGeo.right.points.size() == sRows, "shoulder exports Outer and inner boundary paths");
+        // 材質スロットと変位は Road と同じ。Material 2 ＋ Mask 2 でレイヤーが立ち、路肩マスクが焼ける。
+        {
+            const auto* shoulderNode = sg.FindNode(sLeft);
+            Check(shoulderNode->inputs.size() == 8 && shoulderNode->inputs[4].label == "Material 4" &&
+                  shoulderNode->inputs[5].valueType == graph::ValueType::RoadMask, "shoulder has four material slots and three mask inputs");
+            const auto sBase = sg.CreateNode(graph::NodeKind::Surface);
+            const auto sGravel = sg.CreateNode(graph::NodeKind::Surface);
+            const auto sMask = sg.CreateNode(graph::NodeKind::RoadMask);
+            std::get<graph::RoadMaskNodeSettings>(sg.FindMutableNode(sMask)->settings).shape = graph::RoadMaskShape::EdgeFalloff;
+            shoulderNode = sg.FindNode(sLeft);  // ノードを足すと配列が動くので引き直す。
+            sg.CreateLink(sg.FindNode(sBase)->outputs[0].id, shoulderNode->inputs[1].id);
+            sg.CreateLink(sg.FindNode(sGravel)->outputs[0].id, shoulderNode->inputs[2].id);
+            Check(sg.CreateLink(sg.FindNode(sMask)->outputs[0].id, shoulderNode->inputs[5].id), "road mask connects to shoulder Mask 2");
+            auto& shoulderSettings = std::get<graph::ShoulderNodeSettings>(sg.FindMutableNode(sLeft)->settings);
+            shoulderSettings.displacementMeters = 0.03f;
+            shoulderSettings.layerUvRepeatMeters[1] = 2.0f;
+            auto layered = graph::CompileMeshGraph(sg);
+            Check(layered.scene.meshes.size() == 1 && layered.scene.meshes[0].materialStack &&
+                  layered.scene.meshes[0].layerStacks[0] && layered.scene.meshes[0].roadMask.IsValid() &&
+                  layered.scene.meshes[0].displacementMeters == 0.03f && layered.scene.meshes[0].layerUvRepeat[1] == 2.0f &&
+                  layered.scene.meshes[0].layerWorldUv[0],
+                  "shoulder compiles base, slot 2 with its mask, displacement, and world XZ coordinates");
+            shoulderSettings.displacementMeters = 0.0f;
+        }
         auto shoulderCompiled = graph::CompileMeshGraph(sg);
         Check(shoulderCompiled.error.empty() && shoulderCompiled.scene.meshes.size() == 1 &&
               shoulderCompiled.scene.meshes[0].geometry.vertices.size() == leftGeo.surface.vertices.size(),

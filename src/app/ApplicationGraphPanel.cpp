@@ -198,6 +198,54 @@ int ToGraphId(uintptr_t id) {
     return static_cast<int>(id);
 }
 
+}  // namespace
+
+// 材質スロットの行（Road と Shoulder で共通）。1 は下地、2〜4 は Mask 2〜4 で被覆する。
+// 座標と反復長はスロットごと。変更があれば真。
+bool Application::DrawMaterialSlotRows(const graph::Node& node, bool* layerWorldUv, float* layerUvRepeatMeters,
+                                       float& layerBlendRange, float defaultBlendRange) {
+    bool changed = false;
+    ui::SectionHeader("材質スロット");
+    if (!ui::BeginPropertyTable("layerRows")) return false;
+    static const char* const kUvSpaceLabels[] = {"面に沿う", "ワールド XZ"};
+    std::vector<const graph::Pin*> materialPins;
+    std::vector<const graph::Pin*> maskPins;
+    for (const auto& pin : node.inputs) {
+        if (pin.valueType == graph::ValueType::Material) materialPins.push_back(&pin);
+        if (pin.valueType == graph::ValueType::RoadMask) maskPins.push_back(&pin);
+    }
+    for (int slot = 0; slot < graph::kRoadMaterialSlots; ++slot) {
+        char label[32];
+        std::snprintf(label, sizeof(label), "スロット %d", slot + 1);
+        const bool hasMaterial = slot < static_cast<int>(materialPins.size()) &&
+                                 m_graph.FindUpstreamNodeForPin(materialPins[slot]->id) != nullptr;
+        const bool hasMask = slot == 0 || (slot - 1 < static_cast<int>(maskPins.size()) &&
+                                          m_graph.FindUpstreamNodeForPin(maskPins[slot - 1]->id) != nullptr);
+        ui::PropertyValue(label, "%s", !hasMaterial ? "材質なし" : (hasMask ? "有効" : "マスクなし（無効）"));
+        if (!hasMaterial) continue;
+        char spaceId[32];
+        std::snprintf(spaceId, sizeof(spaceId), "  座標##slot%d", slot);
+        int space = layerWorldUv[slot] ? 1 : 0;
+        if (ui::PropertyCombo(spaceId, &space, kUvSpaceLabels, IM_ARRAYSIZE(kUvSpaceLabels), 0,
+                              "面に沿う: 道路 UV。ワールド XZ: 位置の XZ 平面。路肩や地面と地続きにする層は XZ")) {
+            layerWorldUv[slot] = (space == 1);
+            changed = true;
+        }
+        if (slot > 0) {
+            char repeatId[32];
+            std::snprintf(repeatId, sizeof(repeatId), "  UV反復長##slot%d", slot);
+            changed |= ui::PropertyFloat(repeatId, &layerUvRepeatMeters[slot], 0.1f, 100.0f, 1.0f,
+                                         "このスロットの材質で UV が 1 増える実距離", "%.2f m");
+        }
+    }
+    changed |= ui::PropertyFloat("ブレンド幅", &layerBlendRange, 0.0f, 1.0f, defaultBlendRange,
+                                 "スロット同士をハイトで競合させるときの境界の柔らかさ。小さいほど凹凸なりにぎざぎざ", "%.2f");
+    ui::EndPropertyTable();
+    return changed;
+}
+
+namespace {
+
 // エディタへ渡してよい座標か。エディタは**知らないノードの位置を FLT_MAX で返す**ので、
 // それを信じて書き戻す・流し込むとノードが無限遠へ飛び、キャンバスの座標計算が
 // 壊れて操作できなくなる。読み込んだファイルの値の検証にも使う。
@@ -1118,43 +1166,8 @@ void Application::DrawGraphPanel() {
             ui::EndPropertyTable();
         }
         // 材質スロット。1 は下地、2〜4 は Mask 2〜4 で被覆する。座標と反復長はスロットごと。
-        ui::SectionHeader("材質スロット");
-        if (ui::BeginPropertyTable("roadLayerRows")) {
-            static const char* const kUvSpaceLabels[] = {"道路に沿う", "ワールド XZ"};
-            std::vector<const graph::Pin*> materialPins;
-            std::vector<const graph::Pin*> maskPins;
-            for (const auto& pin : selected->inputs) {
-                if (pin.valueType == graph::ValueType::Material) materialPins.push_back(&pin);
-                if (pin.valueType == graph::ValueType::RoadMask) maskPins.push_back(&pin);
-            }
-            for (int slot = 0; slot < graph::kRoadMaterialSlots; ++slot) {
-                char label[32];
-                std::snprintf(label, sizeof(label), "スロット %d", slot + 1);
-                const bool hasMaterial = slot < static_cast<int>(materialPins.size()) &&
-                                         m_graph.FindUpstreamNodeForPin(materialPins[slot]->id) != nullptr;
-                const bool hasMask = slot == 0 || (slot - 1 < static_cast<int>(maskPins.size()) &&
-                                                  m_graph.FindUpstreamNodeForPin(maskPins[slot - 1]->id) != nullptr);
-                ui::PropertyValue(label, "%s", !hasMaterial ? "材質なし" : (hasMask ? "有効" : "マスクなし（無効）"));
-                if (!hasMaterial) continue;
-                char spaceId[32];
-                std::snprintf(spaceId, sizeof(spaceId), "  座標##slot%d", slot);
-                int space = road->layerWorldUv[slot] ? 1 : 0;
-                if (ui::PropertyCombo(spaceId, &space, kUvSpaceLabels, IM_ARRAYSIZE(kUvSpaceLabels), 0,
-                                      "道路に沿う: 道路 UV。ワールド XZ: 位置の XZ 平面。路肩や地面と地続きにする層は XZ")) {
-                    road->layerWorldUv[slot] = (space == 1);
-                    changed = true;
-                }
-                if (slot > 0) {
-                    char repeatId[32];
-                    std::snprintf(repeatId, sizeof(repeatId), "  UV反復長##slot%d", slot);
-                    changed |= ui::PropertyFloat(repeatId, &road->layerUvRepeatMeters[slot], 0.1f, 100.0f, 1.0f,
-                                                 "このスロットの材質で UV が 1 増える実距離", "%.2f m");
-                }
-            }
-            changed |= ui::PropertyFloat("ブレンド幅", &road->layerBlendRange, 0.0f, 1.0f, defaults.layerBlendRange,
-                                         "スロット同士をハイトで競合させるときの境界の柔らかさ。小さいほど凹凸なりにぎざぎざ", "%.2f");
-            ui::EndPropertyTable();
-        }
+        changed |= DrawMaterialSlotRows(*selected, road->layerWorldUv, road->layerUvRepeatMeters,
+                                        road->layerBlendRange, defaults.layerBlendRange);
         ui::HintText("Material にSurfaceなどのResultを接続して材質を適用。Material 2〜4 は Road Mask を Mask 2〜4 へ繋いだ所に出る。"
                      "RoadSurfaceはMesh Outputへ、Left / Rightは進行方向に向かって左右の境界Path。走行側はプレビュー設定の「道路」で切り替える。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
@@ -1200,9 +1213,15 @@ void Application::DrawGraphPanel() {
                     changed = true;
                 }
             }
+            changed |= ui::PropertyFloat("変位量", &shoulder->displacementMeters, 0.0f, 1.0f, defaults.displacementMeters,
+                                         "Materialのハイトで路肩を法線方向へ押し出す量。ハイト0〜1の全幅がこの高さ（m）。"
+                                         "境界で道路と同じ材質・同じ量にすると段が出ない", "%.3f m", 0, 0.005f);
             ui::EndPropertyTable();
         }
+        changed |= DrawMaterialSlotRows(*selected, shoulder->layerWorldUv, shoulder->layerUvRepeatMeters,
+                                        shoulder->layerBlendRange, defaults.layerBlendRange);
         ui::HintText("PathにRoadのLeft / Right（または別のShoulderのOuter）を接続する。境界の頂点を共有するので道路と水密。"
+                     "材質スロットとMask 2〜4はRoadと同じ。Road Maskの「側」は路肩では 右＝境界側、左＝外側。"
                      "出力のRoadSurfaceをMesh Outputへ、Outerは次の路肩や縁石へ。走行側には依存しない。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (selected->kind == graph::NodeKind::Merge) {

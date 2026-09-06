@@ -131,9 +131,16 @@ constexpr std::array<PinDefinition, 4> kDecalPins = {{
 }};
 // 路肩のピン。Path には Road の Left / Right か、別の路肩の Outer を繋ぐ。
 // Outer は外側の境界（実寸 Path）で、次の路肩や縁石へ渡す。
-constexpr std::array<PinDefinition, 4> kShoulderPins = {{
+// 材質スロットとマスクは Road と同じ並び。
+constexpr std::array<PinDefinition, 10> kShoulderPins = {{
     {PinKind::Input, ValueType::Path, "Path"},
     {PinKind::Input, ValueType::Material, "Material"},
+    {PinKind::Input, ValueType::Material, "Material 2"},
+    {PinKind::Input, ValueType::Material, "Material 3"},
+    {PinKind::Input, ValueType::Material, "Material 4"},
+    {PinKind::Input, ValueType::RoadMask, "Mask 2"},
+    {PinKind::Input, ValueType::RoadMask, "Mask 3"},
+    {PinKind::Input, ValueType::RoadMask, "Mask 4"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Path, "Outer"},
 }};

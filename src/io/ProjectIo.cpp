@@ -260,6 +260,11 @@ json WriteMaterialBody(const compositor::MaterialAsset& asset, const TextureWrit
     node["roughness"] = asset.roughnessValue;
     node["metallic"] = asset.metallicValue;
     node["ambientOcclusion"] = asset.ambientOcclusionValue;
+    // 不透明度と合成モード。材質の属性。
+    static const char* const kBlendModeNames[] = {"opaque", "masked", "translucent"};
+    node["opacity"] = asset.opacityValue;
+    node["blendMode"] = EnumName(kBlendModeNames, static_cast<uint32_t>(asset.blendMode));
+    node["maskThreshold"] = asset.maskThreshold;
 
     json maps;
     maps["baseColor"] = writeTexture(asset.baseColor);
@@ -270,6 +275,7 @@ json WriteMaterialBody(const compositor::MaterialAsset& asset, const TextureWrit
     maps["metallic"] = WriteMapSlot(asset.metallic, writeTexture);
     maps["ambientOcclusion"] = WriteMapSlot(asset.ambientOcclusion, writeTexture);
     maps["height"] = WriteMapSlot(asset.height, writeTexture);
+    maps["opacity"] = WriteMapSlot(asset.opacity, writeTexture);
     node["maps"] = std::move(maps);
     return node;
 }
@@ -285,6 +291,13 @@ void ReadMaterialBody(const json& node, compositor::MaterialAsset& asset,
     asset.metallicValue = ReadFloat(node, "metallic", defaults.metallicValue);
     asset.ambientOcclusionValue =
         ReadFloat(node, "ambientOcclusion", defaults.ambientOcclusionValue);
+    {
+        static const char* const kBlendModeNames[] = {"opaque", "masked", "translucent"};
+        asset.opacityValue = std::clamp(ReadFloat(node, "opacity", defaults.opacityValue), 0.0f, 1.0f);
+        asset.blendMode = static_cast<compositor::BlendMode>(
+            EnumValue(kBlendModeNames, node, "blendMode", static_cast<uint32_t>(defaults.blendMode)));
+        asset.maskThreshold = std::clamp(ReadFloat(node, "maskThreshold", defaults.maskThreshold), 0.0f, 1.0f);
+    }
 
     const json* maps = FindMember(node, "maps");
     if (maps == nullptr || !maps->is_object()) {
@@ -299,6 +312,7 @@ void ReadMaterialBody(const json& node, compositor::MaterialAsset& asset,
     asset.metallic = ReadMapSlot(*maps, "metallic", readTexture);
     asset.ambientOcclusion = ReadMapSlot(*maps, "ambientOcclusion", readTexture);
     asset.height = ReadMapSlot(*maps, "height", readTexture);
+    asset.opacity = ReadMapSlot(*maps, "opacity", readTexture);
 }
 
 // --- レイヤー -------------------------------------------------------------

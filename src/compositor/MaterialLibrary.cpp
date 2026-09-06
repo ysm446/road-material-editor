@@ -51,7 +51,8 @@ struct ThumbnailConstants {
 uint32_t PackMaterialChannels(const MaterialAsset& asset) {
     // 並びは TG_CHANNEL_SLOT_* と一致させること。
     return PackChannel(asset.roughness.channel, 0) | PackChannel(asset.metallic.channel, 1) |
-           PackChannel(asset.ambientOcclusion.channel, 2) | PackChannel(asset.height.channel, 3);
+           PackChannel(asset.ambientOcclusion.channel, 2) | PackChannel(asset.height.channel, 3) |
+           PackChannel(asset.opacity.channel, 5);
 }
 
 namespace {

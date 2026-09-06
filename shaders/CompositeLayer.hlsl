@@ -46,9 +46,9 @@ struct LayerConstants
     uint4 textureIndices0;  // baseColor, normal, roughness, metallic
     uint4 textureIndices1;  // ao, height, mask, 中間結果由来マスクの SRV
 
-    float4 maskCurve;   // contrast, 未使用 x3（derivedScale は CompositeMask 側で適用済み）
+    float4 maskCurve;   // contrast, 不透明度の定数, 未使用 x2（derivedScale は CompositeMask 側で適用済み）
     uint4 noiseTypes;   // height, mask, 未使用, 未使用
-    uint4 paintParams;  // ペイントマスクの SRV, 未使用 x3
+    uint4 paintParams;  // ペイントマスクの SRV, 不透明度マップの SRV, 未使用 x2
     // スカラーのマップのチャンネル指定。4bit ずつ TG_CHANNEL_SLOT_* の順で詰めてある。
     uint4 mapChannels;  // x にすべて入る。yzw は未使用
     // ベースカラーの調整。マテリアルが持つ（ティントを掛けた**あと**に効く）。
@@ -290,6 +290,13 @@ void CsMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         layerAo = SampleLayerScalar(g_layer.textureIndices1.x, TG_CHANNEL_SLOT_AO, uv,
                                     uvPerOutputTexel);
     }
+    // 不透明度。マップが無ければ材質の定数。Surface の A へ書く。
+    float layerOpacity = g_layer.maskCurve.y;
+    if (g_layer.paintParams.y != kInvalidTextureIndex)
+    {
+        layerOpacity = SampleLayerScalar(g_layer.paintParams.y, TG_CHANNEL_SLOT_OPACITY, uv,
+                                         uvPerOutputTexel);
+    }
 
     float layerHeight = SampleLayerHeight(uv, uvPerOutputTexel);
     const float3 layerNormal = ComputeLayerNormal(uv, noiseTexelSize, uvPerOutputTexel);
@@ -371,8 +378,11 @@ void CsMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     if ((g_layer.channelMask & 0x4u) != 0u)
     {
         const float3 layerSurface = float3(layerRoughness, layerMetallic, layerAo);
-        const float3 destination = isBaseLayer ? layerSurface : surfaceTarget[texel].rgb;
-        surfaceTarget[texel] = float4(lerp(destination, layerSurface, weight), 1.0f);
+        const float4 previous = surfaceTarget[texel];
+        const float3 destination = isBaseLayer ? layerSurface : previous.rgb;
+        const float destinationOpacity = isBaseLayer ? layerOpacity : previous.a;
+        surfaceTarget[texel] = float4(lerp(destination, layerSurface, weight),
+                                      lerp(destinationOpacity, layerOpacity, weight));
     }
 
     if ((g_layer.channelMask & 0x8u) != 0u)

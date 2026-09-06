@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-07 02:26
+更新日時: 2026-09-07 02:37
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -19,6 +19,15 @@ R3 は白線（中央線と外側線の帯ポリゴン）を実装した。R2 �
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
+
+### 2026-09-07 02:37 — 材質の不透明度と合成モード
+
+- MaterialAsset に不透明度マップ・定数・BlendMode・しきい値を追加。保存（プロジェクト / .tgmat）、アンドゥ、マテリアルパネルに対応。
+- 合成器は Surface の A に不透明度を書く（空いていた LayerConstants の paintParams.y / maskCurve.y を使用）。
+- 帯メッシュ（Lane Marking）は一番上のレイヤーの材質のモードで描く。マスク抜きは discard、半透明は不透明の後にアルファ合成（深度書き込みなし、影なし）。
+- Debug / Release ビルド・テスト成功。保存往復一致。`data/textures/paint_wear_mask.png`（生成した摩耗マスク）を使い、
+  `data/road-profile-check/paint-masked.png` / `paint-translucent.png` で剥げた白線を確認。
+- 起動時の MaterialThumbnail の GPU barrier layout 警告が材質 2 つの構成で再現した（plan.md の既知課題）。今回は未対応。
 
 ### 2026-09-07 02:26 — 白線の路面追従（道路 UV）
 

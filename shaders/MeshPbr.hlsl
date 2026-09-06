@@ -79,7 +79,9 @@ struct MeshConstants
     // テクスチャを道路 UV で読む（白線が道路面と同じ量だけ動く）。0 なら自分の材質のハイトを uv で読む。
     uint displacementHeightIndex;
     uint displacementUseRoadUv;
-    float2 pad8;
+    // 不透明度の扱い。0 = 不透明、1 = マスク抜き、2 = 半透明。
+    uint opacityMode;
+    float opacityThreshold;
 };
 
 // 「ハイト（ローカル）」で周りの平均を取る半径（合成テクセル）と、
@@ -405,6 +407,7 @@ PsOutput PsMain(VsOutput input)
     float roughnessValue = g_mesh.roughness;
     float metallicValue = g_mesh.metallic;
     float ambientOcclusion = 1.0f;
+    float opacity = 1.0f;
     float3 normal = geometricNormal;
 
     // **クレイ表示**は、形（変位）はそのままで陰影だけをテクスチャ抜きにする。
@@ -434,10 +437,16 @@ PsOutput PsMain(VsOutput input)
 
         baseColor = SampleMaterialColor(baseColorMap, uv).rgb;
 
-        const float3 surface = SampleMaterialColor(surfaceMap, uv).rgb;
+        const float4 surface = SampleMaterialColor(surfaceMap, uv);
         roughnessValue = surface.r;
         metallicValue = surface.g;
         ambientOcclusion = surface.b;
+        // 不透明度は Surface の A。マスク抜きはここで捨て、半透明は最後にアルファへ載せる。
+        opacity = surface.a;
+        if (g_mesh.opacityMode == 1u && opacity < g_mesh.opacityThreshold)
+        {
+            discard;
+        }
 
         // タンジェント空間法線をワールド空間へ移す。
         const float3 tangentNormal = DecodeTangentNormal(SampleMaterialNormal(normalMap, uv));
@@ -610,7 +619,8 @@ PsOutput PsMain(VsOutput input)
     PsOutput output;
     // シーンカラーは R16G16B16A16_FLOAT。half の上限（65504）を超えると Inf になり、
     // トーンマップを経て NaN → ハイライト中心の黒点になる。上限手前でクランプする。
-    output.color = float4(ApplyRoadGrid(min(radiance, 60000.0f), input.uv), 1.0f);
+    output.color = float4(ApplyRoadGrid(min(radiance, 60000.0f), input.uv),
+                          (g_mesh.opacityMode == 2u) ? opacity : 1.0f);
     // ペイントマスクはタイル 1 枚ぶんのテクスチャなので、UV も畳んで書き出す。
     output.materialUv = float4(frac(input.uv), 1.0f, 0.0f);
     return output;

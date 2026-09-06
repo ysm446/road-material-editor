@@ -11,6 +11,9 @@
 #include <string>
 #include <vector>
 
+// MaterialLibrary.h は Windows ヘッダを引き込むため、ここでは合成モードの列挙だけ前方宣言する。
+namespace tg::compositor { enum class BlendMode : uint32_t; }
+
 namespace tg {
 
 // アンドゥが対象にするマテリアル 1 つぶん。
@@ -30,6 +33,10 @@ struct MaterialSnapshot {
     compositor::MapSlot metallic;
     compositor::MapSlot ambientOcclusion;
     compositor::MapSlot height;
+    compositor::MapSlot opacity;
+    float opacityValue = 1.0f;
+    compositor::BlendMode blendMode = static_cast<compositor::BlendMode>(0);  // Opaque
+    float maskThreshold = 0.5f;
     DirectX::XMFLOAT3 baseColorTint{0.5f, 0.5f, 0.5f};
     float roughnessValue = 0.5f;
     float metallicValue = 0.0f;

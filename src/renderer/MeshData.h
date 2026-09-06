@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <vector>
 
+// MaterialLibrary.h は Windows ヘッダを引き込むため、ここでは合成モードの列挙だけ前方宣言する。
+namespace tg::compositor { enum class BlendMode : uint32_t; }
+
 namespace tg::renderer {
 
 // CPU 側の生成結果。座標は右手系 Y-up、メートル。GPU の所有権を持たない。
@@ -44,6 +47,10 @@ struct SceneMesh {
     int displacementSource = -1;
     // 接続から導出した材質。GPU参照や保存対象ではない。
     std::optional<compositor::MaterialStack> materialStack;
+    // 合成モードを決める材質（一番上のレイヤーの材質）。道路面では使わない。
+    compositor::MaterialAssetId blendMaterial = compositor::kNoMaterialAsset;
+    // 材質の合成モード（マスク抜き / 半透明）を使うか。白線などの帯だけ真。
+    bool useBlendMode = false;
 };
 
 struct MeshScene {

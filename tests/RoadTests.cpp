@@ -225,6 +225,11 @@ void RunRoadTests() {
     compiled = graph::CompileMeshGraph(chain);
     Check(compiled.scene.meshes.size() == 2 && compiled.scene.meshes[1].materialStack &&
           !compiled.scene.meshes[0].materialStack, "marking material does not leak to the road");
+    Check(compiled.scene.meshes[1].useBlendMode && !compiled.scene.meshes[0].useBlendMode,
+          "only markings honour the material blend mode");
+    std::get<graph::LayerNodeSettings>(chain.FindMutableNode(paint)->settings).layer.material = 7;
+    compiled = graph::CompileMeshGraph(chain);
+    Check(compiled.scene.meshes[1].blendMaterial == 7, "blend material comes from the top layer");
 
     tests::Section("Vertical curve and bank angle");
     {

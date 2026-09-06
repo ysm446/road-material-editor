@@ -122,7 +122,9 @@ struct MeshConstants {
 
     uint32_t displacementHeightIndex;
     uint32_t displacementUseRoadUv;
-    float pad8[2];
+    // 不透明度の扱い。0 = 不透明、1 = マスク抜き（opacityThreshold 未満を捨てる）、2 = 半透明。
+    uint32_t opacityMode;
+    float opacityThreshold;
 };
 
 // GPU 側の SkyboxConstants と一致させること。
@@ -815,13 +817,28 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     constants.maskPreviewLow = compositor::kMaskPreviewLow;
     constants.maskPreviewHigh = compositor::kMaskPreviewHigh;
 
+    // メッシュの合成モード。材質の属性から決める。帯（白線）以外は常に不透明。
+    const auto blendModeOf = [&](size_t i) {
+        if (!m_meshSceneEnabled || !m_meshScene.meshes[i].useBlendMode) return compositor::BlendMode::Opaque;
+        const compositor::MaterialAsset* asset = materials.Find(m_meshScene.meshes[i].blendMaterial);
+        return asset ? asset->blendMode : compositor::BlendMode::Opaque;
+    };
     // 各メッシュは世界座標で受け取る。平面の拡大・Height・マスク合成は使わない。
-    const auto drawMeshes = [&](const MeshConstants& passConstants) {
+    // translucentPass: 0 = 半透明以外、1 = 半透明だけ、-1 = 全部（影 / ワイヤーフレーム）。
+    const auto drawMeshes = [&](const MeshConstants& passConstants, int translucentPass = -1) {
         const size_t count = m_meshSceneEnabled ? m_sceneMeshes.size() : 1;
         for (size_t i = 0; i < count; ++i) {
             MeshConstants drawConstants = passConstants;
             const Mesh& drawMesh = m_meshSceneEnabled ? m_sceneMeshes[i] : mesh;
+            const compositor::BlendMode blendMode = blendModeOf(i);
+            if (translucentPass == 0 && blendMode == compositor::BlendMode::Translucent) continue;
+            if (translucentPass == 1 && blendMode != compositor::BlendMode::Translucent) continue;
             if (m_meshSceneEnabled) {
+                if (blendMode != compositor::BlendMode::Opaque) {
+                    const compositor::MaterialAsset* asset = materials.Find(m_meshScene.meshes[i].blendMaterial);
+                    drawConstants.opacityMode = static_cast<uint32_t>(blendMode);
+                    drawConstants.opacityThreshold = asset ? asset->maskThreshold : 0.5f;
+                }
                 XMStoreFloat4x4(&drawConstants.model, XMMatrixIdentity());
                 XMStoreFloat4x4(&drawConstants.normalMatrix, XMMatrixIdentity());
                 drawConstants.roadMetersPerUv = m_meshScene.meshes[i].roadMetersPerUv;
@@ -913,7 +930,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
             commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
             commandList->SetPipelineState(shadowPipeline);
-            drawMeshes(shadowConstants);
+            drawMeshes(shadowConstants, 0);
 
             TransitionIfNeeded(commandList, m_shadowMap,
                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -951,7 +968,22 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
     commandList->SetPipelineState(meshPipeline);
-    drawMeshes(constants);
+    drawMeshes(constants, 0);
+    // 半透明の材質（白線の帯など）は不透明の後にアルファ合成で描く。深度は読むだけ。
+    if (m_meshSceneEnabled) {
+        bool anyTranslucent = false;
+        for (size_t i = 0; i < m_sceneMeshes.size(); ++i) anyTranslucent |= blendModeOf(i) == compositor::BlendMode::Translucent;
+        if (anyTranslucent) {
+            rhi::GraphicsPipelineDesc blendDesc = meshPipelineDesc;
+            blendDesc.alphaBlend = true;
+            blendDesc.depthWrite = false;
+            if (ID3D12PipelineState* blendPipeline = pipelineCache.GetGraphics(blendDesc)) {
+                commandList->SetPipelineState(blendPipeline);
+                drawMeshes(constants, 1);
+                commandList->SetPipelineState(meshPipeline);
+            }
+        }
+    }
     m_stats.tessellation = useTessellation;
     m_stats.tessellationFactor = m_tessellationFactor;
 

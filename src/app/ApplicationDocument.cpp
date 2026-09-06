@@ -46,6 +46,10 @@ DocumentSnapshot Application::CaptureDocument() const {
         material.metallic = asset.metallic;
         material.ambientOcclusion = asset.ambientOcclusion;
         material.height = asset.height;
+        material.opacity = asset.opacity;
+        material.opacityValue = asset.opacityValue;
+        material.blendMode = asset.blendMode;
+        material.maskThreshold = asset.maskThreshold;
         material.baseColorTint = asset.baseColorTint;
         material.roughnessValue = asset.roughnessValue;
         material.metallicValue = asset.metallicValue;
@@ -87,6 +91,11 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
         asset.metallic = material.metallic;
         asset.ambientOcclusion = material.ambientOcclusion;
         asset.height = material.height;
+        asset.opacity = material.opacity;
+        asset.opacity.texture = ValidTexture(asset.opacity.texture);
+        asset.opacityValue = material.opacityValue;
+        asset.blendMode = material.blendMode;
+        asset.maskThreshold = material.maskThreshold;
         asset.roughness.texture = ValidTexture(asset.roughness.texture);
         asset.metallic.texture = ValidTexture(asset.metallic.texture);
         asset.ambientOcclusion.texture = ValidTexture(asset.ambientOcclusion.texture);

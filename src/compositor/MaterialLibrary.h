@@ -15,6 +15,14 @@ namespace tg::compositor {
 // レイヤーはマテリアルを 1 つ参照する（Quixel Mixer と同じ形）。
 // マップを個別に差し替えるのではなく、マテリアルを差し替えることで見た目を変える。
 // マスクだけはレイヤー固有なので、ここには入れない。
+// 不透明度の扱い。材質の属性として持ち、白線などの帯メッシュを描くときに効く。
+// 道路面のような下に何も無いメッシュでは常に不透明として描く。
+enum class BlendMode : uint32_t {
+    Opaque = 0,       // 不透明度を無視する
+    Masked = 1,       // しきい値未満をくり抜く。深度と影はそのまま
+    Translucent = 2,  // 不透明度でそのまま合成する。影は落とさない
+};
+
 struct MaterialAsset {
     MaterialAssetId id = kNoMaterialAsset;
     std::string name;
@@ -29,6 +37,11 @@ struct MaterialAsset {
     MapSlot metallic;
     MapSlot ambientOcclusion;
     MapSlot height;
+    // 不透明度。マップが無ければ opacityValue。合成結果の Surface の A に入る。
+    MapSlot opacity;
+    float opacityValue = 1.0f;
+    BlendMode blendMode = BlendMode::Opaque;
+    float maskThreshold = 0.5f;
 
     // **乗算の中立値なので 1.0。** マップがあるときは掛け算で効く
     // （`layerBaseColor *= テクスチャ`）ため、1 以外を既定にすると

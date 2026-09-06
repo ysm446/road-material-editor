@@ -217,6 +217,25 @@ bool Application::DrawMaterialProperties(compositor::MaterialAsset& asset) {
         changed |= ui::PropertyFloat("AO", &asset.ambientOcclusionValue, 0.0f, 1.0f,
                                      kDefaultAsset.ambientOcclusionValue, "マップが無いときの値",
                                      "%.2f");
+        changed |= ui::PropertyFloat("不透明度", &asset.opacityValue, 0.0f, 1.0f,
+                                     kDefaultAsset.opacityValue, "マップが無いときの値",
+                                     "%.2f");
+        // 合成モードは材質の属性。白線などの帯メッシュを描くときに効き、道路面では常に不透明。
+        static const char* const kBlendModeLabels[] = {"不透明", "マスク抜き", "半透明"};
+        int blendMode = static_cast<int>(asset.blendMode);
+        if (ui::PropertyCombo("合成", &blendMode, kBlendModeLabels, IM_ARRAYSIZE(kBlendModeLabels),
+                              static_cast<int>(kDefaultAsset.blendMode),
+                              "不透明度の扱い。マスク抜きはしきい値未満をくり抜く（深度と影はそのまま）。"
+                              "半透明は不透明度でそのまま合成し、影は落とさない。"
+                              "白線などの帯メッシュで効き、道路面では無視する")) {
+            asset.blendMode = static_cast<compositor::BlendMode>(blendMode);
+            changed = true;
+        }
+        if (asset.blendMode == compositor::BlendMode::Masked) {
+            changed |= ui::PropertyFloat("しきい値", &asset.maskThreshold, 0.0f, 1.0f,
+                                         kDefaultAsset.maskThreshold,
+                                         "不透明度がこの値未満の所をくり抜く", "%.2f");
+        }
         ui::EndPropertyTable();
     }
 
@@ -234,6 +253,7 @@ bool Application::DrawMaterialProperties(compositor::MaterialAsset& asset) {
         changed |= DrawMapSlotRow("メタルネス", asset.metallic, m_textureLibrary);
         changed |= DrawMapSlotRow("AO", asset.ambientOcclusion, m_textureLibrary);
         changed |= DrawMapSlotRow("ハイト", asset.height, m_textureLibrary);
+        changed |= DrawMapSlotRow("不透明度", asset.opacity, m_textureLibrary);
 
         // 1 枚に AO / ラフネス / ハイトを詰めたテクスチャをまとめて割り当てる。
         ui::PropertyLabel("ORD", "1 枚に AO / ラフネス / ハイトを詰めたテクスチャ");

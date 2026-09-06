@@ -417,6 +417,10 @@ void AttachMaterial(const NodeGraph& graph, const Node& node, renderer::SceneMes
             mesh.materialStack->MaskOps() = std::move(material.maskOps);
             // 1 UVタイルの実寸でハイト由来の法線を評価する。
             mesh.materialStack->SetTerrainScale(mesh.roadMetersPerUv, 1.0f);
+            // 合成モードは一番上のレイヤーの材質から決める。
+            for (auto it = mesh.materialStack->Layers().rbegin(); it != mesh.materialStack->Layers().rend(); ++it) {
+                if (it->material != compositor::kNoMaterialAsset) { mesh.blendMaterial = it->material; break; }
+            }
         }
     }
 }
@@ -461,6 +465,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 // 道路面と同じハイト・同じ量で押し出し、変位後の路面に貼り付ける。
                 mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
                 mesh.displacementSource = chain.roadIndex;
+                mesh.useBlendMode = true;
                 AttachMaterial(graph, *node, mesh);
                 chain.meshes.push_back(std::move(mesh));
                 success = true;

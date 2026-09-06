@@ -3793,6 +3793,11 @@ bool MaterialEvaluator::Evaluate(rhi::Device& device, rhi::PipelineCache& pipeli
                                   : textures.SrvIndex(layer.heightTexture.texture, false);
         // マスク用テクスチャはレイヤー固有。マテリアルのマップとは用途が別。
         constants.textureIndices1[2] = textures.SrvIndex(layer.mask.texture.texture, false);
+        // 不透明度。マップは paintParams.y、定数は maskCurve.y に入れる（空いていた枠）。
+        constants.paintParams[1] =
+            (material != nullptr) ? textures.SrvIndex(material->opacity.texture, false)
+                                  : kInvalidTextureIndex;
+        constants.maskCurve[1] = (material != nullptr) ? material->opacityValue : 1.0f;
 
         // スカラーのマップは「どのチャンネルを読むか」も渡す。
         // Megascans の _ORD のように 1 枚へ詰めたテクスチャに対応するため。

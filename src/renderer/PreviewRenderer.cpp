@@ -112,7 +112,7 @@ struct MeshConstants {
     XMFLOAT4X4 tessellationViewProjection;
     float viewportSize[2];
     float tessellationMaxFactor;
-    float pad6;
+    float tessellationTargetPixels;
 
     // マスクのプレビューで飽和した所へ斜線を引く。**HLSL 側と同じ並びにすること。**
     uint32_t maskPreviewHatch;
@@ -422,6 +422,7 @@ void PreviewRenderer::ResetSettings() {
     m_planeSize = defaults.planeSize;
     m_tessellationEnabled = defaults.tessellationEnabled;
     m_tessellationFactor = defaults.tessellationFactor;
+    m_tessellationTargetPixels = defaults.tessellationTargetPixels;
     m_showSkybox = defaults.showSkybox;
     m_skyboxBlur = defaults.skyboxBlur;
     m_shadowEnabled = defaults.shadowEnabled;
@@ -803,6 +804,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     constants.viewportSize[0] = static_cast<float>(m_width);
     constants.viewportSize[1] = static_cast<float>(m_height);
     constants.tessellationMaxFactor = m_tessellationFactor;
+    constants.tessellationTargetPixels = m_tessellationTargetPixels;
     // マスクをプレビューしているときだけ斜線を引く（設定と両方が入のとき）。
     constants.maskPreviewHatch =
         (!m_meshSceneEnabled && m_maskSaturationHatch && m_maskPreviewActive) ? 1u : 0u;

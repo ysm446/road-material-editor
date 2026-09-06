@@ -1478,6 +1478,7 @@ json WritePreview(renderer::PreviewRenderer& renderer) {
     node["planeSize"] = renderer.PlaneSize();
     node["tessellation"] = renderer.TessellationEnabled();
     node["tessellationFactor"] = renderer.TessellationFactor();
+    node["tessellationTargetPixels"] = renderer.TessellationTargetPixels();
     node["materialResolution"] = renderer.MaterialResolution();
     node["meshSubdivisions"] = renderer.MeshSubdivisions();
     node["showSkybox"] = renderer.ShowSkybox();
@@ -1552,7 +1553,9 @@ void ReadPreview(const json& node, renderer::PreviewRenderer& renderer) {
     renderer.TessellationEnabled() =
         ReadBool(node, "tessellation", previewDefaults.tessellationEnabled);
     renderer.TessellationFactor() =
-        ReadFloat(node, "tessellationFactor", previewDefaults.tessellationFactor);
+        std::clamp(ReadFloat(node, "tessellationFactor", previewDefaults.tessellationFactor), 1.0f, 64.0f);
+    renderer.TessellationTargetPixels() = std::clamp(
+        ReadFloat(node, "tessellationTargetPixels", previewDefaults.tessellationTargetPixels), 2.0f, 64.0f);
     renderer.RequestMaterialResolution(
         ReadUInt(node, "materialResolution", previewDefaults.materialResolution));
     renderer.RequestMeshSubdivisions(

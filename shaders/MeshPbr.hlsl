@@ -65,7 +65,8 @@ struct MeshConstants
     float4x4 tessellationViewProjection;
     float2 viewportSize;
     float tessellationMaxFactor;
-    float pad6;
+    // 1 辺をおよそ何ピクセルに保つか。小さいほど細かく割る。
+    float tessellationTargetPixels;
 
     // マスクのプレビューで、0 か 1 に張り付いた所へ斜線を引く。
     // maskPreviewLow / High は、マスク 0 / 1 に対応するベースカラー。
@@ -226,8 +227,8 @@ VsOutput VsMain(VsInput input)
 // 近づいて 1 辺が伸びたときだけ細かく割る。ディスプレイスメントは
 // ドメインシェーダで掛ける（分割後の点で高さを引くため）。
 
-// 1 辺をおよそ何ピクセルに保つか。小さいほど細かく割る。
-static const float kTessellationTargetPixels = 10.0f;
+// ハードウェアの分割上限。
+static const float kTessellationHardwareMax = 64.0f;
 
 struct HsControlPoint
 {
@@ -264,13 +265,14 @@ float ScreenEdgeFactor(float3 a, float3 b)
     // カメラの後ろに回った辺は判断できないので、最大まで割る。
     if (clipA.w <= 0.0f || clipB.w <= 0.0f)
     {
-        return g_mesh.tessellationMaxFactor;
+        return min(g_mesh.tessellationMaxFactor, kTessellationHardwareMax);
     }
 
     const float2 screenA = (clipA.xy / clipA.w) * 0.5f * g_mesh.viewportSize;
     const float2 screenB = (clipB.xy / clipB.w) * 0.5f * g_mesh.viewportSize;
     const float pixels = length(screenA - screenB);
-    return clamp(pixels / kTessellationTargetPixels, 1.0f, g_mesh.tessellationMaxFactor);
+    return clamp(pixels / max(g_mesh.tessellationTargetPixels, 1.0f), 1.0f,
+                 min(g_mesh.tessellationMaxFactor, kTessellationHardwareMax));
 }
 
 HsPatchConstants HsConstant(InputPatch<HsControlPoint, 3> patch)

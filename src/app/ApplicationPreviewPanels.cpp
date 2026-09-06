@@ -80,10 +80,14 @@ void Application::DrawMaterialPanel() {
                                  "画面上の辺が長いところだけメッシュを細かく割る。"
                                  "変位量を上げたときに形がなめらかになる");
                 if (m_renderer.TessellationEnabled()) {
-                    ui::PropertyFloat("分割の上限", &m_renderer.TessellationFactor(), 1.0f, 16.0f,
+                    ui::PropertyFloat("分割の上限", &m_renderer.TessellationFactor(), 1.0f, 64.0f,
                                       defaults.tessellationFactor,
-                                      "1 辺をこの回数まで割る。上げるほど重くなる",
+                                      "1 辺をこの回数まで割る。上げるほど重くなる（ハードウェアの上限 64）",
                                       "%.0f", 0, 1.0f);
+                    ui::PropertyFloat("分割する辺の長さ", &m_renderer.TessellationTargetPixels(), 4.0f, 32.0f,
+                                      defaults.tessellationTargetPixels,
+                                      "画面上で 1 辺がこの長さ（px）を超えたら割る。小さいほど細かく、負荷は二乗で増える",
+                                      "%.0f px", 0, 1.0f);
                 }
 
                 // 形の細かさの上限。地形の一辺 ÷ 分割数 が 1 マスの大きさになる。
@@ -145,9 +149,14 @@ void Application::DrawMaterialPanel() {
                              "Road の変位量を上げたときに形がなめらかになる。分割後の辺は"
                              "表示メニューのワイヤーフレームで確認できる");
             if (m_renderer.TessellationEnabled()) {
-                ui::PropertyFloat("分割の上限", &m_renderer.TessellationFactor(), 1.0f, 16.0f,
+                ui::PropertyFloat("分割の上限", &m_renderer.TessellationFactor(), 1.0f, 64.0f,
                                   renderer::kPreviewDefaults.tessellationFactor,
-                                  "1 辺をこの回数まで割る。上げるほど重くなる", "%.0f", 0, 1.0f);
+                                  "1 辺をこの回数まで割る。1 m のセルは 16 で約 6 cm、64 で約 1.5 cm。"
+                                  "遠くは画面上の辺が短いので割らない", "%.0f", 0, 1.0f);
+                ui::PropertyFloat("分割する辺の長さ", &m_renderer.TessellationTargetPixels(), 4.0f, 32.0f,
+                                  renderer::kPreviewDefaults.tessellationTargetPixels,
+                                  "画面上で 1 辺がこの長さ（px）を超えたら割る。小さいほど細かく、負荷は二乗で増える",
+                                  "%.0f px", 0, 1.0f);
             }
             ui::EndPropertyTable();
         }

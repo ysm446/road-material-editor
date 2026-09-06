@@ -150,6 +150,8 @@ struct PreviewDefaults {
     float planeSize = 2.0f;
     bool tessellationEnabled = false;
     float tessellationFactor = 8.0f;
+    // 分割で 1 辺を保つ画面上の長さ（px）。小さいほど細かい。
+    float tessellationTargetPixels = 10.0f;
     uint32_t materialResolution = 1024;
     // 平面メッシュの分割数。**形の細かさの上限はここで決まる。**
     // 地形の一辺 ÷ 分割数 が 1 マスの大きさ（2048m を 256 分割で 8m）。
@@ -239,6 +241,7 @@ public:
     bool& TessellationEnabled() { return m_tessellationEnabled; }
     // 1 辺あたりの分割の上限。
     float& TessellationFactor() { return m_tessellationFactor; }
+    float& TessellationTargetPixels() { return m_tessellationTargetPixels; }
     bool& UseMaterialTextures() { return m_useMaterialTextures; }
     // ハイトを形状に反映する量（0 で反映しない）。頂点シェーダで押し出す。
     // **単位は m。** ハイト 0〜1 の全幅がこの高さに対応する。
@@ -345,6 +348,7 @@ private:
     RenderStats m_stats;
     bool m_tessellationEnabled = kPreviewDefaults.tessellationEnabled;
     float m_tessellationFactor = kPreviewDefaults.tessellationFactor;
+    float m_tessellationTargetPixels = kPreviewDefaults.tessellationTargetPixels;
     bool m_showReferenceGrid = true;
     bool m_showRoadGrid = false;
     bool m_showUvChecker = false;

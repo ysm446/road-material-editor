@@ -175,9 +175,18 @@ void ImGuiLayer::Shutdown() {
     m_fontSize = ui::kDefaultFontSize;
 }
 
-void ImGuiLayer::BeginFrame() {
+void ImGuiLayer::BeginFrame(const TestInput* testInput) {
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
+    if (testInput != nullptr) {
+        auto& io = ImGui::GetIO();
+        io.ClearEventsQueue();
+        io.AddFocusEvent(true);
+        io.AddMousePosEvent(testInput->mouse.x, testInput->mouse.y);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, testInput->leftDown);
+        io.AddKeyEvent(ImGuiMod_Shift, testInput->shift);
+        io.AddKeyEvent(ImGuiKey_Escape, testInput->escape);
+    }
     ImGui::NewFrame();
 }
 

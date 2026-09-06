@@ -85,6 +85,9 @@ bool PropertyFloat(const char* label, float* value, float minValue, float maxVal
                    float defaultValue, const char* tooltip = nullptr,
                    const char* format = "%.3f", ImGuiSliderFlags flags = 0,
                    float snapStep = 0.0f);
+// XYZを1行の数値入力で描く。Enterで確定。戻り値は変更軸のビット（X=1,Y=2,Z=4）。
+unsigned PropertyFloat3Input(const char* label, float* xyz, const float* defaultXyz,
+                             const char* tooltip = nullptr);
 bool PropertyInt(const char* label, int* value, int minValue, int maxValue, int defaultValue,
                  const char* tooltip = nullptr);
 bool PropertyBool(const char* label, bool* value, bool defaultValue,
@@ -142,6 +145,18 @@ Thumbnail ThumbnailButton(const char* id, ImTextureID texture, float size, bool 
 // 行そのものが選択を示すので、画像側にも枠を出すと選択が二重に見える。
 // texture の ptr が 0 なら中身の代わりに枠だけを描く。
 void ThumbnailImage(ImTextureID texture, float size);
+
+// リンク切れのサムネイル。**画像が無いので、絵の代わりに警告の三角を描く。**
+//
+// 読み込み元のファイルが見つからないテクスチャは一覧から消さず、
+// この見た目で残す（繋ぎ直すための入口を保つ）。タイルは枠の色で塗り、
+// 警告色の枠と三角（字形の無い記号なので図形で描く）を載せる。
+// ThumbnailButton / ThumbnailImage と同じ矩形を渡す。
+void MissingThumbnail(const ImVec2& min, const ImVec2& max);
+
+// リンク切れの目印。**絵のある**サムネイルの右下に小さく重ねる。
+// 参照先の一部が欠けているマテリアルのように、絵は出せるが不完全なものに使う。
+void MissingBadge(const ImVec2& min, const ImVec2& max);
 
 // 一覧の行に置く単色のサムネイル。テクスチャを持たないもの
 // （マテリアルを割り当てていないレイヤーなど）の代わりに使う。

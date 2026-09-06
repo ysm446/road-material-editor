@@ -134,7 +134,7 @@ PathScreenCache BuildPathScreenCache(const graph::PathSettings& path, const XMMA
     cache.points.reserve(path.points.size());
     for (const graph::PathPoint& point : path.points) {
         const ProjectedPoint projected = ProjectToViewport(
-            viewProjection, worldOf(point.u, point.v, point.heightOffsetMeters), viewportMin,
+            viewProjection, worldOf(point.x, point.z, point.y), viewportMin,
             size);
         cache.points.push_back({point.id, projected.screen, projected.visible});
     }
@@ -168,8 +168,8 @@ PathScreenCache BuildPathScreenCache(const graph::PathSettings& path, const XMMA
         }
         std::vector<float> cumulative(control.size(), 0.0f);
         for (size_t c = 1; c < control.size(); ++c) {
-            const float du = control[c].u - control[c - 1].u;
-            const float dv = control[c].v - control[c - 1].v;
+            const float du = control[c].x - control[c - 1].x;
+            const float dv = control[c].z - control[c - 1].z;
             cumulative[c] = cumulative[c - 1] + std::sqrt(du * du + dv * dv);
         }
         const float total = std::max(cumulative.back(), 1e-9f);
@@ -177,10 +177,10 @@ PathScreenCache BuildPathScreenCache(const graph::PathSettings& path, const XMMA
             const graph::PathPoint& from = control[c];
             const graph::PathPoint& to = control[c + 1];
             const ProjectedPoint pa = ProjectToViewport(
-                viewProjection, worldOf(from.u, from.v, from.heightOffsetMeters), viewportMin,
+                viewProjection, worldOf(from.x, from.z, from.y), viewportMin,
                 size);
             const ProjectedPoint pb = ProjectToViewport(
-                viewProjection, worldOf(to.u, to.v, to.heightOffsetMeters), viewportMin, size);
+                viewProjection, worldOf(to.x, to.z, to.y), viewportMin, size);
             // 画面上の長さで割る数を決める。長い線ほど細かく割って地形に沿わせる。
             // ガイドは 3D の直線で、画面上でも直線になるので両端だけでよい。
             const float length =
@@ -190,10 +190,10 @@ PathScreenCache BuildPathScreenCache(const graph::PathSettings& path, const XMMA
             // 前の区間の終点と重ねない。
             for (int i = (c == 0) ? 0 : 1; i <= segments; ++i) {
                 const float s = static_cast<float>(i) / static_cast<float>(segments);
-                const float u = from.u + (to.u - from.u) * s;
-                const float v = from.v + (to.v - from.v) * s;
+                const float u = from.x + (to.x - from.x) * s;
+                const float v = from.z + (to.z - from.z) * s;
                 const float offset =
-                    from.heightOffsetMeters + (to.heightOffsetMeters - from.heightOffsetMeters) * s;
+                    from.y + (to.y - from.y) * s;
                 const ProjectedPoint projected =
                     ProjectToViewport(viewProjection, worldOf(u, v, offset), viewportMin, size);
                 screenEdge.polyline.push_back(projected.screen);
@@ -218,7 +218,7 @@ PathScreenCache BuildPathScreenCache(const graph::PathSettings& path, const XMMA
         for (const graph::PathCurveSample& sample :
              graph::SamplePathStrand(path, cache.strands[i], kSamplesPerSpan)) {
             const ProjectedPoint projected = ProjectToViewport(
-                viewProjection, worldOf(sample.u, sample.v, sample.heightOffsetMeters),
+                viewProjection, worldOf(sample.x, sample.z, sample.y),
                 viewportMin, size);
             cache.curves[i].polyline.push_back(projected.screen);
             cache.curves[i].visible.push_back(projected.visible);
@@ -279,11 +279,13 @@ graph::PathElementId NearestEdge(const PathScreenCache& cache, const ImVec2& mou
 struct PathGizmoScreen {
     bool valid = false;
     ImVec2 center{};
-    ImVec2 tip[2]{};
+    ImVec2 tip[3]{};
+    bool axisValid[3]{};
+    int axisCount = 2;
     // 軸に沿って画面上を 1px 動いたときの UV の変化量。
-    float uvPerPixel[2] = {0.0f, 0.0f};
+    float uvPerPixel[3]{};
     // 軸の画面上の単位ベクトル。
-    ImVec2 direction[2]{};
+    ImVec2 direction[3]{};
 };
 
 // 選択で動く点（点の集合、または鎖の両端と内側）。
@@ -320,7 +322,14 @@ PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
     if (movable.empty() || !graph::PathPointsCentroid(path, movable, u, v) || planeSize <= 0.0f) {
         return gizmo;
     }
-    const XMFLOAT3 center = worldOf(u, v, 0.0f);
+    float height = 0.0f;
+    size_t count = 0;
+    for (const auto id : movable) {
+        if (const auto* point = path.FindPoint(id)) { height += point->y; ++count; }
+    }
+    if (count > 0) height /= static_cast<float>(count);
+    const XMFLOAT3 center = worldOf(u, v, height);
+    gizmo.axisCount = path.worldSpace ? 3 : 2;
     const ProjectedPoint projectedCenter =
         ProjectToViewport(viewProjection, center, viewportMin, size);
     if (!projectedCenter.visible) {
@@ -328,20 +337,17 @@ PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
     }
     gizmo.center = projectedCenter.screen;
     // 1m だけ進めて画面上の長さを測り、見た目の長さが一定になるよう伸ばす。
-    const XMFLOAT3 axes[2] = {XMFLOAT3{1.0f, 0.0f, 0.0f}, XMFLOAT3{0.0f, 0.0f, 1.0f}};
+    const XMFLOAT3 axes[3] = {{1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}};
     const float probeMeters = std::max(1.0f, planeSize * 0.01f);
-    for (int axis = 0; axis < 2; ++axis) {
-        const XMFLOAT3 probe{center.x + axes[axis].x * probeMeters, center.y,
+    for (int axis = 0; axis < gizmo.axisCount; ++axis) {
+        const XMFLOAT3 probe{center.x + axes[axis].x * probeMeters, center.y + axes[axis].y * probeMeters,
                              center.z + axes[axis].z * probeMeters};
         const ProjectedPoint projected = ProjectToViewport(viewProjection, probe, viewportMin, size);
-        if (!projected.visible) {
-            return gizmo;
-        }
+        if (!projected.visible) continue;
         ImVec2 delta(projected.screen.x - gizmo.center.x, projected.screen.y - gizmo.center.y);
         const float pixels = std::sqrt(delta.x * delta.x + delta.y * delta.y);
-        if (pixels < 1e-3f) {
-            return gizmo;
-        }
+        if (pixels < 1e-3f) continue;
+        gizmo.axisValid[axis] = true;
         delta.x /= pixels;
         delta.y /= pixels;
         gizmo.direction[axis] = delta;
@@ -354,15 +360,16 @@ PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
     return gizmo;
 }
 
-// ギズモのどこにカーソルがあるか。0 = X、1 = Z、2 = 平面（中央）、-1 = 無し。
+// ギズモのどこにカーソルがあるか。0 = X、1 = Z、2 = Y、3 = 平面（中央）、-1 = 無し。
 int PathGizmoHit(const PathGizmoScreen& gizmo, const ImVec2& mouse) {
     if (!gizmo.valid) {
         return -1;
     }
     if (Distance(mouse, gizmo.center) <= ui::Scaled(kGizmoCenterRadius + 2.0f)) {
-        return 2;
+        return 3;
     }
-    for (int axis = 0; axis < 2; ++axis) {
+    for (int axis = 0; axis < gizmo.axisCount; ++axis) {
+        if (!gizmo.axisValid[axis]) continue;
         float t = 0.0f;
         if (DistanceToSegment(mouse, gizmo.center, gizmo.tip[axis], t) <= ui::Scaled(kGizmoHitRadius)) {
             return axis;
@@ -379,14 +386,14 @@ graph::Node* Application::CurrentPathNode() {
     return node;
 }
 
-XMFLOAT3 Application::PathWorldPosition(float u, float v, float heightOffsetMeters) const {
+XMFLOAT3 Application::PathWorldPosition(float u, float v, float y) const {
     const graph::Node* node = m_graph.FindNode(m_selectedGraphNode);
     const auto* settings = node ? std::get_if<graph::PathNodeSettings>(&node->settings) : nullptr;
-    if (settings && settings->path.worldSpace) return {u, heightOffsetMeters, v};
+    if (settings && settings->path.worldSpace) return {u, y, v};
     const float size = m_renderer.PlaneSize();
     const float scale = m_renderer.DisplacementScale();
     const float height = m_renderer.Evaluator().Heightfield().Sample(u, v);
-    return XMFLOAT3{(u - 0.5f) * size, (height - 0.5f) * scale + heightOffsetMeters,
+    return XMFLOAT3{(u - 0.5f) * size, (height - 0.5f) * scale + y,
                     (v - 0.5f) * size};
 }
 
@@ -425,7 +432,7 @@ bool Application::PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin,
         float height = 0.0f;
         if (!m_pathEdit.selected.empty()) {
             if (const auto* point = settings->path.FindPoint(m_pathEdit.selected.front())) {
-                height = point->heightOffsetMeters;
+                height = point->y;
             }
         }
         if (std::abs(dir.y) < 1e-6f) return false;
@@ -555,16 +562,16 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     const std::vector<graph::PathElementId> movable = PathMovablePoints(
         path, state.selected, state.selectedEdges, state.selectedStrandInterior);
     const PathGizmoScreen gizmo =
-        (!io.KeyCtrl && !state.dragging)
+        (!io.KeyCtrl && !state.dragging && !state.boxPending)
             ? BuildPathGizmo(path, movable, path.worldSpace ? 1.0f : m_renderer.PlaneSize(), viewProjection, viewportMin,
                              size, worldOf)
             : PathGizmoScreen{};
-    state.gizmoHover = (mouseInside && !state.gizmoDragging) ? PathGizmoHit(gizmo, mouse) : -1;
+    state.gizmoHover = (mouseInside && !state.gizmoDragging && !state.boxPending) ? PathGizmoHit(gizmo, mouse) : -1;
 
     // --- ホバー ---------------------------------------------------------------
     state.hoverPoint = 0;
     state.hoverEdge = 0;
-    if (mouseInside && !state.dragging && !state.gizmoDragging && state.gizmoHover < 0) {
+    if (mouseInside && !state.dragging && !state.gizmoDragging && !state.boxPending && state.gizmoHover < 0) {
         state.hoverPoint = NearestPoint(cache, mouse, ui::Scaled(kPointHitRadius), 0);
         if (state.hoverPoint == 0) {
             state.hoverEdge =
@@ -609,11 +616,11 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
             return 0.01f;
         }
         const ProjectedPoint a = ProjectToViewport(
-            viewProjection, worldOf(point->u, point->v, point->heightOffsetMeters), viewportMin,
+            viewProjection, worldOf(point->x, point->z, point->y), viewportMin,
             size);
         const ProjectedPoint b = ProjectToViewport(
-            viewProjection, worldOf((path.worldSpace ? point->u + 0.01f : std::min(point->u + 0.01f, 1.0f)), point->v,
-                                    point->heightOffsetMeters),
+            viewProjection, worldOf((path.worldSpace ? point->x + 0.01f : std::min(point->x + 0.01f, 1.0f)), point->z,
+                                    point->y),
             viewportMin, size);
         if (!a.visible || !b.visible) {
             return 0.01f;
@@ -628,12 +635,16 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
         state.gizmoAxis = state.gizmoHover;
         state.gizmoDragging = true;
         state.gizmoPressPos = mouse;
+        if (state.gizmoAxis >= 0 && state.gizmoAxis < 3) {
+            state.gizmoAxisDirection = gizmo.direction[state.gizmoAxis];
+            state.gizmoUnitsPerPixel = gizmo.uvPerPixel[state.gizmoAxis];
+        }
         state.gizmoPressU = terrainU;
         state.gizmoPressV = terrainV;
         state.gizmoStart.clear();
         for (const graph::PathElementId id : movable) {
             if (const graph::PathPoint* point = path.FindPoint(id)) {
-                state.gizmoStart.push_back({id, point->u, point->v});
+                state.gizmoStart.push_back({id, point->x, point->z, point->y});
             }
         }
     } else if (mouseInside && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -681,8 +692,46 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
             // エッジを選ぶ = その鎖を選ぶ。挿入は Ctrl + クリック。
             selectStrand(state.hoverEdge);
         } else {
-            // 空の所。選択を外す（次の Ctrl + クリックは新しい線の始点）。
-            selectOnly(0);
+            state.boxPending = true;
+            state.boxSelecting = false;
+            state.boxAdditive = io.KeyShift;
+            state.boxStart = state.boxEnd = mouse;
+            state.boxPreviousPoints = state.selected;
+            state.boxPreviousEdges = state.selectedEdges;
+            state.boxPreviousInterior = state.selectedStrandInterior;
+
+        }
+    }
+
+    // 空からのドラッグは画面上の制御点を矩形選択。形状とアンドゥ履歴は変更しない。
+    if (state.boxPending) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            state.selected = state.boxPreviousPoints;
+            state.selectedEdges = state.boxPreviousEdges;
+            state.selectedStrandInterior = state.boxPreviousInterior;
+            state.boxPending = state.boxSelecting = false;
+            return;
+        }
+        state.boxEnd = {std::clamp(mouse.x, viewportMin.x, viewportMax.x),
+                        std::clamp(mouse.y, viewportMin.y, viewportMax.y)};
+        state.boxSelecting |= Distance(state.boxStart, state.boxEnd) > ui::Scaled(kDragThreshold);
+        if (state.boxSelecting) {
+            state.selected = state.boxAdditive ? state.boxPreviousPoints : std::vector<graph::PathElementId>{};
+            state.selectedEdges.clear();
+            state.selectedStrandInterior.clear();
+            const ImVec2 lo(std::min(state.boxStart.x, state.boxEnd.x), std::min(state.boxStart.y, state.boxEnd.y));
+            const ImVec2 hi(std::max(state.boxStart.x, state.boxEnd.x), std::max(state.boxStart.y, state.boxEnd.y));
+            for (const auto& point : cache.points) {
+                if (point.visible && point.screen.x >= lo.x && point.screen.x <= hi.x &&
+                    point.screen.y >= lo.y && point.screen.y <= hi.y &&
+                    std::find(state.selected.begin(), state.selected.end(), point.id) == state.selected.end()) {
+                    state.selected.push_back(point.id);
+                }
+            }
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (!state.boxSelecting && !state.boxAdditive) selectOnly(0);
+            state.boxPending = state.boxSelecting = false;
         }
     }
 
@@ -691,35 +740,40 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     if (state.gizmoDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         float du = 0.0f;
         float dv = 0.0f;
+        float dy = 0.0f;
         bool haveDelta = false;
-        if (state.gizmoAxis == 2) {
+        if (state.gizmoAxis == 3) {
             // 平面。掴んだ所と今のカーソルの地形上の差。地形の外では動かさない。
             if (onTerrain) {
                 du = terrainU - state.gizmoPressU;
                 dv = terrainV - state.gizmoPressV;
                 haveDelta = true;
             }
-        } else if (gizmo.valid && state.gizmoAxis >= 0) {
+        } else if (state.gizmoAxis >= 0 && state.gizmoAxis < 3) {
             // 軸。カーソルの動きを軸の向きへ落とし、画面上の距離を UV へ直す。
             const ImVec2 delta(mouse.x - state.gizmoPressPos.x, mouse.y - state.gizmoPressPos.y);
-            const ImVec2 direction = gizmo.direction[state.gizmoAxis];
+            const ImVec2 direction = state.gizmoAxisDirection;
             const float along = delta.x * direction.x + delta.y * direction.y;
-            const float amount = along * gizmo.uvPerPixel[state.gizmoAxis];
+            const float amount = along * state.gizmoUnitsPerPixel;
             if (state.gizmoAxis == 0) {
                 du = amount;
-            } else {
+            } else if (state.gizmoAxis == 1) {
                 dv = amount;
+            } else {
+                dy = amount;
             }
             haveDelta = true;
         }
         if (haveDelta) {
             for (const PathEditState::GizmoStart& start : state.gizmoStart) {
                 if (graph::PathPoint* point = path.FindPoint(start.id)) {
-                    const float u = (path.worldSpace ? start.u + du : std::clamp(start.u + du, 0.0f, 1.0f));
-                    const float v = (path.worldSpace ? start.v + dv : std::clamp(start.v + dv, 0.0f, 1.0f));
-                    if (u != point->u || v != point->v) {
-                        point->u = u;
-                        point->v = v;
+                    const float u = (path.worldSpace ? start.x + du : std::clamp(start.x + du, 0.0f, 1.0f));
+                    const float v = (path.worldSpace ? start.z + dv : std::clamp(start.z + dv, 0.0f, 1.0f));
+                    const float y = start.y + dy;
+                    if (u != point->x || v != point->z || y != point->y) {
+                        point->x = u;
+                        point->z = v;
+                        point->y = y;
                         changed = true;
                     }
                 }
@@ -740,8 +794,8 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
         }
         if (state.dragMoved && onTerrain) {
             if (graph::PathPoint* point = path.FindPoint(state.dragPoint)) {
-                point->u = terrainU;
-                point->v = terrainV;
+                point->x = terrainU;
+                point->z = terrainV;
                 changed = true;
             }
             // 吸着先。Shift を押している間は吸着しない。
@@ -805,8 +859,8 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
             float sumU = 0.0f;
             float sumV = 0.0f;
             for (const graph::PathPoint& point : m_pathClipboard.points) {
-                sumU += point.u;
-                sumV += point.v;
+                sumU += point.x;
+                sumV += point.z;
             }
             const float count = static_cast<float>(m_pathClipboard.points.size());
             du = atU - sumU / count;
@@ -823,7 +877,7 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     };
 
     // --- キー ---------------------------------------------------------------------
-    if (mouseInside && !io.WantTextInput && !state.dragging && !state.gizmoDragging) {
+    if (mouseInside && !io.WantTextInput && !state.dragging && !state.gizmoDragging && !state.boxPending) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             selectOnly(0);
         }
@@ -873,7 +927,7 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     }
 
     // --- 右クリックのメニュー --------------------------------------------------------
-    if (mouseInside && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !state.dragging) {
+    if (mouseInside && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !state.dragging && !state.boxPending) {
         state.menuPoint = state.hoverPoint;
         state.menuEdge = state.hoverEdge;
         state.menuEdgeT = state.hoverEdgeT;
@@ -1152,8 +1206,8 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
                         const float t = static_cast<float>(i) / kSegments;
                         const ProjectedPoint projected = ProjectToViewport(
                             viewProjection,
-                            worldOf(from->u + (u - from->u) * t, from->v + (v - from->v) * t,
-                                    from->heightOffsetMeters),
+                            worldOf(from->x + (u - from->x) * t, from->z + (v - from->z) * t,
+                                    from->y),
                             viewportMin, size);
                         if (previousVisible && projected.visible) {
                             drawList->AddLine(previous, projected.screen,
@@ -1197,20 +1251,23 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
 
     // --- 移動ギズモ -------------------------------------------------------------
     // 座標軸ギズモと同じ色（X = 赤、Z = 青）。掴める所は明るくする。
-    if (!io.KeyCtrl && !state.dragging) {
+    if (!io.KeyCtrl && !state.dragging && !state.boxPending) {
         const std::vector<graph::PathElementId> movable = PathMovablePoints(
             path, state.selected, state.selectedEdges, state.selectedStrandInterior);
         const PathGizmoScreen gizmo =
             BuildPathGizmo(path, movable, path.worldSpace ? 1.0f : m_renderer.PlaneSize(), viewProjection, viewportMin,
                            size, worldOf);
         if (gizmo.valid) {
-            const ImU32 axisColors[2] = {IM_COL32(226, 96, 96, 255), IM_COL32(96, 146, 226, 255)};
+            const ImU32 axisColors[3] = {IM_COL32(226, 96, 96, 255), IM_COL32(96, 146, 226, 255), IM_COL32(96, 206, 116, 255)};
             const int active = state.gizmoDragging ? state.gizmoAxis : state.gizmoHover;
-            for (int axis = 0; axis < 2; ++axis) {
+            for (int axis = 0; axis < gizmo.axisCount; ++axis) {
+                if (!gizmo.axisValid[axis]) continue;
                 const ImU32 color = (active == axis) ? hoverColor : axisColors[axis];
                 const float width = ui::Scaled((active == axis) ? 3.0f : 2.0f);
                 drawList->AddLine(gizmo.center, gizmo.tip[axis], lineShadow, width + ui::Scaled(2.0f));
                 drawList->AddLine(gizmo.center, gizmo.tip[axis], color, width);
+                const char* labels[] = {"X", "Z", "Y"};
+                drawList->AddText(ImVec2(gizmo.tip[axis].x + ui::Scaled(5.0f), gizmo.tip[axis].y), color, labels[axis]);
                 // 先端の矢じり。
                 const ImVec2 dir = gizmo.direction[axis];
                 const ImVec2 side(-dir.y, dir.x);
@@ -1224,7 +1281,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
             }
             // 中央の平面ハンドル。
             const float radius = ui::Scaled(kGizmoCenterRadius);
-            const ImU32 centerColor = (active == 2) ? hoverColor : IM_COL32(235, 235, 235, 220);
+            const ImU32 centerColor = (active == 3) ? hoverColor : IM_COL32(235, 235, 235, 220);
             drawList->AddRectFilled(ImVec2(gizmo.center.x - radius, gizmo.center.y - radius),
                                     ImVec2(gizmo.center.x + radius, gizmo.center.y + radius),
                                     lineShadow, ui::Scaled(2.0f));
@@ -1275,6 +1332,8 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
                 {"Esc", "選択を外す"}};
     } else {
         rows = {{"クリック", "点や線（鎖）を選ぶ"},
+                {"空をドラッグ", "ポイントを矩形選択"},
+                {"Shift + ドラッグ", "追加選択"},
                 {"Ctrl + クリック", "線を始める"},
                 {"Ctrl + 線をクリック", "点を挿入"},
                 {"Ctrl+V", "コピーしたパスをカーソルへ貼る"},
@@ -1309,6 +1368,12 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
         }
     }
 
+    if (state.boxSelecting) {
+        const ImVec2 lo(std::min(state.boxStart.x, state.boxEnd.x), std::min(state.boxStart.y, state.boxEnd.y));
+        const ImVec2 hi(std::max(state.boxStart.x, state.boxEnd.x), std::max(state.boxStart.y, state.boxEnd.y));
+        drawList->AddRectFilled(lo, hi, ImGui::GetColorU32(ImGuiCol_TextSelectedBg, 0.4f));
+        drawList->AddRect(lo, hi, ImGui::GetColorU32(ImGuiCol_PlotLinesHovered));
+    }
     drawList->PopClipRect();
 }
 
@@ -1354,10 +1419,10 @@ bool Application::DrawPathSettings(graph::Node& node) {
                 }
                 path.edges = std::move(edges);
                 for (auto& point : path.points) {
-                    const auto world = PathWorldPosition(point.u, point.v, point.heightOffsetMeters);
-                    point.u = world.x;
-                    point.v = world.z;
-                    point.heightOffsetMeters = world.y;
+                    const auto world = PathWorldPosition(point.x, point.z, point.y);
+                    point.x = world.x;
+                    point.z = world.z;
+                    point.y = world.y;
                 }
                 path.worldSpace = true;
                 m_pathEdit = PathEditState{};
@@ -1426,15 +1491,16 @@ bool Application::DrawPathSettings(graph::Node& node) {
         bool pointChanged = false;
         if (ui::BeginPropertyTable("graphPathPointRows")) {
             if (path.worldSpace) {
-                const bool xChanged = ui::PropertyFloat("X", &edit.u, -10000.0f, 10000.0f,
-                    0.0f, "ワールドX座標（m）", "%.3f m");
-                const bool zChanged = ui::PropertyFloat("Z", &edit.v, -10000.0f, 10000.0f,
-                    0.0f, "ワールドZ座標（m）", "%.3f m");
+                float xyz[] = {edit.x, edit.y, edit.z};
+                constexpr float defaultXyz[] = {0.0f, 0.0f, 0.0f};
+                const unsigned axes = ui::PropertyFloat3Input("位置 (m)", xyz, defaultXyz,
+                    "ワールド座標。変更した軸だけを選択点へ適用する");
                 for (auto* point : selectedPoints) {
-                    if (xChanged) point->u = edit.u;
-                    if (zChanged) point->v = edit.v;
+                    if (axes & 1u) point->x = xyz[0];
+                    if (axes & 2u) point->y = xyz[1];
+                    if (axes & 4u) point->z = xyz[2];
                 }
-                changed |= xChanged || zChanged;
+                changed |= axes != 0;
             }
             pointChanged |= ui::PropertyFloat("幅", &edit.widthMeters, 0.5f, 2000.0f,
                                               path.defaultWidthMeters, "この点での幅（m）",
@@ -1446,11 +1512,10 @@ bool Application::DrawPathSettings(graph::Node& node) {
             pointChanged |= ui::PropertyFloat("強さ", &edit.intensity, 0.0f, 1.0f,
                                               path.defaultIntensity, "この点でのマスクの強さ",
                                               "%.2f");
-            pointChanged |= ui::PropertyFloat(
-                path.worldSpace ? "Y（高さ）" : "高さのずれ", &edit.heightOffsetMeters, -200.0f, 200.0f, 0.0f,
-                path.worldSpace ? "ワールドY座標（m）。道路カーブの高さ" :
-                "地形からの高さのずれ（m）。表示と、高さを読むノードが使う。Mask Path は見ない",
-                "%.1f m");
+            if (!path.worldSpace) {
+                pointChanged |= ui::PropertyFloat("高さのずれ", &edit.y, -200.0f, 200.0f, 0.0f,
+                    "地形からの高さのずれ（m）", "%.1f m");
+            }
             ui::EndPropertyTable();
         }
         if (pointChanged) {
@@ -1458,7 +1523,7 @@ bool Application::DrawPathSettings(graph::Node& node) {
                 point->widthMeters = edit.widthMeters;
                 point->featherMeters = edit.featherMeters;
                 point->intensity = edit.intensity;
-                point->heightOffsetMeters = edit.heightOffsetMeters;
+                if (!path.worldSpace) point->y = edit.y;
             }
             changed = true;
         }

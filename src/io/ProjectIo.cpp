@@ -37,7 +37,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // プロジェクトの版。4 で `layers` 節を廃止し、グラフ (`graph`) を唯一の合成にした
 // （旧ファイルの layers はグラフへ移行して読む）。
 // 5: 任意のメッシュシーン。旧ビルドが scene を無視して地形を表示することを防ぐ。
-constexpr int kProjectFormatVersion = 6;
+constexpr int kProjectFormatVersion = 7;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -548,7 +548,7 @@ compositor::AreaMaskParams ReadAreaMask(const json& parent, const char* key) {
     return params;
 }
 
-// パス（Path ノード）。点とエッジをそのまま書く。座標は正規化 UV、寸法は m。
+// パス。実寸座標はposition:[X,Y,Z]。旧地形PathだけはUVと相対高さを維持する。
 json WritePath(const graph::PathSettings& path) {
     json node;
     node["worldSpace"] = path.worldSpace;
@@ -556,12 +556,16 @@ json WritePath(const graph::PathSettings& path) {
     for (const graph::PathPoint& point : path.points) {
         json item;
         item["id"] = point.id;
-        item["u"] = point.u;
-        item["v"] = point.v;
+        if (path.worldSpace) {
+            item["position"] = json::array({point.x, point.y, point.z});
+        } else {
+            item["u"] = point.x;
+            item["v"] = point.z;
+        }
         item["width"] = point.widthMeters;
         item["feather"] = point.featherMeters;
         item["intensity"] = point.intensity;
-        item["heightOffset"] = point.heightOffsetMeters;
+        if (!path.worldSpace) item["heightOffset"] = point.y;
         points.push_back(std::move(item));
     }
     node["points"] = std::move(points);
@@ -592,8 +596,8 @@ json WritePath(const graph::PathSettings& path) {
                 item["routedTo"] = json::array({edge.routedToU, edge.routedToV});
                 json waypoints = json::array();
                 for (const graph::PathRouteWaypoint& waypoint : edge.waypoints) {
-                    waypoints.push_back(waypoint.u);
-                    waypoints.push_back(waypoint.v);
+                    waypoints.push_back(waypoint.x);
+                    waypoints.push_back(waypoint.z);
                 }
                 item["waypoints"] = std::move(waypoints);
             }
@@ -630,12 +634,18 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
             if (point.id <= 0) {
                 continue;
             }
-            point.u = (path.worldSpace ? ReadFloat(item, "u", 0.0f) : std::clamp(ReadFloat(item, "u", 0.5f), 0.0f, 1.0f));
-            point.v = (path.worldSpace ? ReadFloat(item, "v", 0.0f) : std::clamp(ReadFloat(item, "v", 0.5f), 0.0f, 1.0f));
+            point.x = (path.worldSpace ? ReadFloat(item, "u", 0.0f) : std::clamp(ReadFloat(item, "u", 0.5f), 0.0f, 1.0f));
+            point.z = (path.worldSpace ? ReadFloat(item, "v", 0.0f) : std::clamp(ReadFloat(item, "v", 0.5f), 0.0f, 1.0f));
             point.widthMeters = ReadFloat(item, "width", path.defaultWidthMeters);
             point.featherMeters = ReadFloat(item, "feather", path.defaultFeatherMeters);
             point.intensity = ReadFloat(item, "intensity", path.defaultIntensity);
-            point.heightOffsetMeters = ReadFloat(item, "heightOffset", 0.0f);
+            point.y = ReadFloat(item, "heightOffset", 0.0f);
+            if (path.worldSpace) {
+                const auto position = ReadFloat3(item, "position", {point.x, point.y, point.z});
+                point.x = position.x;
+                point.y = position.y;
+                point.z = position.z;
+            }
             maxId = std::max(maxId, point.id);
             path.points.push_back(point);
         }
@@ -1898,20 +1908,24 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
             if (index <= 0 || texturePath.empty()) {
                 continue;
             }
-            const compositor::TextureId id =
-                refs.textures.Load(device, pipelineCache, texturePath);
+            const std::string name = ReadString(node, "name");
+            compositor::TextureId id = refs.textures.Load(device, pipelineCache, texturePath);
             if (id == compositor::kNoTexture) {
-                // 画像が見つからなくても、残りは読み込む。割り当ては「なし」になる。
-                TG_LOG_WARN("テクスチャを読み込めませんでした: %s",
+                // 画像が見つからなくても、残りは読み込む。**参照は捨てない。**
+                // パスと名前だけの「リンク切れ」として登録し、マテリアルやノードの
+                // 割り当てはそこへ繋いでおく。消してしまうと、次に保存した時点で
+                // どのファイルを指していたかが失われ、繋ぎ直せなくなる。
+                TG_LOG_WARN("テクスチャが見つかりません（リンク切れ）: %s",
                             ToUtf8Portable(texturePath).c_str());
-                continue;
+                id = refs.textures.AddMissing(texturePath, name);
+                if (id == compositor::kNoTexture) {
+                    continue;
+                }
             }
             textureIds[index] = id;
             if (compositor::LibraryTexture* entry = refs.textures.FindMutable(id);
-                entry != nullptr) {
-                if (const std::string name = ReadString(node, "name"); !name.empty()) {
-                    entry->name = name;
-                }
+                entry != nullptr && !name.empty()) {
+                entry->name = name;
             }
         }
     }
@@ -2135,7 +2149,10 @@ compositor::MaterialAssetId LoadMaterial(const std::filesystem::path& path, rhi:
         }
         const compositor::TextureId id = textures.Load(device, pipelineCache, texturePath);
         if (id == compositor::kNoTexture) {
-            TG_LOG_WARN("テクスチャを読み込めませんでした: %s", ToUtf8Portable(texturePath).c_str());
+            // プロジェクトと同じく、見つからない画像はリンク切れとして残す。
+            TG_LOG_WARN("テクスチャが見つかりません（リンク切れ）: %s",
+                        ToUtf8Portable(texturePath).c_str());
+            return textures.AddMissing(texturePath, std::string());
         }
         return id;
     };

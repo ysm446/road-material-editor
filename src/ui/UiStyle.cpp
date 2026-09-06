@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <cstring>
 #include <string>
@@ -209,6 +210,56 @@ void ThumbnailImage(ImTextureID texture, float size) {
     drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border), rounding, 0, Scaled(1.0f));
 
     ImGui::Dummy(ImVec2(size, size));
+}
+
+namespace {
+
+// 警告の三角（中に縦棒と点）。字形の無い記号なので図形で描く。
+// center を中心に、一辺がおよそ size の正三角形。
+void DrawWarningTriangle(ImDrawList* drawList, const ImVec2& center, float size, ImU32 color) {
+    const float half = size * 0.5f;
+    const float top = center.y - half * 0.95f;
+    const float bottom = center.y + half * 0.75f;
+    drawList->AddTriangle(ImVec2(center.x, top), ImVec2(center.x + half, bottom),
+                          ImVec2(center.x - half, bottom), color, std::max(1.0f, size * 0.09f));
+    // 「!」は上の棒と下の点。棒は三角の中央より少し上へ寄せる。
+    const float thickness = std::max(1.0f, size * 0.09f);
+    drawList->AddLine(ImVec2(center.x, center.y - half * 0.35f),
+                      ImVec2(center.x, center.y + half * 0.15f), color, thickness);
+    drawList->AddCircleFilled(ImVec2(center.x, center.y + half * 0.42f), thickness * 0.7f,
+                              color);
+}
+
+}  // namespace
+
+void MissingThumbnail(const ImVec2& min, const ImVec2& max) {
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    // 絵が無い所は枠の色で塗って、空白ではなく「場所はある」と見せる。
+    drawList->AddRectFilled(min, max, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
+    const float size = std::min(max.x - min.x, max.y - min.y);
+    DrawWarningTriangle(drawList, ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f),
+                        size * 0.42f, WarnColor());
+    // 枠は内側へ寄せる（ThumbnailFrame の選択枠と同じ理由）。
+    const float thickness = Scaled(1.0f);
+    const float inset = thickness * 0.5f;
+    drawList->AddRect(ImVec2(min.x + inset, min.y + inset), ImVec2(max.x - inset, max.y - inset),
+                      WarnColor(), rounding, 0, thickness);
+}
+
+void MissingBadge(const ImVec2& min, const ImVec2& max) {
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const float tile = std::min(max.x - min.x, max.y - min.y);
+    // 右下の角に、絵を隠さない程度の大きさで。下地を敷いて絵の上でも読めるようにする。
+    const float size = std::max(Scaled(14.0f), tile * 0.26f);
+    const float margin = Scaled(3.0f);
+    const ImVec2 badgeMin(max.x - margin - size, max.y - margin - size);
+    const ImVec2 badgeMax(max.x - margin, max.y - margin);
+    drawList->AddRectFilled(badgeMin, badgeMax, ImGui::GetColorU32(ImGuiCol_FrameBg),
+                            ImGui::GetStyle().FrameRounding);
+    DrawWarningTriangle(drawList, ImVec2((badgeMin.x + badgeMax.x) * 0.5f,
+                                         (badgeMin.y + badgeMax.y) * 0.5f),
+                        size * 0.7f, WarnColor());
 }
 
 void ColorSwatch(const ImVec4& color, float size) {
@@ -619,6 +670,47 @@ bool PropertyFloat(const char* label, float* value, float minValue, float maxVal
     if (ResetDot(NearlyEqual(*value, defaultValue), FormatFloat(defaultValue, format))) {
         *value = std::clamp(defaultValue, minValue, maxValue);
         changed = true;
+    }
+    PropertyEnd();
+    return changed;
+}
+
+unsigned PropertyFloat3Input(const char* label, float* xyz, const float* defaultXyz,
+                             const char* tooltip) {
+    PropertyLabel(label, tooltip);
+    const char* axes[] = {"X", "Y", "Z"};
+    const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+    const float labelWidth = ImGui::CalcTextSize("X").x;
+    const float total = std::min(TextScaled(300.0f), ImGui::GetContentRegionAvail().x - TextScaled(20.0f));
+    const float width = std::max(1.0f, (total - 3.0f * (labelWidth + spacing) - 2.0f * spacing) / 3.0f);
+    unsigned changed = 0;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (axis != 0) ImGui::SameLine(0.0f, spacing);
+        ImGui::PushID(axis);
+        ImGui::TextUnformatted(axes[axis]);
+        ImGui::SameLine(0.0f, spacing);
+        ImGui::SetNextItemWidth(width);
+        char buffer[64];
+        std::snprintf(buffer, sizeof(buffer), "%.9g", xyz[axis]);
+        // InputScalarはEnterReturnsTrue非対応。テキストを確定後に数値へ変換する。
+        if (ImGui::InputText("##coordinate", buffer, sizeof(buffer),
+                             ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll |
+                             ImGuiInputTextFlags_CharsScientific)) {
+            char* end = nullptr;
+            const float shown = std::strtof(buffer, &end);
+            if (end != buffer && *end == '\0' && std::isfinite(shown) && shown != xyz[axis]) {
+                xyz[axis] = shown;
+                changed |= 1u << axis;
+            }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s (m) — Enterで確定、Escで取消", axes[axis]);
+        ImGui::PopID();
+    }
+    const bool atDefault = NearlyEqual(xyz[0], defaultXyz[0]) &&
+                           NearlyEqual(xyz[1], defaultXyz[1]) && NearlyEqual(xyz[2], defaultXyz[2]);
+    if (ResetDot(atDefault, "XYZを既定値へ戻す")) {
+        for (int axis = 0; axis < 3; ++axis) xyz[axis] = defaultXyz[axis];
+        changed = 7;
     }
     PropertyEnd();
     return changed;

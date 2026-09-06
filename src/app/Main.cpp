@@ -37,6 +37,18 @@ tg::StartupOptions ParseCommandLine() {
         if (argument == L"--project" && (i + 1) < argc) {
             options.projectPath = argv[i + 1];
             ++i;
+        } else if (argument == L"--test-drag" && (i + 4) < argc) {
+            options.testDrag = true;
+            options.testDragStart.x = static_cast<float>(::_wtof(argv[++i]));
+            options.testDragStart.y = static_cast<float>(::_wtof(argv[++i]));
+            options.testDragEnd.x = static_cast<float>(::_wtof(argv[++i]));
+            options.testDragEnd.y = static_cast<float>(::_wtof(argv[++i]));
+        } else if (argument == L"--test-drag-shift") {
+            options.testDragShift = true;
+        } else if (argument == L"--test-drag-cancel") {
+            options.testDragCancel = true;
+        } else if (argument == L"--select-path-point" && (i + 1) < argc) {
+            options.selectPathPoint = ::_wtoi(argv[++i]);
         } else if (argument == L"--select-node" && (i + 1) < argc) {
             options.selectNode = ::_wtoi(argv[++i]);
         } else if (argument == L"--save-project" && (i + 1) < argc) {

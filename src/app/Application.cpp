@@ -354,6 +354,9 @@ int Application::Run() {
             }
         }
 
+        // リンク切れの繋ぎ直しも読み込みなので、同じくフレームの外で行う。
+        ProcessPendingTextureRelinks();
+
         // サムネイルの生成も GPU 待機を伴う。
         m_materialLibrary.ProcessPendingWork(m_device, m_pipelineCache, m_textureLibrary);
         // 天球のサムネイルは HDR ファイルの読み込みを伴うので、1 フレームに 1 枚だけ作る。
@@ -365,8 +368,20 @@ int Application::Run() {
             m_renderer.Resize(m_device, m_requestedViewportWidth, m_requestedViewportHeight);
         }
 
-        m_imgui.BeginFrame();
+        ImGuiLayer::TestInput testInput{};
+        const bool testDrag = m_options.testDrag && !m_options.uiScreenshotPath.empty();
+        if (testDrag) {
+            testInput.mouse = m_frameCounter < 13 ? m_options.testDragStart : m_options.testDragEnd;
+            testInput.leftDown = m_frameCounter >= 11 && m_frameCounter < 16;
+            testInput.shift = m_options.testDragShift && m_frameCounter < 17;
+            testInput.escape = m_options.testDragCancel && m_frameCounter == 15;
+        }
+        m_imgui.BeginFrame(testDrag ? &testInput : nullptr);
         DrawUi();
+        if (testDrag && m_frameCounter == 18) {
+            TG_LOG_INFO("SelectionTest: points=%zu meshes=%zu dirty=%d", m_pathEdit.selected.size(),
+                        m_meshSelection.selected.size(), m_documentDirty ? 1 : 0);
+        }
 
         ID3D12GraphicsCommandList* commandList =
             m_device.BeginFrame(m_settings.Display().clearColor);

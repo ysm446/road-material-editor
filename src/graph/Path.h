@@ -7,8 +7,8 @@
 
 // パス（Path ノードの中身）。道路生成へ渡す、向き付きの実寸カーブ。
 //
-// 新規ノードは worldSpace=true。既存の識別子を維持し、u=X、v=Z、heightOffsetMeters=Y
-// として実寸（m）を保存する。座標を0〜1やグリッド内へ丸めない。
+// 新規ノードは worldSpace=true。x/y/zの3次元座標（m）を保存する。
+// 座標を0〜1やグリッド内へ丸めない。
 // worldSpace=false は旧形式の地形UV＋相対高さ。明示的に実寸へ変換できる。
 //
 // - 幅 / フェザー / 強さは点ごと。エッジ上では両端から補間する。
@@ -22,14 +22,14 @@ using PathElementId = int;
 
 struct PathPoint {
     PathElementId id = 0;
-    float u = 0.5f;  // worldSpace: X(m)、旧形式: 地形UV
-    float v = 0.5f;
+    float x = 0.5f;  // worldSpace: X(m)、旧形式: 地形UV
+    float z = 0.5f;
     float widthMeters = 24.0f;    // パスの全幅（m）
     float featherMeters = 12.0f;  // 幅の外側を 0 へ落とす幅（m）
     float intensity = 1.0f;       // マスクの強さ（0〜1）
-    // 地形からの高さのずれ（m）。表示と、将来の高さを読むノードが使う。
+    // Y座標（m）。旧形式だけは地形からの高さのずれ。
     // Mask Path は見ない。
-    float heightOffsetMeters = 0.0f;
+    float y = 0.0f;
 };
 
 // 鎖（分岐から分岐までのエッジの並び）をどう描くか。エッジに持ち、鎖を選んだときに
@@ -58,8 +58,8 @@ enum class PathRoute : uint32_t {
 };
 
 struct PathRouteWaypoint {
-    float u = 0.0f;
-    float v = 0.0f;
+    float x = 0.0f;
+    float z = 0.0f;
 };
 
 struct PathEdge {
@@ -109,16 +109,16 @@ struct PathStrand {
 
 // 曲線を割った標本。座標系はPathSettingsに従う。高さと幅も補間して道路生成へ渡せる。
 struct PathCurveSample {
-    float u = 0.0f;
-    float v = 0.0f;
+    float x = 0.0f;
+    float z = 0.0f;
     float widthMeters = 0.0f;
     float featherMeters = 0.0f;
     float intensity = 1.0f;
-    float heightOffsetMeters = 0.0f;
+    float y = 0.0f;
 };
 
 struct PathSettings {
-    // true: u=X(m), v=Z(m), heightOffsetMeters=Y(m)。旧形式は地形UV。
+    // true: x/y/zはワールド座標(m)。falseは旧形式のUV(x/z)と相対高さ(y)。
     bool worldSpace = false;
     std::vector<PathPoint> points;
     std::vector<PathEdge> edges;

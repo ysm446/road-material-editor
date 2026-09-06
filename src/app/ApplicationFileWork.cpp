@@ -210,6 +210,7 @@ void Application::ResetProject() {
     // グラフを既定（ベース → 出力）へ戻す。位置はエディタへ流し込み直す。
     // m_graphStack は代入で作り直さず MarkDirty で改版する（revision が戻ると
     // 評価器が「変わっていない」と判断してしまう）。
+    m_meshSelection = MeshSelectionState{};
     m_graph = graph::NodeGraph::CreateDefault();
     m_selectedGraphNode = 0;
     m_previewGraphNode = 0;
@@ -281,10 +282,15 @@ void Application::ProcessPendingFileWork() {
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_paintMasks,
                              m_skyLibrary,     m_renderer,       m_graph};
         if (io::LoadProject(path, m_device, m_pipelineCache, refs)) {
+            m_meshSelection = MeshSelectionState{};
             m_recentProjects.Add(path);
             m_projectPath = path;
             m_selectedGraphNode = m_graph.FindNode(m_options.selectNode) ? m_options.selectNode : 0;
             m_options.selectNode = 0;
+            m_pathEdit = PathEditState{};
+            m_pathEdit.nodeId = m_selectedGraphNode;
+            if (m_options.selectPathPoint != 0) m_pathEdit.selected = {m_options.selectPathPoint};
+            m_options.selectPathPoint = 0;
             m_previewGraphNode = 0;
             m_previewGraphPin = 0;
             m_compiledGraphRevision = 0;

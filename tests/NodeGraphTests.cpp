@@ -159,24 +159,58 @@ void RunNodeGraphTests() {
         auto& path = std::get<tg::graph::PathNodeSettings>(graph.FindMutableNode(id)->settings).path;
         Check(path.worldSpace, "新規Pathは実寸座標");
         const auto a = tg::graph::AddPathPoint(path, -30.0f, -12.0f, 0);
-        path.FindPoint(a)->heightOffsetMeters = 3.0f;
+        path.FindPoint(a)->y = 3.0f;
         const auto b = tg::graph::AddPathPoint(path, 40.0f, 15.0f, a);
-        Check(path.FindPoint(a)->u == -30.0f && path.FindPoint(b)->u == 40.0f &&
-              path.FindPoint(b)->heightOffsetMeters == 3.0f, "グリッド外の点を追加し起点の高さを継ぐ");
+        Check(path.FindPoint(a)->x == -30.0f && path.FindPoint(b)->x == 40.0f &&
+              path.FindPoint(b)->y == 3.0f, "グリッド外の点を追加し起点の高さを継ぐ");
         tg::graph::MovePathPoints(path, {a,b}, 20.0f, -50.0f);
-        Check(path.FindPoint(a)->u == -10.0f && path.FindPoint(b)->v == -35.0f,
+        Check(path.FindPoint(a)->x == -10.0f && path.FindPoint(b)->z == -35.0f,
               "範囲外へまとめて動かしても形を保つ");
         tg::graph::PathClip clip;
         tg::graph::ExtractPathClip(path, {a,b}, {}, clip);
         std::vector<tg::graph::PathElementId> pasted;
         Check(tg::graph::PastePathClip(path, clip, 100.0f, 100.0f, &pasted, nullptr) &&
-              pasted.size() == 2 && path.FindPoint(pasted.front())->u == 90.0f,
+              pasted.size() == 2 && path.FindPoint(pasted.front())->x == 90.0f,
               "貼り付けでも座標を丸めない");
         const auto strands = tg::graph::BuildPathStrands(path);
         const auto samples = tg::graph::SamplePathStrand(path, strands.front(), 16);
-        Check(!samples.empty() && samples.front().heightOffsetMeters == 3.0f &&
-              std::abs(samples.back().u - samples.front().u) == 70.0f,
+        Check(!samples.empty() && samples.front().y == 3.0f &&
+              std::abs(samples.back().x - samples.front().x) == 70.0f,
               "道路の入力となるカーブ標本は実寸と高さを保持");
+    }
+
+    Section("パス — XYZカーブの補間");
+    {
+        using namespace tg::graph;
+        PathSettings vertical;
+        vertical.worldSpace = true;
+        const auto a = AddPathPoint(vertical, 0.0f, 0.0f, 0);
+        const auto b = AddPathPoint(vertical, 0.0f, 0.0f, a);
+        vertical.FindPoint(b)->y = 10.0f;
+        const auto inserted = InsertPathPointOnEdge(vertical, vertical.edges.front().id, 0.5f);
+        Check(inserted != 0 && std::abs(vertical.FindPoint(inserted)->y - 5.0f) < 1e-5f,
+              "垂直エッジの中点も3次元の距離で挿入する");
+        for (const auto curve : {PathCurve::Quadratic, PathCurve::Cubic}) {
+            PathSettings path;
+            path.worldSpace = true;
+            const auto p0 = AddPathPoint(path, 0.0f, 0.0f, 0);
+            const auto p1 = AddPathPoint(path, 2.0f, 3.0f, p0);
+            const auto p2 = AddPathPoint(path, 9.0f, 1.0f, p1);
+            path.FindPoint(p1)->y = 10.0f;
+            path.FindPoint(p2)->y = -2.0f;
+            for (auto& edge : path.edges) edge.curve = curve;
+            auto rotated = path;
+            for (auto& point : rotated.points) std::swap(point.x, point.y);
+            const auto samples = SamplePathStrand(path, BuildPathStrands(path).front(), 16);
+            const auto transformed = SamplePathStrand(rotated, BuildPathStrands(rotated).front(), 16);
+            bool consistent = samples.size() == transformed.size();
+            for (size_t i = 0; consistent && i < samples.size(); ++i) {
+                consistent = std::abs(samples[i].x - transformed[i].y) < 1e-5f &&
+                             std::abs(samples[i].y - transformed[i].x) < 1e-5f &&
+                             std::abs(samples[i].z - transformed[i].z) < 1e-5f;
+            }
+            Check(consistent, "ベジェ/Bスプラインは軸を入れ替えても同じ3次元曲線になる");
+        }
     }
 
     Section("パス — まとめて動かす / コピーと貼り付け");
@@ -197,8 +231,8 @@ void RunNodeGraphTests() {
         const bool moved = tg::graph::MovePathPoints(path, {a, b, c}, 0.1f, -0.3f);
         const tg::graph::PathPoint* pa = path.FindPoint(a);
         const tg::graph::PathPoint* pc = path.FindPoint(c);
-        Check(moved && pa != nullptr && pc != nullptr && std::abs(pa->u - 0.3f) < 1e-5f &&
-                  pa->v == 0.0f && std::abs(pc->u - 0.5f) < 1e-5f && std::abs(pc->v - 0.1f) < 1e-5f,
+        Check(moved && pa != nullptr && pc != nullptr && std::abs(pa->x - 0.3f) < 1e-5f &&
+                  pa->z == 0.0f && std::abs(pc->x - 0.5f) < 1e-5f && std::abs(pc->z - 0.1f) < 1e-5f,
               "MovePathPoints は指定した点だけを動かし、0〜1 へ丸める");
         float cu = 0.0f;
         float cv = 0.0f;
@@ -241,8 +275,8 @@ void RunNodeGraphTests() {
             pastedPoints.empty() ? nullptr : path.FindPoint(pastedPoints.front());
         Check(pasted && path.points.size() == pointsBefore + 3 &&
                   path.edges.size() == edgesBefore + 2 && pastedEdges.size() == 2 && idsFresh &&
-                  firstPasted != nullptr && std::abs(firstPasted->u - 0.5f) < 1e-5f &&
-                  std::abs(firstPasted->v - 0.5f) < 1e-5f &&
+                  firstPasted != nullptr && std::abs(firstPasted->x - 0.5f) < 1e-5f &&
+                  std::abs(firstPasted->z - 0.5f) < 1e-5f &&
                   path.FindEdgeBetween(pastedPoints[0], pastedPoints[1]) != nullptr,
               "PastePathClip は新しい ID で同じ形を、ずらした位置に貼る");
         Check(tg::graph::BuildPathStrands(path).size() == 2,

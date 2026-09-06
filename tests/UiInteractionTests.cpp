@@ -209,7 +209,7 @@ struct TypingResult {
     float valueWhileTyping = 1.0f;  // 打っている最中に見えた値
 };
 
-TypingResult RunSliderTyping(bool confirmWithEnter) {
+TypingResult RunSliderTyping(bool confirmWithEnter, bool coordinates = false) {
     TypingResult result;
     ImGuiIO& io = ImGui::GetIO();
     ImRect sliderRect;
@@ -220,7 +220,19 @@ TypingResult RunSliderTyping(bool confirmWithEnter) {
         BeginPanel();
         ImGui::SetCursorScreenPos(kSourcePos);
         if (tg::ui::BeginPropertyTable("rows")) {
-            if (tg::ui::PropertyFloat("値", &result.value, 0.0f, 100.0f, 1.0f, "テスト", "%.1f")) {
+            bool edited = false;
+            if (coordinates) {
+                float xyz[] = {result.value, 2.0f, 3.0f};
+                const float defaults[] = {1.0f, 2.0f, 3.0f};
+                const unsigned axes = tg::ui::PropertyFloat3Input("値", xyz, defaults);
+                Check((axes & ~1u) == 0 && xyz[1] == 2.0f && xyz[2] == 3.0f,
+                      "X入力はY/Zを書き換えない");
+                result.value = xyz[0];
+                edited = axes != 0;
+            } else {
+                edited = tg::ui::PropertyFloat("値", &result.value, 0.0f, 100.0f, 1.0f, "テスト", "%.1f");
+            }
+            if (edited) {
                 ++result.changedCount;
                 if (typing) {
                     result.changedWhileTyping = true;
@@ -240,7 +252,7 @@ TypingResult RunSliderTyping(bool confirmWithEnter) {
     // ホバー → Ctrl + クリック → 離す。これで直接入力に入る。
     Frame(target.x, target.y, false);
     draw();
-    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    if (!coordinates) io.AddKeyEvent(ImGuiMod_Ctrl, true);
     Frame(target.x, target.y, true);
     draw();
     Frame(target.x, target.y, false);
@@ -315,6 +327,14 @@ void RunUiInteractionTests() {
     const TypingResult cancelled = RunSliderTyping(false);
     Check(cancelled.changedCount == 0 && cancelled.value == 1.0f,
           "Esc で取り消すと元の値のまま");
+
+    Section("XYZの入力欄");
+    const auto xyzTyped = RunSliderTyping(true, true);
+    Check(!xyzTyped.changedWhileTyping && xyzTyped.changedCount == 1 && xyzTyped.value == 42.0f,
+          "XYZ入力は通常クリックで入力しEnterで一度だけ確定する");
+    const auto xyzCancelled = RunSliderTyping(false, true);
+    Check(xyzCancelled.changedCount == 0 && xyzCancelled.value == 1.0f,
+          "XYZ入力はEscで取り消せる");
 
     Section("区画の境界（ドラッグで高さを変える）");
     // 下へ 80 動かす。掴んだ位置から素直に広がること。

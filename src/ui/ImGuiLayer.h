@@ -30,7 +30,14 @@ public:
     bool Initialize(Window& window, rhi::Device& device);
     void Shutdown();
 
-    void BeginFrame();
+    // スクリーンショット検証時だけ、OSの入力を再現可能な入力へ差し替える。
+    struct TestInput {
+        ImVec2 mouse;
+        bool leftDown = false;
+        bool shift = false;
+        bool escape = false;
+    };
+    void BeginFrame(const TestInput* testInput = nullptr);
     void EndFrame(ID3D12GraphicsCommandList* commandList);
 
     // Window のメッセージフックから呼ぶ。true ならウィンドウ側では処理しない。

@@ -62,14 +62,14 @@ size_t PathSettings::EdgeCount(PathElementId pointId) const {
 PathElementId AddPathPoint(PathSettings& path, float u, float v, PathElementId connectFrom) {
     PathPoint point;
     point.id = path.nextId++;
-    point.u = (path.worldSpace ? u : std::clamp(u, 0.0f, 1.0f));
-    point.v = (path.worldSpace ? v : std::clamp(v, 0.0f, 1.0f));
+    point.x = (path.worldSpace ? u : std::clamp(u, 0.0f, 1.0f));
+    point.z = (path.worldSpace ? v : std::clamp(v, 0.0f, 1.0f));
     point.widthMeters = path.defaultWidthMeters;
     point.featherMeters = path.defaultFeatherMeters;
     point.intensity = path.defaultIntensity;
     if (path.worldSpace) {
         if (const PathPoint* anchor = path.FindPoint(connectFrom)) {
-            point.heightOffsetMeters = anchor->heightOffsetMeters;
+            point.y = anchor->y;
         }
     }
     path.points.push_back(point);
@@ -110,9 +110,10 @@ PathElementId InsertPathPointOnEdge(PathSettings& path, PathElementId edgeId, fl
     // 折れ線の道のり t の位置。どの線分（seg）の上かも出す。
     std::vector<float> cumulative(control.size(), 0.0f);
     for (size_t i = 1; i < control.size(); ++i) {
-        const float dx = control[i].u - control[i - 1].u;
-        const float dy = control[i].v - control[i - 1].v;
-        cumulative[i] = cumulative[i - 1] + std::sqrt(dx * dx + dy * dy);
+        const float dx = control[i].x - control[i - 1].x;
+        const float dy = control[i].z - control[i - 1].z;
+        const float dz = path.worldSpace ? control[i].y - control[i - 1].y : 0.0f;
+        cumulative[i] = cumulative[i - 1] + std::sqrt(dx * dx + dy * dy + dz * dz);
     }
     const float target = cumulative.back() * t;
     size_t seg = 0;
@@ -128,18 +129,18 @@ PathElementId InsertPathPointOnEdge(PathSettings& path, PathElementId edgeId, fl
 
     PathPoint point;
     point.id = path.nextId++;
-    point.u = Lerp(a.u, b.u, local);
-    point.v = Lerp(a.v, b.v, local);
+    point.x = Lerp(a.x, b.x, local);
+    point.z = Lerp(a.z, b.z, local);
     point.widthMeters = Lerp(a.widthMeters, b.widthMeters, local);
     point.featherMeters = Lerp(a.featherMeters, b.featherMeters, local);
     point.intensity = Lerp(a.intensity, b.intensity, local);
-    point.heightOffsetMeters = Lerp(a.heightOffsetMeters, b.heightOffsetMeters, local);
+    point.y = Lerp(a.y, b.y, local);
     const PathPoint* toPoint = path.FindPoint(to);
     if (toPoint == nullptr) {
         return 0;
     }
-    const float toU = toPoint->u;
-    const float toV = toPoint->v;
+    const float toU = toPoint->x;
+    const float toV = toPoint->z;
     path.points.push_back(point);
 
     // 元のエッジは from → 新しい点 に縮め、新しい点 → to をもう 1 本張る。
@@ -173,11 +174,11 @@ PathElementId InsertPathPointOnEdge(PathSettings& path, PathElementId edgeId, fl
                               head->waypoints.end());
         head->waypoints.resize(seg);
         head->routed = true;
-        head->routedToU = point.u;
-        head->routedToV = point.v;
+        head->routedToU = point.x;
+        head->routedToV = point.z;
         tail.routed = true;
-        tail.routedFromU = point.u;
-        tail.routedFromV = point.v;
+        tail.routedFromU = point.x;
+        tail.routedFromV = point.z;
         tail.routedToU = toU;
         tail.routedToV = toV;
     } else {
@@ -276,22 +277,22 @@ PathElementId OtherEnd(const PathEdge& edge, PathElementId pointId) {
 // pointId から other へ向かう向きに、offsetUv だけ進んだ位置。
 void OffsetToward(const PathSettings& path, const PathPoint& origin, PathElementId other,
                   float offsetUv, float& outU, float& outV) {
-    outU = origin.u;
-    outV = origin.v;
+    outU = origin.x;
+    outV = origin.z;
     const PathPoint* target = path.FindPoint(other);
     if (target == nullptr) {
         return;
     }
-    const float dx = target->u - origin.u;
-    const float dy = target->v - origin.v;
+    const float dx = target->x - origin.x;
+    const float dy = target->z - origin.z;
     const float length = std::sqrt(dx * dx + dy * dy);
     if (length <= 1e-6f) {
         return;
     }
     // 相手より先へは行かない（短いエッジで追い越さないように）。
     const float step = std::min(offsetUv, length * 0.5f);
-    outU = (path.worldSpace ? origin.u + dx / length * step : std::clamp(origin.u + dx / length * step, 0.0f, 1.0f));
-    outV = (path.worldSpace ? origin.v + dy / length * step : std::clamp(origin.v + dy / length * step, 0.0f, 1.0f));
+    outU = (path.worldSpace ? origin.x + dx / length * step : std::clamp(origin.x + dx / length * step, 0.0f, 1.0f));
+    outV = (path.worldSpace ? origin.z + dy / length * step : std::clamp(origin.z + dy / length * step, 0.0f, 1.0f));
 }
 
 }  // namespace
@@ -347,7 +348,7 @@ PathElementId DetachPathEdgeEnd(PathSettings& path, PathElementId edgeId, PathEl
     const PathElementId other = OtherEnd(*edge, pointId);
     PathPoint point = *origin;
     point.id = path.nextId++;
-    OffsetToward(path, *origin, other, offsetUv, point.u, point.v);
+    OffsetToward(path, *origin, other, offsetUv, point.x, point.z);
     path.points.push_back(point);
     for (PathEdge& existing : path.edges) {
         if (existing.id != edgeId) {
@@ -416,10 +417,10 @@ bool IsPathEdgeRouteCurrent(const PathSettings& path, const PathEdge& edge) {
         return false;
     }
     constexpr float kEpsilon = 1e-6f;
-    return std::abs(a->u - edge.routedFromU) < kEpsilon &&
-           std::abs(a->v - edge.routedFromV) < kEpsilon &&
-           std::abs(b->u - edge.routedToU) < kEpsilon &&
-           std::abs(b->v - edge.routedToV) < kEpsilon;
+    return std::abs(a->x - edge.routedFromU) < kEpsilon &&
+           std::abs(a->z - edge.routedFromV) < kEpsilon &&
+           std::abs(b->x - edge.routedToU) < kEpsilon &&
+           std::abs(b->z - edge.routedToV) < kEpsilon;
 }
 
 std::vector<PathPoint> PathEdgeControlPoints(const PathSettings& path, const PathEdge& edge) {
@@ -436,31 +437,31 @@ std::vector<PathPoint> PathEdgeControlPoints(const PathSettings& path, const Pat
         std::vector<float> distances;
         distances.reserve(edge.waypoints.size());
         float total = 0.0f;
-        float previousU = a->u;
-        float previousV = a->v;
+        float previousU = a->x;
+        float previousV = a->z;
         for (const PathRouteWaypoint& waypoint : edge.waypoints) {
-            const float dx = waypoint.u - previousU;
-            const float dy = waypoint.v - previousV;
+            const float dx = waypoint.x - previousU;
+            const float dy = waypoint.z - previousV;
             total += std::sqrt(dx * dx + dy * dy);
             distances.push_back(total);
-            previousU = waypoint.u;
-            previousV = waypoint.v;
+            previousU = waypoint.x;
+            previousV = waypoint.z;
         }
         {
-            const float dx = b->u - previousU;
-            const float dy = b->v - previousV;
+            const float dx = b->x - previousU;
+            const float dy = b->z - previousV;
             total += std::sqrt(dx * dx + dy * dy);
         }
         for (size_t i = 0; i < edge.waypoints.size(); ++i) {
             const float t = (total > 1e-9f) ? distances[i] / total : 0.0f;
             PathPoint point;
             point.id = 0;
-            point.u = edge.waypoints[i].u;
-            point.v = edge.waypoints[i].v;
+            point.x = edge.waypoints[i].x;
+            point.z = edge.waypoints[i].z;
             point.widthMeters = Lerp(a->widthMeters, b->widthMeters, t);
             point.featherMeters = Lerp(a->featherMeters, b->featherMeters, t);
             point.intensity = Lerp(a->intensity, b->intensity, t);
-            point.heightOffsetMeters = Lerp(a->heightOffsetMeters, b->heightOffsetMeters, t);
+            point.y = Lerp(a->y, b->y, t);
             out.push_back(point);
         }
     }
@@ -538,11 +539,11 @@ bool MovePathPoints(PathSettings& path, const std::vector<PathElementId>& pointI
         if (point == nullptr) {
             continue;
         }
-        const float u = (path.worldSpace ? point->u + du : std::clamp(point->u + du, 0.0f, 1.0f));
-        const float v = (path.worldSpace ? point->v + dv : std::clamp(point->v + dv, 0.0f, 1.0f));
-        if (u != point->u || v != point->v) {
-            point->u = u;
-            point->v = v;
+        const float u = (path.worldSpace ? point->x + du : std::clamp(point->x + du, 0.0f, 1.0f));
+        const float v = (path.worldSpace ? point->z + dv : std::clamp(point->z + dv, 0.0f, 1.0f));
+        if (u != point->x || v != point->z) {
+            point->x = u;
+            point->z = v;
             moved = true;
         }
     }
@@ -556,8 +557,8 @@ bool PathPointsCentroid(const PathSettings& path, const std::vector<PathElementI
     int count = 0;
     for (const PathElementId id : pointIds) {
         if (const PathPoint* point = path.FindPoint(id)) {
-            sumU += point->u;
-            sumV += point->v;
+            sumU += point->x;
+            sumV += point->z;
             ++count;
         }
     }
@@ -635,8 +636,8 @@ bool PastePathClip(PathSettings& path, const PathClip& clip, float du, float dv,
     for (const PathPoint& source : clip.points) {
         PathPoint point = source;
         point.id = path.nextId++;
-        point.u = (path.worldSpace ? source.u + du : std::clamp(source.u + du, 0.0f, 1.0f));
-        point.v = (path.worldSpace ? source.v + dv : std::clamp(source.v + dv, 0.0f, 1.0f));
+        point.x = (path.worldSpace ? source.x + du : std::clamp(source.x + du, 0.0f, 1.0f));
+        point.z = (path.worldSpace ? source.z + dv : std::clamp(source.z + dv, 0.0f, 1.0f));
         path.points.push_back(point);
         remap.emplace_back(source.id, point.id);
         if (outPoints != nullptr) {
@@ -764,12 +765,12 @@ PathCurveSample SampleAt(const std::vector<const PathPoint*>& points, float para
     const PathPoint& a = *points[static_cast<size_t>(i0)];
     const PathPoint& b = *points[static_cast<size_t>(i1)];
     PathCurveSample sample;
-    sample.u = u;
-    sample.v = v;
+    sample.x = u;
+    sample.z = v;
     sample.widthMeters = Lerp(a.widthMeters, b.widthMeters, t);
     sample.featherMeters = Lerp(a.featherMeters, b.featherMeters, t);
     sample.intensity = Lerp(a.intensity, b.intensity, t);
-    sample.heightOffsetMeters = Lerp(a.heightOffsetMeters, b.heightOffsetMeters, t);
+    sample.y = Lerp(a.y, b.y, t);
     return sample;
 }
 
@@ -781,26 +782,26 @@ void PolylineAt(const std::vector<const PathPoint*>& points, float parameter, fl
     const int i0 = std::clamp(static_cast<int>(std::floor(clamped)), 0, last);
     const int i1 = std::min(i0 + 1, last);
     const float t = clamped - static_cast<float>(i0);
-    outU = Lerp(points[static_cast<size_t>(i0)]->u, points[static_cast<size_t>(i1)]->u, t);
-    outV = Lerp(points[static_cast<size_t>(i0)]->v, points[static_cast<size_t>(i1)]->v, t);
+    outU = Lerp(points[static_cast<size_t>(i0)]->x, points[static_cast<size_t>(i1)]->x, t);
+    outV = Lerp(points[static_cast<size_t>(i0)]->z, points[static_cast<size_t>(i1)]->z, t);
 }
 
 // 2 次ベジェの連結。途中の点 Pi ごとに、両隣の線分上の「Pi から丸め × 半分」の位置
 // A / B を取り、A → B を Pi を制御点にした 2 次ベジェで結ぶ。A と B の間以外は直線。
 // 丸めが 1 なら A / B は線分の中点で直線部分は消え、両端の点だけを通る滑らかな線になる。
 void SampleQuadratic(const std::vector<const PathPoint*>& points, float rounding,
-                     int samplesPerSpan, std::vector<PathCurveSample>& out) {
+                     int samplesPerSpan, std::vector<PathCurveSample>& out, bool spatial) {
     const int n = static_cast<int>(points.size());
     const float half = std::clamp(rounding, 0.0f, 1.0f) * 0.5f;
-    out.push_back(SampleAt(points, 0.0f, points[0]->u, points[0]->v));
+    out.push_back(SampleAt(points, 0.0f, points[0]->x, points[0]->z));
     for (int i = 1; i + 1 < n; ++i) {
         const PathPoint& prev = *points[static_cast<size_t>(i - 1)];
         const PathPoint& here = *points[static_cast<size_t>(i)];
         const PathPoint& next = *points[static_cast<size_t>(i + 1)];
-        const float au = Lerp(here.u, prev.u, half);
-        const float av = Lerp(here.v, prev.v, half);
-        const float bu = Lerp(here.u, next.u, half);
-        const float bv = Lerp(here.v, next.v, half);
+        const float au = Lerp(here.x, prev.x, half);
+        const float av = Lerp(here.z, prev.z, half);
+        const float bu = Lerp(here.x, next.x, half);
+        const float bv = Lerp(here.z, next.z, half);
         const float pa = static_cast<float>(i) - half;
         const float pb = static_cast<float>(i) + half;
         // A まで直線（A = 前の B ではないときだけ点を打つ）。
@@ -811,18 +812,20 @@ void SampleQuadratic(const std::vector<const PathPoint*>& points, float rounding
             const float w0 = (1.0f - t) * (1.0f - t);
             const float w1 = 2.0f * (1.0f - t) * t;
             const float w2 = t * t;
-            const float u = w0 * au + w1 * here.u + w2 * bu;
-            const float v = w0 * av + w1 * here.v + w2 * bv;
+            const float u = w0 * au + w1 * here.x + w2 * bu;
+            const float v = w0 * av + w1 * here.z + w2 * bv;
             out.push_back(SampleAt(points, Lerp(pa, pb, t), u, v));
+            if (spatial) out.back().y = w0 * Lerp(here.y, prev.y, half) +
+                w1 * here.y + w2 * Lerp(here.y, next.y, half);
         }
     }
     const PathPoint& end = *points[static_cast<size_t>(n - 1)];
-    out.push_back(SampleAt(points, static_cast<float>(n - 1), end.u, end.v));
+    out.push_back(SampleAt(points, static_cast<float>(n - 1), end.x, end.z));
 }
 
 // 3 次 B スプライン（両端を 3 重にして端の点を通す）。丸めは折れ線との混ぜ具合。
 void SampleCubic(const std::vector<const PathPoint*>& points, float rounding, int samplesPerSpan,
-                 std::vector<PathCurveSample>& out) {
+                 std::vector<PathCurveSample>& out, bool spatial) {
     const int n = static_cast<int>(points.size());
     const float mix = std::clamp(rounding, 0.0f, 1.0f);
     // 制御点の添字列。端を 3 重にする。
@@ -835,7 +838,7 @@ void SampleCubic(const std::vector<const PathPoint*>& points, float rounding, in
     control.push_back(n - 1);
     control.push_back(n - 1);
     const auto at = [&](size_t index) { return points[static_cast<size_t>(control[index])]; };
-    out.push_back(SampleAt(points, 0.0f, points[0]->u, points[0]->v));
+    out.push_back(SampleAt(points, 0.0f, points[0]->x, points[0]->z));
     for (size_t span = 0; span + 3 < control.size(); ++span) {
         const PathPoint& c0 = *at(span);
         const PathPoint& c1 = *at(span + 1);
@@ -852,13 +855,17 @@ void SampleCubic(const std::vector<const PathPoint*>& points, float rounding, in
             const float b1 = (3.0f * t3 - 6.0f * t2 + 4.0f) / 6.0f;
             const float b2 = (-3.0f * t3 + 3.0f * t2 + 3.0f * t + 1.0f) / 6.0f;
             const float b3 = t3 / 6.0f;
-            const float su = b0 * c0.u + b1 * c1.u + b2 * c2.u + b3 * c3.u;
-            const float sv = b0 * c0.v + b1 * c1.v + b2 * c2.v + b3 * c3.v;
+            const float su = b0 * c0.x + b1 * c1.x + b2 * c2.x + b3 * c3.x;
+            const float sv = b0 * c0.z + b1 * c1.z + b2 * c2.z + b3 * c3.z;
             const float parameter = Lerp(p1, p2, t);
             float lu = 0.0f;
             float lv = 0.0f;
             PolylineAt(points, parameter, lu, lv);
             out.push_back(SampleAt(points, parameter, Lerp(lu, su, mix), Lerp(lv, sv, mix)));
+            if (spatial) {
+                const float sy = b0 * c0.y + b1 * c1.y + b2 * c2.y + b3 * c3.y;
+                out.back().y = Lerp(out.back().y, sy, mix);
+            }
         }
     }
 }
@@ -950,19 +957,19 @@ void SampleClothoid(const std::vector<const PathPoint*>& points, float rounding,
     const int n = static_cast<int>(points.size());
     const float half = std::clamp(rounding, 0.0f, 1.0f) * 0.5f;
     const float clampedRatio = std::clamp(ratio, 0.0f, 1.0f);
-    out.push_back(SampleAt(points, 0.0f, points[0]->u, points[0]->v));
+    out.push_back(SampleAt(points, 0.0f, points[0]->x, points[0]->z));
     for (int i = 1; i + 1 < n; ++i) {
         const PathPoint& prev = *points[static_cast<size_t>(i - 1)];
         const PathPoint& here = *points[static_cast<size_t>(i)];
         const PathPoint& next = *points[static_cast<size_t>(i + 1)];
-        const float inX = here.u - prev.u;
-        const float inY = here.v - prev.v;
-        const float outX = next.u - here.u;
-        const float outY = next.v - here.v;
+        const float inX = here.x - prev.x;
+        const float inY = here.z - prev.z;
+        const float outX = next.x - here.x;
+        const float outY = next.z - here.z;
         const float inLength = std::sqrt(inX * inX + inY * inY);
         const float outLength = std::sqrt(outX * outX + outY * outY);
         if (inLength <= 1e-6f || outLength <= 1e-6f) {
-            out.push_back(SampleAt(points, static_cast<float>(i), here.u, here.v));
+            out.push_back(SampleAt(points, static_cast<float>(i), here.x, here.z));
             continue;
         }
         const float dirInX = inX / inLength;
@@ -976,7 +983,7 @@ void SampleClothoid(const std::vector<const PathPoint*>& points, float rounding,
         const float tangent = std::min(inLength, outLength) * half;
         // ほぼ直進、または折り返しは曲線にならない。折れ点をそのまま通す。
         if (turn < 1e-3f || turn > 3.0f || tangent <= 1e-6f) {
-            out.push_back(SampleAt(points, static_cast<float>(i), here.u, here.v));
+            out.push_back(SampleAt(points, static_cast<float>(i), here.x, here.z));
             continue;
         }
         const float sign = (cross >= 0.0f) ? 1.0f : -1.0f;
@@ -984,13 +991,13 @@ void SampleClothoid(const std::vector<const PathPoint*>& points, float rounding,
         const float unitTangent =
             BuildUnitClothoidCorner(turn, sign, clampedRatio, samplesPerSpan, local);
         if (unitTangent <= 1e-6f || local.empty()) {
-            out.push_back(SampleAt(points, static_cast<float>(i), here.u, here.v));
+            out.push_back(SampleAt(points, static_cast<float>(i), here.x, here.z));
             continue;
         }
         const float scale = tangent / unitTangent;
         // 入口 A = 折れ点から入りの向きに tangent だけ戻った所。
-        const float ax = here.u - dirInX * tangent;
-        const float ay = here.v - dirInY * tangent;
+        const float ax = here.x - dirInX * tangent;
+        const float ay = here.z - dirInY * tangent;
         const float pa = static_cast<float>(i) - tangent / inLength;
         const float pb = static_cast<float>(i) + tangent / outLength;
         out.push_back(SampleAt(points, pa, ax, ay));
@@ -1003,10 +1010,11 @@ void SampleClothoid(const std::vector<const PathPoint*>& points, float rounding,
             const float v = ay + (dirInY * p.x + leftY * p.y) * scale;
             const float t = static_cast<float>(k + 1) / static_cast<float>(local.size());
             out.push_back(SampleAt(points, Lerp(pa, pb, t), u, v));
+
         }
     }
     const PathPoint& end = *points[static_cast<size_t>(n - 1)];
-    out.push_back(SampleAt(points, static_cast<float>(n - 1), end.u, end.v));
+    out.push_back(SampleAt(points, static_cast<float>(n - 1), end.x, end.z));
 }
 
 }  // namespace
@@ -1055,17 +1063,17 @@ std::vector<PathCurveSample> SamplePathStrand(const PathSettings& path, const Pa
     const PathCurve curve = StrandCurve(path, strand, &rounding, nullptr);
     if (curve == PathCurve::Line || points.size() < 3 || rounding <= 0.0f) {
         for (size_t i = 0; i < points.size(); ++i) {
-            out.push_back(SampleAt(points, static_cast<float>(i), points[i]->u, points[i]->v));
+            out.push_back(SampleAt(points, static_cast<float>(i), points[i]->x, points[i]->z));
         }
         return out;
     }
     const int samples = std::clamp(samplesPerSpan, 1, 64);
     if (curve == PathCurve::Quadratic) {
-        SampleQuadratic(points, rounding, samples, out);
+        SampleQuadratic(points, rounding, samples, out, path.worldSpace);
     } else if (curve == PathCurve::Clothoid) {
         SampleClothoid(points, rounding, StrandClothoidRatio(path, strand), samples, out);
     } else {
-        SampleCubic(points, rounding, samples, out);
+        SampleCubic(points, rounding, samples, out, path.worldSpace);
     }
     return out;
 }
@@ -1081,10 +1089,10 @@ std::vector<compositor::PathSegment> BuildPathSegments(const PathSettings& path)
             const PathCurveSample& a = samples[i];
             const PathCurveSample& b = samples[i + 1];
             compositor::PathSegment segment;
-            segment.ax = a.u;
-            segment.ay = a.v;
-            segment.bx = b.u;
-            segment.by = b.v;
+            segment.ax = a.x;
+            segment.ay = a.z;
+            segment.bx = b.x;
+            segment.by = b.z;
             segment.widthA = a.widthMeters;
             segment.widthB = b.widthMeters;
             segment.featherA = a.featherMeters;
@@ -1100,8 +1108,8 @@ std::vector<compositor::PathSegment> BuildPathSegments(const PathSettings& path)
             continue;
         }
         compositor::PathSegment segment;
-        segment.ax = segment.bx = point.u;
-        segment.ay = segment.by = point.v;
+        segment.ax = segment.bx = point.x;
+        segment.ay = segment.by = point.z;
         segment.widthA = segment.widthB = point.widthMeters;
         segment.featherA = segment.featherB = point.featherMeters;
         segment.intensityA = segment.intensityB = point.intensity;
@@ -1123,10 +1131,10 @@ std::vector<compositor::PathSegment> BuildPathAreaSegments(const PathSettings& p
         }
         const auto push = [&segments](const PathCurveSample& a, const PathCurveSample& b) {
             compositor::PathSegment segment;
-            segment.ax = a.u;
-            segment.ay = a.v;
-            segment.bx = b.u;
-            segment.by = b.v;
+            segment.ax = a.x;
+            segment.ay = a.z;
+            segment.bx = b.x;
+            segment.by = b.z;
             segments.push_back(segment);
         };
         for (size_t i = 0; i + 1 < samples.size(); ++i) {
@@ -1135,7 +1143,7 @@ std::vector<compositor::PathSegment> BuildPathAreaSegments(const PathSettings& p
         // 標本列が始点へ戻っていなければ閉じる（偶奇判定は輪が閉じていないと壊れる）。
         const PathCurveSample& first = samples.front();
         const PathCurveSample& last = samples.back();
-        if (std::abs(first.u - last.u) > 1e-6f || std::abs(first.v - last.v) > 1e-6f) {
+        if (std::abs(first.x - last.x) > 1e-6f || std::abs(first.z - last.z) > 1e-6f) {
             push(last, first);
         }
     }

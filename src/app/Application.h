@@ -59,6 +59,12 @@ struct StartupOptions {
     uint32_t screenshotFrame = 8;
     // プロジェクト読込後に選択するノード。スクリーンショット検証用。
     graph::GraphId selectNode = 0;
+    graph::PathElementId selectPathPoint = 0;
+    bool testDrag = false;
+    bool testDragShift = false;
+    bool testDragCancel = false;
+    ImVec2 testDragStart{};
+    ImVec2 testDragEnd{};
 };
 
 // アプリ本体。ウィンドウ、デバイス、UI の生存期間とフレームループを持つ。
@@ -76,6 +82,18 @@ private:
     // 既定のドックレイアウトを組む。ini に配置が無いときと、明示的な要求で呼ぶ。
     void BuildDefaultLayout(ImGuiID dockspaceId);
     void DrawViewportPanel();
+    void HandleMeshSelection(bool hovered, const ImVec2& viewportMin, const ImVec2& viewportMax);
+    struct MeshSelectionState {
+        bool pending = false;
+        bool dragging = false;
+        bool additive = false;
+        ImVec2 start{};
+        ImVec2 end{};
+        std::vector<size_t> selected;
+        std::vector<size_t> previous;
+    };
+    MeshSelectionState m_meshSelection;
+
     void DrawMaterialPanel();
     void DrawLightingPanel();
     // 実行状況の情報ウィンドウ（ウィンドウ > 情報）。常設ドックには置かない。
@@ -144,6 +162,17 @@ private:
     void DrawTextureContextMenu(compositor::TextureId target);
     // 削除の確認モーダルを開く。参照が無くても必ず通す。
     void RequestTextureRemove(compositor::TextureId id);
+    // --- リンク切れの解消 ---------------------------------------------------
+    // ファイルを選ぶダイアログを出し、選ばれたら再リンクを予約する
+    // （読み込みは GPU 待機を伴うのでフレームの外で行う）。
+    void RequestTextureRelink(compositor::TextureId id);
+    // フォルダを選び、そこにあるリンク切れのファイル名をまとめて繋ぎ直す予約をする。
+    // 素材のフォルダごと移した（別の PC で開いた）ときの入口。
+    void RequestTextureRelinkFolder();
+    // 予約した再リンクを処理する。繋ぎ直せたら、参照しているサムネイルと合成を作り直す。
+    void ProcessPendingTextureRelinks();
+    // マテリアルが参照しているテクスチャのどれかがリンク切れか。一覧の目印に使う。
+    bool MaterialHasMissingTexture(const compositor::MaterialAsset& asset) const;
     // テクスチャプレビューの窓（拡大表示 + 詳細）。
     // 一覧のサムネイルをダブルクリックするか、ウィンドウメニューから開く。
     void DrawTexturePreviewWindow();
@@ -384,24 +413,36 @@ private:
         bool dragging = false;
         bool dragMoved = false;
         ImVec2 pressPos{};
+        bool boxPending = false;
+        bool boxSelecting = false;
+        bool boxAdditive = false;
+        ImVec2 boxStart{};
+        ImVec2 boxEnd{};
+        std::vector<graph::PathElementId> boxPreviousPoints;
+        std::vector<graph::PathElementId> boxPreviousEdges;
+        std::vector<graph::PathElementId> boxPreviousInterior;
+
         // ドラッグ中の吸着先（点が優先、無ければエッジ）。
         graph::PathElementId snapPoint = 0;
         graph::PathElementId snapEdge = 0;
         float snapEdgeT = 0.0f;
         // 移動ギズモ。選択（点の集合 / 鎖）の重心に置き、X（u）/ Z（v）の軸と中央の
-        // 平面ハンドルで選択をまとめて動かす。gizmoAxis は 0 = X、1 = Z、2 = 平面、-1 = 無し。
+        // 平面ハンドルで選択をまとめて動かす。gizmoAxis は 0 = X、1 = Z、2 = Y、3 = 平面、-1 = 無し。
         int gizmoHover = -1;
         int gizmoAxis = -1;
         bool gizmoDragging = false;
         ImVec2 gizmoPressPos{};
+        ImVec2 gizmoAxisDirection{};
+        float gizmoUnitsPerPixel = 0.0f;
         // 平面ハンドルで掴んだときの地形上の UV。動かす量はここからの差。
         float gizmoPressU = 0.0f;
         float gizmoPressV = 0.0f;
         // 掴んだときの各点の位置。差分を足すのではなく、ここから置き直す（丸め誤差を溜めない）。
         struct GizmoStart {
             graph::PathElementId id = 0;
-            float u = 0.0f;
-            float v = 0.0f;
+            float x = 0.0f;
+            float z = 0.0f;
+            float y = 0.0f;
         };
         std::vector<GizmoStart> gizmoStart;
         // 右クリックしたときの対象（メニューを描くフレームでは状況が変わっているため控える）。
@@ -496,6 +537,13 @@ private:
     std::filesystem::path m_pendingMaterialImport;
     compositor::MaterialAssetId m_pendingExportMaterial = compositor::kNoMaterialAsset;
     compositor::TextureId m_pendingTextureRemove = compositor::kNoTexture;
+    // 繋ぎ直しの予約（対象のテクスチャと新しいパス）。ダイアログで選んだものと、
+    // フォルダ指定で見つけたものの両方がここへ積まれる。
+    struct TextureRelink {
+        compositor::TextureId id = compositor::kNoTexture;
+        std::filesystem::path path;
+    };
+    std::vector<TextureRelink> m_pendingTextureRelinks;
     // 削除要求のあったマテリアル。一覧の描画中に消すと、描画側が erase 済みの
     // 要素を読んでしまうため、フレームの外で処理する。
     compositor::MaterialAssetId m_pendingMaterialRemove = compositor::kNoMaterialAsset;

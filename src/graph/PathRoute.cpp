@@ -59,15 +59,15 @@ struct StepCost {
 
 float DistanceToSegment(const PathRouteWaypoint& p, const PathRouteWaypoint& a,
                         const PathRouteWaypoint& b) {
-    const float abx = b.u - a.u;
-    const float aby = b.v - a.v;
+    const float abx = b.x - a.x;
+    const float aby = b.z - a.z;
     const float lengthSq = abx * abx + aby * aby;
     float t = 0.0f;
     if (lengthSq > 1e-12f) {
-        t = std::clamp(((p.u - a.u) * abx + (p.v - a.v) * aby) / lengthSq, 0.0f, 1.0f);
+        t = std::clamp(((p.x - a.x) * abx + (p.z - a.z) * aby) / lengthSq, 0.0f, 1.0f);
     }
-    const float dx = p.u - (a.u + abx * t);
-    const float dy = p.v - (a.v + aby * t);
+    const float dx = p.x - (a.x + abx * t);
+    const float dy = p.z - (a.z + aby * t);
     return std::sqrt(dx * dx + dy * dy);
 }
 
@@ -295,10 +295,10 @@ bool RoutePathEdge(PathSettings& path, PathElementId edgeId, const PathRouteTerr
         return false;
     }
     PathRouteQuery query;
-    query.fromU = a->u;
-    query.fromV = a->v;
-    query.toU = b->u;
-    query.toV = b->v;
+    query.fromU = a->x;
+    query.fromV = a->z;
+    query.toU = b->x;
+    query.toV = b->z;
     query.mode = edge->route;
     query.maxGradePercent = edge->maxGradePercent;
     // 間引きの許容差は幅の 1/4（最低でもセル 1.5 個）。マスクは幅でぼけるので細かすぎても無駄。
@@ -312,10 +312,10 @@ bool RoutePathEdge(PathSettings& path, PathElementId edgeId, const PathRouteTerr
     }
     edge->waypoints = std::move(waypoints);
     edge->routed = true;
-    edge->routedFromU = a->u;
-    edge->routedFromV = a->v;
-    edge->routedToU = b->u;
-    edge->routedToV = b->v;
+    edge->routedFromU = a->x;
+    edge->routedFromV = a->z;
+    edge->routedToU = b->x;
+    edge->routedToV = b->z;
     return true;
 }
 

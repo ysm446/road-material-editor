@@ -74,7 +74,10 @@ float EvaluateRoadMask(const RoadMaskNodeSettings& settings, float lateralMeters
         }
         case RoadMaskShape::EdgeFalloff: {
             // 道路端からの距離。端で 1、edgeWidth の内側から feather で 0 へ。
-            const float fromEdge = halfWidthMeters - std::abs(lateralMeters);
+            // 横位置は正が Left（列末尾側）。側を選ぶと反対側の端は遠い扱いになり 0 のまま。
+            float fromEdge = halfWidthMeters - std::abs(lateralMeters);
+            if (settings.edgeSide == RoadMaskSide::Left) fromEdge = halfWidthMeters - lateralMeters;
+            if (settings.edgeSide == RoadMaskSide::Right) fromEdge = halfWidthMeters + lateralMeters;
             const float inner = fromEdge - settings.edgeWidthMeters;
             value = settings.featherMeters <= 1e-5f ? (inner <= 0.0f ? 1.0f : 0.0f)
                                                     : std::clamp(1.0f - inner / settings.featherMeters, 0.0f, 1.0f);

@@ -436,6 +436,16 @@ void RunRoadTests() {
               graph::EvaluateRoadMask(edge, -2.8f, 0.0f, half, 100.0f) == 1.0f &&
               graph::EvaluateRoadMask(edge, 0.0f, 0.0f, half, 100.0f) == 0.0f,
               "edge falloff is 1 at both edges and 0 at the centre");
+        // 側を選ぶと片側だけ。正の横位置が Left（Road の列末尾側）。
+        graph::RoadMaskNodeSettings leftEdgeMask = edge;
+        leftEdgeMask.edgeSide = graph::RoadMaskSide::Left;
+        graph::RoadMaskNodeSettings rightEdgeMask = edge;
+        rightEdgeMask.edgeSide = graph::RoadMaskSide::Right;
+        Check(graph::EvaluateRoadMask(leftEdgeMask, 2.9f, 0.0f, half, 100.0f) == 1.0f &&
+              graph::EvaluateRoadMask(leftEdgeMask, -2.9f, 0.0f, half, 100.0f) == 0.0f &&
+              graph::EvaluateRoadMask(rightEdgeMask, -2.9f, 0.0f, half, 100.0f) == 1.0f &&
+              graph::EvaluateRoadMask(rightEdgeMask, 2.9f, 0.0f, half, 100.0f) == 0.0f,
+              "edge falloff side picks the left or right edge only");
         const float edgeMid = graph::EvaluateRoadMask(edge, 2.45f, 0.0f, half, 100.0f);
         Check(edgeMid > 0.4f && edgeMid < 0.6f, "edge falloff feathers inward");
         graph::RoadMaskNodeSettings constant;

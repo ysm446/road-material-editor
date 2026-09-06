@@ -1235,12 +1235,20 @@ void Application::DrawGraphPanel() {
                                                  "帯の縁を 0 へ落とす幅", "%.2f m");
                     changed |= ui::PropertyBool("両車線", &roadMask->bothLanes, defaults.bothLanes, "中心線の左右両方に置く");
                     break;
-                case graph::RoadMaskShape::EdgeFalloff:
+                case graph::RoadMaskShape::EdgeFalloff: {
+                    static const char* const kSideLabels[] = {"両側", "左", "右"};
+                    int side = static_cast<int>(roadMask->edgeSide);
+                    if (ui::PropertyCombo("側", &side, kSideLabels, IM_ARRAYSIZE(kSideLabels), 0,
+                                          "どちらの端に出すか。左右は Path の進行方向基準（Road の Left / Right と同じ）。走行側には依存しない")) {
+                        roadMask->edgeSide = static_cast<graph::RoadMaskSide>(side);
+                        changed = true;
+                    }
                     changed |= ui::PropertyFloat("端の幅", &roadMask->edgeWidthMeters, 0.0f, 5.0f, defaults.edgeWidthMeters,
                                                  "道路端から内側へ 1 のまま続く幅", "%.2f m");
                     changed |= ui::PropertyFloat("ぼかし", &roadMask->featherMeters, 0.0f, 5.0f, defaults.featherMeters,
                                                  "その内側で 0 へ落とす幅", "%.2f m");
                     break;
+                }
                 case graph::RoadMaskShape::LengthNoise:
                     changed |= ui::PropertyFloat("ノイズの大きさ", &roadMask->noiseScaleMeters, 0.1f, 50.0f, defaults.noiseScaleMeters,
                                                  "ノイズ 1 周期の実距離", "%.1f m", ImGuiSliderFlags_Logarithmic);

@@ -231,6 +231,13 @@ struct ShoulderNodeSettings {
 // Merge。設定は持たない。Mesh 1〜4 に繋いだ枝を順に積み、下流の白線・Decal は最初の枝の面に乗る。
 struct MergeNodeSettings {};
 
+// 端の減衰をどちらの端に出すか。左右は Path の進行方向基準（Road の Left / Right と同じ）。走行側には依存しない。
+enum class RoadMaskSide : uint32_t {
+    Both = 0,
+    Left = 1,
+    Right = 2,
+};
+
 struct RoadMaskNodeSettings {
     RoadMaskShape shape = RoadMaskShape::WheelTracks;
     // 轍。車線中央の中心線からの距離、タイヤ間隔、帯の幅、縁のぼかし。
@@ -239,8 +246,9 @@ struct RoadMaskNodeSettings {
     float trackWidthMeters = 0.35f;
     float featherMeters = 0.25f;
     bool bothLanes = true;
-    // 端の減衰。端で 1 になる幅と、その内側のぼかし幅。
+    // 端の減衰。端で 1 になる幅と、その内側のぼかし幅。側を選ぶと片側の端だけになる。
     float edgeWidthMeters = 0.3f;
+    RoadMaskSide edgeSide = RoadMaskSide::Both;
     // 長さ方向ノイズ。
     float noiseScaleMeters = 4.0f;
     float threshold = 0.5f;

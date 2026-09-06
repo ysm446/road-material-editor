@@ -1230,6 +1230,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                 {"uvRepeat", shoulder->uvRepeatMeters}, {"uvAlongU", shoulder->uvAlongU}};
         } else if (const auto* roadMaskSettings = std::get_if<graph::RoadMaskNodeSettings>(&node.settings)) {
             static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant"};
+            static const char* const kRoadMaskSideNames[] = {"both", "left", "right"};
             item["roadMask"] = {{"shape", EnumName(kRoadMaskShapeNames, static_cast<uint32_t>(roadMaskSettings->shape))},
                                 {"laneOffset", roadMaskSettings->laneOffsetMeters},
                                 {"trackSpacing", roadMaskSettings->trackSpacingMeters},
@@ -1237,6 +1238,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                 {"feather", roadMaskSettings->featherMeters},
                                 {"bothLanes", roadMaskSettings->bothLanes},
                                 {"edgeWidth", roadMaskSettings->edgeWidthMeters},
+                                {"edgeSide", EnumName(kRoadMaskSideNames, static_cast<uint32_t>(roadMaskSettings->edgeSide))},
                                 {"noiseScale", roadMaskSettings->noiseScaleMeters},
                                 {"threshold", roadMaskSettings->threshold},
                                 {"softness", roadMaskSettings->softness},
@@ -1452,6 +1454,9 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.featherMeters = ReadFloat(*mask, "feather", settings.featherMeters);
                     settings.bothLanes = ReadBool(*mask, "bothLanes", settings.bothLanes);
                     settings.edgeWidthMeters = ReadFloat(*mask, "edgeWidth", settings.edgeWidthMeters);
+                    static const char* const kRoadMaskSideNames[] = {"both", "left", "right"};
+                    settings.edgeSide = static_cast<graph::RoadMaskSide>(
+                        EnumValue(kRoadMaskSideNames, *mask, "edgeSide", static_cast<uint32_t>(settings.edgeSide)));
                     settings.noiseScaleMeters = ReadFloat(*mask, "noiseScale", settings.noiseScaleMeters);
                     settings.threshold = ReadFloat(*mask, "threshold", settings.threshold);
                     settings.softness = ReadFloat(*mask, "softness", settings.softness);

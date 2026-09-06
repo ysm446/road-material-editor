@@ -539,13 +539,218 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 success = true;
             }
         }
+    } else if (const auto* decal = std::get_if<DecalNodeSettings>(&node->settings)) {
+        const Node* upstream = node->inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node->inputs.front().id);
+        const Node* pathNode = node->inputs.size() > 1 ? graph.FindUpstreamNodeForPin(node->inputs[1].id) : nullptr;
+        const auto* pathSettings = pathNode ? std::get_if<PathNodeSettings>(&pathNode->settings) : nullptr;
+        if (!upstream) {
+            error = "DecalにRoadSurfaceを接続してください";
+        } else if (!pathSettings) {
+            error = "DecalのPathに面上のPathを接続してください";
+        } else if (EvaluateMeshChain(graph, upstream, chain, error, visiting)) {
+            renderer::SceneMesh mesh;
+            if (BuildDecal(chain.road, pathSettings->path, *decal, mesh.geometry, error)) {
+                mesh.material.baseColor = {0.6f, 0.6f, 0.6f};
+                mesh.material.roughness = 0.7f;
+                mesh.roadMetersPerUv = decal->uvRepeatMeters;
+                mesh.roadGridOverlay = false;
+                mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
+                mesh.displacementSource = chain.roadIndex;
+                mesh.useBlendMode = true;
+                AttachMaterial(graph, *node, mesh);
+                chain.meshes.push_back(std::move(mesh));
+                success = true;
+            }
+        }
     } else {
-        error = "Mesh OutputにはRoadかLane MarkingのRoadSurfaceを接続してください";
+        error = "Mesh OutputにはRoad / Lane Marking / DecalのRoadSurfaceを接続してください";
     }
     visiting.erase(node->id);
     return success;
 }
 }  // namespace
+
+
+RoadSurfacePoint RoadSurfacePointAt(const RoadGeometry& road, float distanceMeters, float lateralMeters) {
+    RoadSurfacePoint point{};
+    if (road.stride < 2 || road.surface.vertices.size() < road.stride * 2) return point;
+    const SurfaceSample sample = SampleRoadSurface(road, distanceMeters, lateralMeters);
+    XMStoreFloat3(&point.position, sample.position);
+    XMStoreFloat3(&point.normal, sample.normal);
+    return point;
+}
+
+bool RoadSurfaceCoordinates(const RoadGeometry& road, const XMFLOAT3& world, float& outDistanceMeters,
+                            float& outLateralMeters) {
+    const auto& v = road.surface.vertices;
+    if (road.stride < 2 || v.size() < road.stride * 2) return false;
+    const size_t rows = v.size() / road.stride;
+    const float metersPerUv = road.settings.uvRepeatMeters;
+    const XMVECTOR p = Load(world);
+    float bestError = 1e30f;
+    for (size_t row = 0; row + 1 < rows; ++row) {
+        const auto rowCenter = [&](size_t r) {
+            return XMVectorScale(XMVectorAdd(Load(v[r * road.stride].position), Load(v[r * road.stride + road.stride - 1].position)), 0.5f);
+        };
+        const auto rowAcross = [&](size_t r) {
+            return XMVectorSubtract(Load(v[r * road.stride + road.stride - 1].position), Load(v[r * road.stride].position));
+        };
+        const XMVECTOR c0 = rowCenter(row);
+        const XMVECTOR c1 = rowCenter(row + 1);
+        const XMVECTOR along = XMVectorSubtract(c1, c0);
+        const float alongLength = XMVectorGetX(XMVector3LengthSq(along));
+        if (alongLength < 1e-8f) continue;
+        const float t = std::clamp(XMVectorGetX(XMVector3Dot(XMVectorSubtract(p, c0), along)) / alongLength, 0.0f, 1.0f);
+        const XMVECTOR center = XMVectorLerp(c0, c1, t);
+        const XMVECTOR across = XMVectorLerp(rowAcross(row), rowAcross(row + 1), t);
+        const float acrossLength = XMVectorGetX(XMVector3LengthSq(across));
+        if (acrossLength < 1e-8f) continue;
+        const float s = XMVectorGetX(XMVector3Dot(XMVectorSubtract(p, center), across)) / acrossLength;
+        const XMVECTOR nearest = XMVectorAdd(center, XMVectorScale(across, s));
+        const float error = XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(p, nearest)));
+        if (error < bestError) {
+            bestError = error;
+            const float d0 = v[row * road.stride].uv.y * metersPerUv;
+            const float d1 = v[(row + 1) * road.stride].uv.y * metersPerUv;
+            outDistanceMeters = d0 + (d1 - d0) * t;
+            outLateralMeters = s * road.settings.widthMeters;
+        }
+    }
+    return bestError < 1e29f;
+}
+
+bool RayHitsRoad(const RoadGeometry& road, const XMFLOAT3& origin, const XMFLOAT3& direction, XMFLOAT3& outHit) {
+    const auto& v = road.surface.vertices;
+    const auto& indices = road.surface.indices;
+    const XMVECTOR o = Load(origin);
+    const XMVECTOR d = Load(direction);
+    float bestT = 1e30f;
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+        // Möller–Trumbore。裏面も拾う（面が傾いていても選べるように）。
+        const XMVECTOR a = Load(v[indices[i]].position);
+        const XMVECTOR e1 = XMVectorSubtract(Load(v[indices[i + 1]].position), a);
+        const XMVECTOR e2 = XMVectorSubtract(Load(v[indices[i + 2]].position), a);
+        const XMVECTOR pv = XMVector3Cross(d, e2);
+        const float det = XMVectorGetX(XMVector3Dot(e1, pv));
+        if (std::abs(det) < 1e-9f) continue;
+        const float inv = 1.0f / det;
+        const XMVECTOR tv = XMVectorSubtract(o, a);
+        const float u = XMVectorGetX(XMVector3Dot(tv, pv)) * inv;
+        if (u < 0.0f || u > 1.0f) continue;
+        const XMVECTOR qv = XMVector3Cross(tv, e1);
+        const float w = XMVectorGetX(XMVector3Dot(d, qv)) * inv;
+        if (w < 0.0f || u + w > 1.0f) continue;
+        const float t = XMVectorGetX(XMVector3Dot(e2, qv)) * inv;
+        if (t > 1e-4f && t < bestT) bestT = t;
+    }
+    if (bestT >= 1e29f) return false;
+    XMStoreFloat3(&outHit, XMVectorAdd(o, XMVectorScale(d, bestT)));
+    return true;
+}
+
+const Node* FindSurfaceRoad(const NodeGraph& graph, const Node& pathNode) {
+    if (pathNode.inputs.empty() || pathNode.inputs.front().valueType != ValueType::Mesh) return nullptr;
+    const Node* current = graph.FindUpstreamNodeForPin(pathNode.inputs.front().id);
+    for (int depth = 0; current != nullptr && depth < 64; ++depth) {
+        if (current->kind == NodeKind::Road) return current;
+        // Lane Marking / Decal は RoadSurface を素通しする。最初の Mesh 入力をたどる。
+        const Pin* meshInput = nullptr;
+        for (const auto& pin : current->inputs) if (pin.valueType == ValueType::Mesh) { meshInput = &pin; break; }
+        current = meshInput ? graph.FindUpstreamNodeForPin(meshInput->id) : nullptr;
+    }
+    return nullptr;
+}
+
+bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const DecalNodeSettings& settings,
+                renderer::MeshData& result, std::string& error) {
+    result = {};
+    error.clear();
+    const auto fail = [&](const char* message) { error = message; return false; };
+    if (road.stride < 2 || road.surface.vertices.size() < road.stride * 2) return fail("道路面が生成されていません");
+    if (!surfacePath.worldSpace || !surfacePath.surfaceSpace) return fail("Path の Surface に道路の RoadSurface を繋いでください");
+    if (!std::isfinite(settings.widthMeters) || settings.widthMeters < 0.05f || settings.widthMeters > 50.0f ||
+        !std::isfinite(settings.liftMeters) || settings.liftMeters < 0.0f || settings.liftMeters > 0.1f ||
+        !std::isfinite(settings.uvRepeatMeters) || settings.uvRepeatMeters < 0.05f || settings.uvRepeatMeters > 100.0f)
+        return fail("幅は0.05〜50 m、浮かせ量は0〜0.1 m、UV反復長は0.05〜100 mにしてください");
+    const auto strands = BuildPathStrands(surfacePath);
+    if (strands.empty()) return fail("Path に点を置いてください");
+    const uint32_t stride = 2;
+    for (const auto& strand : strands) {
+        // 道路座標（x = 横位置, z = 実距離）で曲線を割り、約 0.25 m で刻み直す。
+        std::vector<XMFLOAT3> points;
+        for (const auto& sample : SamplePathStrand(surfacePath, strand, 24)) {
+            const XMFLOAT3 p{sample.x, sample.y, sample.z};
+            if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return fail("Path の座標が不正です");
+            if (points.empty() || std::hypot(p.x - points.back().x, p.z - points.back().z) > 1e-5f) points.push_back(p);
+        }
+        if (points.size() < 2) continue;
+        std::vector<float> lengths(points.size(), 0.0f);
+        for (size_t i = 1; i < points.size(); ++i)
+            lengths[i] = lengths[i - 1] + std::hypot(points[i].x - points[i - 1].x, points[i].z - points[i - 1].z);
+        const float total = lengths.back();
+        if (!(total > 1e-4f) || total > 16000.0f) return fail("デカールのパスが短すぎるか長すぎます");
+        const size_t steps = std::max<size_t>(1, static_cast<size_t>(std::ceil(total / 0.25f)));
+        if (result.vertices.size() + (steps + 1) * stride > 200000) return fail("デカールの頂点数が多すぎます");
+        std::vector<XMFLOAT3> uniform;
+        size_t segment = 1;
+        for (size_t i = 0; i <= steps; ++i) {
+            const float distance = total * static_cast<float>(i) / static_cast<float>(steps);
+            while (segment + 1 < lengths.size() && lengths[segment] < distance) ++segment;
+            const float span = lengths[segment] - lengths[segment - 1];
+            const float t = span > 1e-6f ? (distance - lengths[segment - 1]) / span : 0.0f;
+            XMFLOAT3 p;
+            XMStoreFloat3(&p, XMVectorLerp(Load(points[segment - 1]), Load(points[segment]), t));
+            uniform.push_back(p);
+        }
+        const uint32_t base = static_cast<uint32_t>(result.vertices.size());
+        for (size_t i = 0; i < uniform.size(); ++i) {
+            const XMFLOAT3& p = uniform[i];
+            const XMFLOAT3& prev = uniform[i == 0 ? 0 : i - 1];
+            const XMFLOAT3& next = uniform[std::min(i + 1, uniform.size() - 1)];
+            // 道路座標の平面での接線と、その法線（帯の横方向）。
+            float tx = next.x - prev.x;
+            float tz = next.z - prev.z;
+            const float tl = std::hypot(tx, tz);
+            if (tl < 1e-6f) { tx = 0.0f; tz = 1.0f; } else { tx /= tl; tz /= tl; }
+            const float nx = -tz, nz = tx;
+            const float along = total * static_cast<float>(i) / static_cast<float>(steps);
+            for (int side = 0; side < 2; ++side) {
+                const float offset = (side == 0 ? -0.5f : 0.5f) * settings.widthMeters;
+                const float lateral = p.x + nx * offset;
+                const float distance = p.z + nz * offset;
+                const SurfaceSample sample = SampleRoadSurface(road, distance, lateral);
+                renderer::MeshVertex vertex{};
+                XMStoreFloat3(&vertex.position, XMVectorAdd(sample.position, XMVectorScale(sample.normal, settings.liftMeters + p.y)));
+                XMStoreFloat3(&vertex.normal, sample.normal);
+                const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(sample.across,
+                    XMVectorScale(sample.normal, XMVectorGetX(XMVector3Dot(sample.normal, sample.across)))));
+                XMStoreFloat4(&vertex.tangent, tangent);
+                vertex.tangent.w = -1.0f;
+                vertex.uv = {static_cast<float>(side), along / settings.uvRepeatMeters};
+                if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
+                vertex.roadUv = {(road.settings.widthMeters * 0.5f + lateral) / road.settings.uvRepeatMeters,
+                                 distance / road.settings.uvRepeatMeters};
+                if (road.settings.uvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
+                result.vertices.push_back(vertex);
+            }
+            if (i > 0) {
+                const uint32_t a = base + static_cast<uint32_t>(i - 1) * stride;
+                const uint32_t tris[2][3] = {{a, a + 2, a + 1}, {a + 1, a + 2, a + 3}};
+                for (const auto& tri : tris) {
+                    uint32_t x = tri[0], y = tri[1], z = tri[2];
+                    // パスが道路を逆走する区間では巻きが反転するので、法線が路面側を向くよう並べ直す。
+                    const XMVECTOR n = XMVector3Cross(
+                        XMVectorSubtract(Load(result.vertices[y].position), Load(result.vertices[x].position)),
+                        XMVectorSubtract(Load(result.vertices[z].position), Load(result.vertices[x].position)));
+                    if (XMVectorGetX(XMVector3Dot(n, Load(result.vertices[x].normal))) < 0.0f) std::swap(y, z);
+                    result.indices.insert(result.indices.end(), {x, y, z});
+                }
+            }
+        }
+    }
+    if (result.vertices.empty()) return fail("Path に 2 点以上の線を置いてください");
+    return true;
+}
 
 CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph) {
     CompiledMeshGraph compiled;

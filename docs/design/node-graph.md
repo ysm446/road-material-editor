@@ -1,7 +1,7 @@
 # node-graph — ノードグラフの設計
 
 作成日時: 2026-09-02 12:50
-更新日時: 2026-09-07 04:34
+更新日時: 2026-09-07 05:11
 
 `src/graph/` とグラフパネル（`src/app/ApplicationGraphPanel.cpp`）の設計。
 ノード編集と移行前の評価経路、Road / Mesh Output による道路メッシュの評価を記録する。
@@ -273,6 +273,12 @@ Roadは約1 m四方のセルを三角形2枚で構成する。カーブ・端の
 - 「UV の向き」で長さ方向を V（既定）か U にできる。2048×256 のような横長の白線素材は U。Road にも同じ設定があり、
   帯の道路 UV（押し出し用）は Road 側の設定に従う。
 - 設定は保存し、生成結果は再読込時に再構築する。破線・停止線は後続。
+
+## 面上の Path と Decal（2026-09-07）
+
+Path の入力は Surface（Mesh 型）。Road の RoadSurface（Lane Marking / Decal の素通し出力でもよい）を繋ぐと面の座標で保持し、
+道路を変えても追従する。Decal は RoadSurface・面上の Path・Material を受け、帯メッシュを作って RoadSurface を素通しする。
+旧地形パスの Base（Material 型）はこのピンの前身で、旧ファイルのリンクは型が違うため捨てる。詳細は [road-material-layers](road-material-layers.md)。
 
 ## Road Mask と材質スロット（2026-09-07）
 

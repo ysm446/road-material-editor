@@ -50,6 +50,8 @@ enum class NodeKind : uint32_t {
     RoadMarking = 26,
     // 道路空間マスク。轍・端の減衰・長さ方向ノイズを Road のスロット 2〜4 の被覆率にする。
     RoadMask = 27,
+    // 面上のパスに沿って帯を貼るデカール。ひび・補修跡・汚れなどの模様。
+    Decal = 28,
     Surface = 0,
     Shape = 1,
     Liquid = 2,
@@ -202,6 +204,15 @@ enum class RoadMaskShape : uint32_t {
     Constant = 3,     // 一様
 };
 
+// デカール。Path（Surface に道路を繋いだ面上のパス）に沿った幅 widthMeters の帯を、
+// 道路面と一体で押し出される帯メッシュとして貼る。材質の不透明度で模様をくり抜く。
+struct DecalNodeSettings {
+    float widthMeters = 1.0f;
+    float liftMeters = 0.008f;
+    float uvRepeatMeters = 1.0f;
+    bool uvAlongU = false;
+};
+
 struct RoadMaskNodeSettings {
     RoadMaskShape shape = RoadMaskShape::WheelTracks;
     // 轍。車線中央の中心線からの距離、タイヤ間隔、帯の幅、縁のぼかし。
@@ -269,7 +280,7 @@ struct OutputNodeSettings {};
 
 using NodeSettings =
     std::variant<LayerNodeSettings, MaskNodeSettings, OutputNodeSettings, PathNodeSettings, RoadNodeSettings,
-                 RoadMarkingNodeSettings, RoadMaskNodeSettings>;
+                 RoadMarkingNodeSettings, RoadMaskNodeSettings, DecalNodeSettings>;
 
 struct Node {
     GraphId id = 0;

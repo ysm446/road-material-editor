@@ -8,6 +8,7 @@
 #include "core/FrameLimiter.h"
 #include "core/Window.h"
 #include "graph/NodeGraph.h"
+#include "graph/Road.h"
 #include "app/UndoHistory.h"
 #include "io/AppSettings.h"
 #include "io/MaterialExport.h"
@@ -476,6 +477,21 @@ private:
         float ringStartAngle = 0.0f;
     };
     PathEditState m_pathEdit;
+    // 面上のパス（Surface に道路を繋いだ Path）の道路面。グラフの改版ごとに評価し直す。
+    // PathWorldPosition が const なので lazily 更新する。
+    struct SurfaceBinding {
+        graph::GraphId pathNode = 0;
+        graph::GraphId roadNode = 0;
+        uint64_t revision = 0;
+        bool valid = false;
+        graph::RoadGeometry road;
+    };
+    mutable SurfaceBinding m_surfaceBinding;
+    // 選択中の Path が面上のパスなら、その道路面。無ければ nullptr。
+    const graph::RoadGeometry* SurfacePathRoad(const graph::Node& pathNode) const;
+    // カーソルのレイと道路面の交点を道路座標（横位置, 実距離）にする。
+    bool PickSurface(const graph::RoadGeometry& road, const ImVec2& mouse, const ImVec2& viewportMin,
+                     const ImVec2& viewportMax, float& outLateral, float& outDistance) const;
     // パスのクリップボード（アプリ内）。鎖や点の集合をコピーして、カーソルの所へ貼る。
     // 別の Path ノードへも貼れる。
     graph::PathClip m_pathClipboard;

@@ -1,12 +1,12 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 04:34
+更新日時: 2026-09-07 05:11
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
-Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は12。
-版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンク、版12で Road の材質スロットと Road Mask を追加した（「Road Editor で追加した版」）。
+Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は13。
+版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンク、版12で Road の材質スロットと Road Mask、版13で面上の Path と Decal を追加した（「Road Editor で追加した版」）。
 道路専用の拡張子は後続で設計する。
 
 ## 全体像
@@ -60,6 +60,7 @@ material-mixer 時代の `.mmproj` / `.mmmat` も**読み込みだけ**受け付
 | 10 | `roadMarking` ノード（白線）を追加した |
 | 11 | Path に縦断ポイント・バンクポイントを追加した。`graph.roadNetwork` と Lane Marking の矢印はキー追加のみ |
 | 12 | Road に Material 2〜4 / Mask 2〜4 のピンと `roadMask` ノードを追加した |
+| 13 | Path の入力を Surface（Mesh 型）にし、`surfaceSpace` と `decal` ノードを追加した |
 
 **版を上げる基準は「キーが増えたか」ではなく「既存のキーの意味が変わったか」。**
 キーが増えただけなら、古いビルドはそれを無視して正しく読める。意味が変わった場合は、
@@ -194,7 +195,7 @@ routedFrom, routedTo, waypoints }`（点の `id` を指す。from → to が向�
 **版は上げない。** キーが消えるだけで既存のキーの意味は変わらず、
 古いビルドが新しいファイルを読んでも既定値 1.0 として従来どおり動く。
 
-## Road Editor で追加した版（5〜12）
+## Road Editor で追加した版（5〜13）
 
 版5以降は Road Editor で追加した。版の並びは上げた順で、それぞれ旧アプリの誤読を防ぐため版を上げている。
 
@@ -271,6 +272,13 @@ Road の inputs は Path、Material、Material 2〜4、Mask 2〜4 の順（版11
 `kind: "roadMask"` は `roadMask: { shape（wheelTracks / edgeFalloff / lengthNoise / constant）, laneOffset, trackSpacing, trackWidth,
 feather, bothLanes, edgeWidth, noiseScale, threshold, softness, seed, breakupAmount, breakupScale, strength, invert }` を持つ。
 旧ビルドはスロット 2〜4 のリンクを捨てて下地だけを出すため版を上げた。
+
+### 版13 — 面上の Path と Decal
+
+Path の inputs[0] は Surface（Mesh 型）。旧地形の Base（Material 型）へのリンクは型が違うので読込時に捨てる。
+`path.surfaceSpace: true` なら点の `position` は `[横位置, 面からの高さ, 実距離]`（m）。
+`kind: "decal"` は `decal: { "width": 1.0, "lift": 0.008, "uvRepeat": 1.0, "uvAlongU": false }` を持ち、
+inputs は RoadSurface、Path、Material の順、outputs は RoadSurface。
 
 同じ版でキーだけ追加したもの（無ければ既定値）:
 
@@ -390,7 +398,7 @@ RGB をそのまま使うマップ（ベースカラー / 法線）はテクス�
   並びで、ピンの型やラベルはノードの定義から再生成する（ファイルには書かない）。
 - `kind` は名前で書く（`surface` / `shape` / `liquid` / `heightmap` /
   `heightmapBlur` / `maskImage` / `maskFluvial` / `maskSlope` / `maskLevels` /
-  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking` / `roadMask`）。知らない種類のノードは読み飛ばす。
+  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking` / `roadMask` / `decal`）。知らない種類のノードは読み飛ばす。
 - レイヤー設定を持つノード（surface / shape / liquid / heightmap /
   heightmapBlur）は `layer` に
   旧 `layers[]` の要素と同じ形を持つ。テクスチャ / マテリアル / ペイントの参照も

@@ -116,11 +116,18 @@ constexpr std::array<PinDefinition, 3> kMaskBlendPins = {{
     {PinKind::Output, ValueType::Mask, "Mask"},
 }};
 
-// パスのピン。Base は「どの時点の地形に沿うか」（表示とプレビューに使う。
-// パスの座標は 2D なので評価には効かない）。出力はパスそのもの。
+// パスのピン。Surface に Road の RoadSurface を繋ぐと、そのパスは面の座標（横位置 × 実距離）で
+// 保持され、道路を変形しても面に貼り付いたまま追従する（デカールの経路）。繋がなければ実寸 XYZ。
+// 旧地形パスの Base（どの地形に沿うか）はこのピンの前身で、旧ファイルのリンクは型が違うので捨てる。
 constexpr std::array<PinDefinition, 2> kPathPins = {{
-    {PinKind::Input, ValueType::Material, "Base"},
+    {PinKind::Input, ValueType::Mesh, "Surface"},
     {PinKind::Output, ValueType::Path, "Path"},
+}};
+constexpr std::array<PinDefinition, 4> kDecalPins = {{
+    {PinKind::Input, ValueType::Mesh, "RoadSurface"},
+    {PinKind::Input, ValueType::Path, "Path"},
+    {PinKind::Input, ValueType::Material, "Material"},
+    {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 
 // パスの足跡をマスクにするピン。
@@ -164,9 +171,10 @@ constexpr std::array<PinDefinition, 3> kRoadMarkingPins = {{
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 
-constexpr std::array<NodeDefinition, 28> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 29> kNodeDefinitions = {{
     {NodeKind::Road, "road", "Road", kRoadPins},
     {NodeKind::RoadMask, "roadMask", "Road Mask", kRoadMaskPins},
+    {NodeKind::Decal, "decal", "Decal", kDecalPins},
     {NodeKind::RoadMarking, "roadMarking", "Lane Marking", kRoadMarkingPins},
     {NodeKind::MeshOutput, "meshOutput", "Mesh Output", kMeshOutputPins},
     {NodeKind::Heightmap, "heightmap", "Heightmap", kSourceNodePins},
@@ -453,6 +461,8 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = RoadMarkingNodeSettings{};
     } else if (kind == NodeKind::RoadMask) {
         node.settings = RoadMaskNodeSettings{};
+    } else if (kind == NodeKind::Decal) {
+        node.settings = DecalNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
         std::get<PathNodeSettings>(node.settings).path.worldSpace = true;

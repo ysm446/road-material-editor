@@ -78,6 +78,8 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.80f, 0.80f, 0.76f, 1.0f);
         case graph::NodeKind::RoadMask:
             return ImVec4(0.78f, 0.66f, 0.50f, 1.0f);
+        case graph::NodeKind::Decal:
+            return ImVec4(0.72f, 0.60f, 0.76f, 1.0f);
         case graph::NodeKind::MaskPath:
         case graph::NodeKind::MaskArea:
             return ImVec4(0.58f, 0.74f, 0.82f, 1.0f);
@@ -861,6 +863,7 @@ void Application::DrawGraphEditor() {
         addNodeMenuItem(graph::NodeKind::Road, "Road — Pathから道路面と左右境界を生成");
         addNodeMenuItem(graph::NodeKind::RoadMarking, "Lane Marking — 道路面に白線の帯を生成");
         addNodeMenuItem(graph::NodeKind::RoadMask, "Road Mask — 轍・端・ムラの道路空間マスク");
+        addNodeMenuItem(graph::NodeKind::Decal, "Decal — 面上のPathに沿って模様の帯を貼る");
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Heightmap, "Heightmap — 画像を地形として読み込む");
@@ -1130,6 +1133,29 @@ void Application::DrawGraphPanel() {
         }
         ui::HintText("Material にSurfaceなどのResultを接続して材質を適用。Material 2〜4 は Road Mask を Mask 2〜4 へ繋いだ所に出る。"
                      "RoadSurfaceはMesh Outputへ、Left / Rightは進行方向に向かって左右の境界Path。走行側はプレビュー設定の「道路」で切り替える。");
+        if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
+    } else if (auto* decal = std::get_if<graph::DecalNodeSettings>(&selected->settings)) {
+        bool changed = false;
+        const graph::DecalNodeSettings defaults;
+        if (ui::BeginPropertyTable("decalRows")) {
+            changed |= ui::PropertyFloat("幅", &decal->widthMeters, 0.05f, 50.0f, defaults.widthMeters, "帯の幅", "%.2f m");
+            changed |= ui::PropertyFloat("浮かせ量", &decal->liftMeters, 0.0f, 0.1f, defaults.liftMeters,
+                                         "路面から法線方向へ持ち上げる量", "%.3f m");
+            changed |= ui::PropertyFloat("UV反復長", &decal->uvRepeatMeters, 0.05f, 100.0f, defaults.uvRepeatMeters,
+                                         "帯の長さ方向で UV が 1 増える実距離。幅方向は 0〜1", "%.2f m");
+            {
+                static const char* const kUvAxisLabels[] = {"長さ方向 = V（縦）", "長さ方向 = U（横）"};
+                int axis = decal->uvAlongU ? 1 : 0;
+                if (ui::PropertyCombo("UVの向き", &axis, kUvAxisLabels, IM_ARRAYSIZE(kUvAxisLabels), 0,
+                                      "テクスチャのどの軸を帯の長さ方向に沿わせるか")) {
+                    decal->uvAlongU = (axis == 1);
+                    changed = true;
+                }
+            }
+            ui::EndPropertyTable();
+        }
+        ui::HintText("RoadのRoadSurfaceと、Surfaceにその道路を繋いだPathを接続する。Pathは路面の上でCtrl＋クリックして引く。"
+                     "Materialの不透明度で模様をくり抜き、出力のRoadSurfaceをLane MarkingかMesh Outputへ。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (auto* roadMask = std::get_if<graph::RoadMaskNodeSettings>(&selected->settings)) {
         bool changed = false;

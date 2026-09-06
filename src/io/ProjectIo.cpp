@@ -40,7 +40,8 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 8: road / meshOutput ノード。9: Road の Material 入力。10: roadMarking ノード。
 // 11: Path の縦断ポイント・バンクポイント。旧ビルドが線形を平坦・水平に読むことを防ぐ。
 // 12: Road の材質スロット 2〜4 と roadMask ノード。旧ビルドがスロット 2〜4 のリンクを捨てて下地だけを出すことを防ぐ。
-constexpr int kProjectFormatVersion = 12;
+// 13: Path の Surface 入力（Mesh 型）と surfaceSpace、decal ノード。
+constexpr int kProjectFormatVersion = 13;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -569,6 +570,7 @@ compositor::AreaMaskParams ReadAreaMask(const json& parent, const char* key) {
 json WritePath(const graph::PathSettings& path) {
     json node;
     node["worldSpace"] = path.worldSpace;
+    if (path.surfaceSpace) node["surfaceSpace"] = true;
     json points = json::array();
     for (const graph::PathPoint& point : path.points) {
         json item;
@@ -660,6 +662,7 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
         return path;
     }
     path.worldSpace = ReadBool(*node, "worldSpace", false);
+    path.surfaceSpace = path.worldSpace && ReadBool(*node, "surfaceSpace", false);
     const graph::PathSettings defaults;
     path.defaultWidthMeters = ReadFloat(*node, "defaultWidth", defaults.defaultWidthMeters);
     path.defaultFeatherMeters = ReadFloat(*node, "defaultFeather", defaults.defaultFeatherMeters);
@@ -1217,6 +1220,9 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                             {"layerUvRepeat", json::array({road->layerUvRepeatMeters[0], road->layerUvRepeatMeters[1],
                                                            road->layerUvRepeatMeters[2], road->layerUvRepeatMeters[3]})},
                             {"layerBlendRange", road->layerBlendRange}};
+        } else if (const auto* decal = std::get_if<graph::DecalNodeSettings>(&node.settings)) {
+            item["decal"] = {{"width", decal->widthMeters}, {"lift", decal->liftMeters},
+                             {"uvRepeat", decal->uvRepeatMeters}, {"uvAlongU", decal->uvAlongU}};
         } else if (const auto* roadMaskSettings = std::get_if<graph::RoadMaskNodeSettings>(&node.settings)) {
             static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant"};
             item["roadMask"] = {{"shape", EnumName(kRoadMaskShapeNames, static_cast<uint32_t>(roadMaskSettings->shape))},
@@ -1396,6 +1402,15 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                             if ((*repeat)[i].is_number()) settings.layerUvRepeatMeters[i] = std::clamp((*repeat)[i].get<float>(), 0.1f, 100.0f);
                     }
                     settings.layerBlendRange = std::clamp(ReadFloat(*road, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
+                }
+                created.settings = settings;
+            } else if (created.kind == graph::NodeKind::Decal) {
+                graph::DecalNodeSettings settings;
+                if (const json* decal = FindMember(item, "decal"); decal && decal->is_object()) {
+                    settings.widthMeters = ReadFloat(*decal, "width", settings.widthMeters);
+                    settings.liftMeters = ReadFloat(*decal, "lift", settings.liftMeters);
+                    settings.uvRepeatMeters = ReadFloat(*decal, "uvRepeat", settings.uvRepeatMeters);
+                    settings.uvAlongU = ReadBool(*decal, "uvAlongU", settings.uvAlongU);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::RoadMask) {

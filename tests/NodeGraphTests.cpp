@@ -367,15 +367,13 @@ void RunNodeGraphTests() {
         Check(outputConnected && IsNeutralPlane(graph.CompileLayersTo(pathId)),
               "Base 未接続の Path は Output 側の地形ではなく変位 0 の平面になる");
 
-        const bool pathConnected =
+        // Path の入力は Surface（Mesh 型）になった。旧地形（Material 型）は繋げない。
+        const bool pathRejects =
             heightmap != nullptr && path != nullptr && !heightmap->outputs.empty() &&
             !path->inputs.empty() &&
-            graph.CreateLink(heightmap->outputs.front().id, path->inputs.front().id);
-        const tg::graph::CompiledGraph compiled = graph.CompileLayersTo(pathId);
-        Check(pathConnected && compiled.layers.size() == 1 &&
-                  compiled.layers.front().kind == tg::compositor::LayerKind::Shape &&
-                  compiled.layers.front().heightSource != tg::compositor::ValueSource::Constant,
-              "Base 接続中の Path は自身の入力地形を表示する");
+            !graph.CanCreateLink(heightmap->outputs.front().id, path->inputs.front().id);
+        Check(pathRejects && path->inputs.front().valueType == tg::graph::ValueType::Mesh,
+              "Path の Surface 入力は Mesh 型で、地形（Material）は繋げない");
     }
 
     Section("ノードグラフ — ハイト由来マスクの Base");

@@ -39,6 +39,7 @@
 #include "graph/Path.h"
 #include "graph/PathRoute.h"
 #include "graph/RoadProfile.h"
+#include "graph/Road.h"
 #include "ui/UiStyle.h"
 
 #include <imgui.h>
@@ -882,9 +883,56 @@ graph::Node* Application::CurrentPathNode() {
     return node;
 }
 
+const graph::RoadGeometry* Application::SurfacePathRoad(const graph::Node& pathNode) const {
+    const graph::Node* road = graph::FindSurfaceRoad(m_graph, pathNode);
+    if (road == nullptr) {
+        m_surfaceBinding.valid = false;
+        return nullptr;
+    }
+    if (m_surfaceBinding.pathNode != pathNode.id || m_surfaceBinding.roadNode != road->id ||
+        m_surfaceBinding.revision != m_graph.Revision()) {
+        std::string error;
+        m_surfaceBinding.valid = graph::EvaluateRoad(m_graph, road->id, m_surfaceBinding.road, error);
+        m_surfaceBinding.pathNode = pathNode.id;
+        m_surfaceBinding.roadNode = road->id;
+        m_surfaceBinding.revision = m_graph.Revision();
+    }
+    return m_surfaceBinding.valid ? &m_surfaceBinding.road : nullptr;
+}
+
+bool Application::PickSurface(const graph::RoadGeometry& road, const ImVec2& mouse, const ImVec2& viewportMin,
+                              const ImVec2& viewportMax, float& outLateral, float& outDistance) const {
+    const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
+    if (size.x <= 0.0f || size.y <= 0.0f) return false;
+    const renderer::Camera& camera = m_renderer.GetCamera();
+    const XMMATRIX viewProjection = camera.ViewMatrix() * camera.ProjectionMatrix();
+    XMVECTOR determinant;
+    const XMMATRIX inverse = XMMatrixInverse(&determinant, viewProjection);
+    if (XMVectorGetX(determinant) == 0.0f) return false;
+    const float ndcX = ((mouse.x - viewportMin.x) / size.x) * 2.0f - 1.0f;
+    const float ndcY = 1.0f - ((mouse.y - viewportMin.y) / size.y) * 2.0f;
+    const XMVECTOR nearPoint = XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 0.0f, 1.0f), inverse);
+    const XMVECTOR farPoint = XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 1.0f, 1.0f), inverse);
+    XMFLOAT3 origin;
+    XMFLOAT3 direction;
+    XMStoreFloat3(&origin, nearPoint);
+    XMStoreFloat3(&direction, XMVector3Normalize(XMVectorSubtract(farPoint, nearPoint)));
+    XMFLOAT3 hit;
+    if (!graph::RayHitsRoad(road, origin, direction, hit)) return false;
+    return graph::RoadSurfaceCoordinates(road, hit, outDistance, outLateral);
+}
+
 XMFLOAT3 Application::PathWorldPosition(float u, float v, float y) const {
     const graph::Node* node = m_graph.FindNode(m_selectedGraphNode);
     const auto* settings = node ? std::get_if<graph::PathNodeSettings>(&node->settings) : nullptr;
+    if (settings && settings->path.surfaceSpace) {
+        // 面上のパス。u = 横位置、v = 実距離、y = 面からの高さ。
+        if (const graph::RoadGeometry* road = SurfacePathRoad(*node)) {
+            const graph::RoadSurfacePoint point = graph::RoadSurfacePointAt(*road, v, u);
+            return {point.position.x + point.normal.x * y, point.position.y + point.normal.y * y,
+                    point.position.z + point.normal.z * y};
+        }
+    }
     if (settings && settings->path.worldSpace) return {u, y, v};
     const float size = m_renderer.PlaneSize();
     const float scale = m_renderer.DisplacementScale();
@@ -923,6 +971,11 @@ bool Application::PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin,
 
     const graph::Node* node = m_graph.FindNode(m_selectedGraphNode);
     const auto* settings = node ? std::get_if<graph::PathNodeSettings>(&node->settings) : nullptr;
+    if (settings && settings->path.surfaceSpace) {
+        // 面上のパスは道路面との交点を道路座標にする。面の外は置けない。
+        const graph::RoadGeometry* road = SurfacePathRoad(*node);
+        return road != nullptr && PickSurface(*road, mouse, viewportMin, viewportMax, outU, outV);
+    }
     if (settings && settings->path.worldSpace) {
         // メッシュの有無やグリッドの範囲に依存しない作業平面。
         float height = 0.0f;
@@ -1035,8 +1088,32 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
         state.dragPoint = 0;
         state.dragging = false;
     }
+    // Surface に道路が繋がった / 外れたときに座標の意味を切り替える。
+    // 繋いだときは今の世界座標を面の座標へ写す。外したときは数値をそのまま実寸として扱う。
+    {
+        const graph::RoadGeometry* surfaceRoad = path.worldSpace ? SurfacePathRoad(node) : nullptr;
+        if (surfaceRoad != nullptr && !path.surfaceSpace) {
+            for (graph::PathPoint& point : path.points) {
+                float distance = 0.0f;
+                float lateral = 0.0f;
+                if (graph::RoadSurfaceCoordinates(*surfaceRoad, {point.x, point.y, point.z}, distance, lateral)) {
+                    point.x = lateral;
+                    point.z = distance;
+                    point.y = 0.0f;
+                }
+            }
+            path.surfaceSpace = true;
+            state.profileMode = PathEditState::kProfilePoints;
+            m_graph.MarkDirty();
+            MarkDocumentChanged();
+        } else if (surfaceRoad == nullptr && path.surfaceSpace) {
+            path.surfaceSpace = false;
+            m_graph.MarkDirty();
+            MarkDocumentChanged();
+        }
+    }
     // 縦断 / バンクの編集モードは別の入力処理。制御点の選択やギズモは出さない。
-    if (path.worldSpace && state.profileMode != PathEditState::kProfilePoints) {
+    if (path.worldSpace && !path.surfaceSpace && state.profileMode != PathEditState::kProfilePoints) {
         HandlePathProfileInput(node, itemHovered, viewportMin, viewportMax);
         return;
     }
@@ -1064,8 +1141,9 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     // Ctrl を押している間（伸ばす）は出さない（クリックを横取りしないため）。
     const std::vector<graph::PathElementId> movable = PathMovablePoints(
         path, state.selected, state.selectedEdges, state.selectedStrandInterior);
+    // 面上のパスは面に沿ってドラッグするだけ。世界軸のギズモは意味が変わるので出さない。
     const PathGizmoScreen gizmo =
-        (!io.KeyCtrl && !state.dragging && !state.boxPending)
+        (!io.KeyCtrl && !state.dragging && !state.boxPending && !path.surfaceSpace)
             ? BuildPathGizmo(path, movable, path.worldSpace ? 1.0f : m_renderer.PlaneSize(), viewProjection, viewportMin,
                              size, worldOf)
             : PathGizmoScreen{};
@@ -1585,7 +1663,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(viewportMin, viewportMax, true);
-    const bool profileMode = path.worldSpace && state.profileMode != PathEditState::kProfilePoints;
+    const bool profileMode = path.worldSpace && !path.surfaceSpace && state.profileMode != PathEditState::kProfilePoints;
 
     // 色。ピンの色（水色）と同じ系統で、状態は明るさで分ける。
     const ImU32 lineColor = IM_COL32(120, 200, 240, 220);
@@ -1760,7 +1838,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
 
     // --- 移動ギズモ -------------------------------------------------------------
     // 座標軸ギズモと同じ色（X = 赤、Z = 青）。掴める所は明るくする。
-    if (!io.KeyCtrl && !state.dragging && !state.boxPending && !profileMode) {
+    if (!io.KeyCtrl && !state.dragging && !state.boxPending && !profileMode && !path.surfaceSpace) {
         const std::vector<graph::PathElementId> movable = PathMovablePoints(
             path, state.selected, state.selectedEdges, state.selectedStrandInterior);
         const PathGizmoScreen gizmo =
@@ -1918,7 +1996,7 @@ bool Application::DrawPathSettings(graph::Node& node) {
     ui::SectionHeader("パス");
     if (ui::BeginPropertyTable("graphPathRows")) {
         ui::PropertyValue("要素", "点 %zu / エッジ %zu", path.points.size(), path.edges.size());
-        ui::PropertyValue("座標", "%s", path.worldSpace ? "実寸（m）" : "旧地形UV");
+        ui::PropertyValue("座標", "%s", path.surfaceSpace ? "面上（横位置 / 実距離 m）" : (path.worldSpace ? "実寸（m）" : "旧地形UV"));
         if (!path.worldSpace) {
             ui::PropertyLabelEmpty("pathToWorld");
             if (ui::Button("実寸カーブへ変換", ui::kWideButtonWidth)) {
@@ -2008,7 +2086,7 @@ bool Application::DrawPathSettings(graph::Node& node) {
     }
 
     // --- 道路線形（縦断曲線とバンク角） ------------------------------------------------
-    if (path.worldSpace) {
+    if (path.worldSpace && !path.surfaceSpace) {
         if (m_pathEdit.nodeId != node.id) {
             m_pathEdit = PathEditState{};
             m_pathEdit.nodeId = node.id;
@@ -2108,8 +2186,9 @@ bool Application::DrawPathSettings(graph::Node& node) {
             if (path.worldSpace) {
                 float xyz[] = {edit.x, edit.y, edit.z};
                 constexpr float defaultXyz[] = {0.0f, 0.0f, 0.0f};
-                const unsigned axes = ui::PropertyFloat3Input("位置 (m)", xyz, defaultXyz,
-                    "ワールド座標。変更した軸だけを選択点へ適用する");
+                const unsigned axes = ui::PropertyFloat3Input(path.surfaceSpace ? "横位置/高さ/距離 (m)" : "位置 (m)", xyz, defaultXyz,
+                    path.surfaceSpace ? "道路面の座標。横位置は正が Left、距離は始点から、高さは面から。変更した軸だけを選択点へ適用する"
+                                      : "ワールド座標。変更した軸だけを選択点へ適用する");
                 for (auto* point : selectedPoints) {
                     if (axes & 1u) point->x = xyz[0];
                     if (axes & 2u) point->y = xyz[1];
@@ -2305,7 +2384,8 @@ bool Application::DrawPathSettings(graph::Node& node) {
         }
     }
 
-    ui::HintText(path.worldSpace ? "Ctrl＋クリックで点を追加。グリッド外にも配置できる。高さは選択した点のYで編集する。" :
+    ui::HintText(path.surfaceSpace ? "面上のパス。路面の上で Ctrl＋クリックして点を置き、路面に沿ってドラッグする。Decal の Path へ繋ぐ。" :
+                 path.worldSpace ? "Ctrl＋クリックで点を追加。グリッド外にも配置できる。高さは選択した点のYで編集する。Surface に Road を繋ぐと面上のパスになる。" :
                  "ビューポートで編集する（操作はビューポートの下に出る）。"
                  "地形はプレビュー中のものに沿う。Base に繋いだ地形を見るには、"
                  "このノードをダブルクリック");

@@ -139,6 +139,9 @@ struct PathBankPoint {
 struct PathSettings {
     // true: x/y/zはワールド座標(m)。falseは旧形式のUV(x/z)と相対高さ(y)。
     bool worldSpace = false;
+    // true: Surface 入力の道路の面の座標。x = 横位置（m、正が Left）、z = 始点からの実距離（m）、
+    // y = 面からの高さ。worldSpace と併用する。道路を変形しても面に貼り付いたまま追従する。
+    bool surfaceSpace = false;
     std::vector<PathPoint> points;
     std::vector<PathEdge> edges;
     // --- 道路線形（実寸 Path のみ） ---

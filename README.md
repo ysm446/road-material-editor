@@ -74,7 +74,7 @@ $exe = Join-Path $PWD 'build/bin/Debug/road_editor.exe'
 ## 保存と互換性
 
 移行初期は `.tgproj` / `.tgmat` と JSON の `terrain-graph.*` 識別子を継続する。
-`.mmproj` / `.mmmat` の読み込みも維持する。現在の版は11。版5で scene 節の明示的なメッシュ入力、版6〜7で実寸 Path、版8〜9で Road ノードの設定と Material 入力、版10で白線ノード、版11で縦断・バンクを保存する。
+`.mmproj` / `.mmmat` の読み込みも維持する。現在の版は13。版5で scene 節の明示的なメッシュ入力、版6〜7で実寸 Path、版8〜9で Road ノードの設定と Material 入力、版10で白線ノード、版11で縦断・バンク、版12で材質スロットと Road Mask、版13で面上の Path と Decal を保存する。
 生成した道路メッシュは保存せず、再読込時に再構築する。道路専用の拡張子は後続で設計する。
 旧地形ノードを削除する段階では、未対応ノードを黙って捨てず、明示的な移行か読込拒否にする。
 
@@ -116,6 +116,8 @@ road_editor.exe [--project <path>] [--save-project <path>]
 5. SurfaceなどのResultをRoadのMaterial入力へ接続すると、道路UVで材質を表示する。未接続は単色。
 6. 白線はLane Markingノードを追加し、RoadのRoadSurfaceを入力、出力のRoadSurfaceをMesh Outputへ接続する。
    中央線と左右の外側線を帯ポリゴンで生成し、線幅・端からの距離・UV反復長を設定できる。Materialに塗料の材質を接続できる。
+7. 模様の帯（デカール）は、PathのSurfaceにRoadのRoadSurfaceを繋いで路面の上にパスを引き、Decalノードにその道路・Path・材質を接続する。
+   Roadは材質スロットを4つ持ち、Road Maskノード（轍・端の減衰・ノイズ）で被覆率を決めてハイトで混ぜる。
 
 ビューポートの「表示」から道路の1 mグリッドとUVチェッカーを切り替えられる。
 

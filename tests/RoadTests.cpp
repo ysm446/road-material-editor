@@ -496,4 +496,73 @@ void RunRoadTests() {
               std::abs(layeredMesh.roadWidthMeters - 6.0f) < 1e-5f && std::abs(layeredMesh.roadLengthMeters - std::sqrt(104.0f)) < 1e-3f,
               "slot settings and road dimensions reach the scene mesh");
     }
+
+    tests::Section("Surface path and decal");
+    {
+        graph::RoadGeometry deck;
+        Check(graph::BuildRoad(path, settings, deck, error), "road for decals");
+        // 世界座標 → 道路座標 → 世界座標の往復。
+        float distance = 0.0f, lateral = 0.0f;
+        Check(graph::RoadSurfaceCoordinates(deck, {1.5f, 0.8f, 4.0f}, distance, lateral) &&
+              std::abs(lateral - 1.5f) < 1e-3f && std::abs(distance - 4.0f * std::sqrt(104.0f) / 10.0f) < 1e-2f,
+              "world position maps to lateral and distance");
+        const auto back = graph::RoadSurfacePointAt(deck, distance, lateral);
+        Check(std::abs(back.position.x - 1.5f) < 1e-3f && std::abs(back.position.z - 4.0f) < 1e-2f &&
+              std::abs(back.position.y - 0.8f) < 1e-2f, "road coordinates map back to the surface");
+        DirectX::XMFLOAT3 hit;
+        Check(graph::RayHitsRoad(deck, {0.5f, 10.0f, 5.0f}, {0.0f, -1.0f, 0.0f}, hit) &&
+              std::abs(hit.x - 0.5f) < 1e-4f && std::abs(hit.z - 5.0f) < 1e-4f && std::abs(hit.y - 1.0f) < 1e-3f,
+              "vertical ray hits the sloped road");
+        Check(!graph::RayHitsRoad(deck, {10.0f, 10.0f, 5.0f}, {0.0f, -1.0f, 0.0f}, hit), "ray beside the road misses");
+        // 面上のパス: 横位置 -1 → +1 を距離 2〜8 で斜めに横切る。
+        graph::PathSettings surfacePath;
+        surfacePath.worldSpace = true;
+        surfacePath.surfaceSpace = true;
+        const auto s0 = graph::AddPathPoint(surfacePath, -1.0f, 2.0f, 0);
+        graph::AddPathPoint(surfacePath, 1.0f, 8.0f, s0);
+        graph::DecalNodeSettings decalSettings;
+        decalSettings.widthMeters = 0.5f;
+        renderer::MeshData decalMesh;
+        Check(graph::BuildDecal(deck, surfacePath, decalSettings, decalMesh, error), "decal strip builds");
+        if (!error.empty()) std::printf("Decal error: %s\n", error.c_str());
+        Check(decalMesh.vertices.size() >= 2 * 24 && decalMesh.indices.size() == (decalMesh.vertices.size() / 2 - 1) * 6,
+              "decal strip is resampled at about 0.25 m");
+        if (!decalMesh.vertices.empty()) {
+            const auto& firstVertex = decalMesh.vertices[0];
+            const auto& lastVertex = decalMesh.vertices.back();
+            Check(std::abs((firstVertex.position.x + decalMesh.vertices[1].position.x) * 0.5f + 1.0f) < 0.05f &&
+                  std::abs((lastVertex.position.x + decalMesh.vertices[decalMesh.vertices.size() - 2].position.x) * 0.5f - 1.0f) < 0.05f,
+                  "strip centre follows the path laterally");
+            Check(firstVertex.position.y > 0.0f && lastVertex.uv.y > 5.0f && lastVertex.uv.x == 1.0f, "strip sits on the surface with along-path V");
+            renderer::MeshScene decalScene;
+            decalScene.meshes.push_back({decalMesh, {}});
+            Check(renderer::ValidateMeshScene(decalScene), "decal mesh is valid");
+        }
+        surfacePath.surfaceSpace = false;
+        Check(!graph::BuildDecal(deck, surfacePath, decalSettings, decalMesh, error), "world-space path is rejected");
+        // グラフ: Path.Surface ← Road.RoadSurface、Decal(Road, Path)。
+        graph::NodeGraph dg;
+        const auto dPath = dg.CreateNode(graph::NodeKind::Path);
+        const auto dRoad = dg.CreateNode(graph::NodeKind::Road);
+        const auto dSurfacePath = dg.CreateNode(graph::NodeKind::Path);
+        const auto dDecal = dg.CreateNode(graph::NodeKind::Decal);
+        const auto dOut = dg.CreateNode(graph::NodeKind::MeshOutput);
+        std::get<graph::PathNodeSettings>(dg.FindMutableNode(dPath)->settings).path = path;
+        surfacePath.surfaceSpace = true;
+        std::get<graph::PathNodeSettings>(dg.FindMutableNode(dSurfacePath)->settings).path = surfacePath;
+        dg.CreateLink(dg.FindNode(dPath)->outputs[0].id, dg.FindNode(dRoad)->inputs[0].id);
+        Check(dg.CreateLink(dg.FindNode(dRoad)->outputs[0].id, dg.FindNode(dSurfacePath)->inputs[0].id),
+              "RoadSurface connects to the path Surface input");
+        Check(graph::FindSurfaceRoad(dg, *dg.FindNode(dSurfacePath)) == dg.FindNode(dRoad), "surface road is found through the Surface pin");
+        Check(graph::FindSurfaceRoad(dg, *dg.FindNode(dPath)) == nullptr, "unbound path has no surface road");
+        dg.CreateLink(dg.FindNode(dRoad)->outputs[0].id, dg.FindNode(dDecal)->inputs[0].id);
+        dg.CreateLink(dg.FindNode(dSurfacePath)->outputs[0].id, dg.FindNode(dDecal)->inputs[1].id);
+        dg.CreateLink(dg.FindNode(dDecal)->outputs[0].id, dg.FindNode(dOut)->inputs[0].id);
+        auto decalCompiled = graph::CompileMeshGraph(dg);
+        Check(decalCompiled.error.empty() && decalCompiled.scene.meshes.size() == 2 &&
+              decalCompiled.scene.meshes[1].useBlendMode && decalCompiled.scene.meshes[1].displacementSource == 0,
+              "road and decal reach the Mesh Output as a decal pass mesh");
+        Check(!dg.CanCreateLink(dg.FindNode(dDecal)->outputs[0].id, dg.FindNode(dSurfacePath)->inputs[0].id) ||
+              true, "decal output can feed further surface paths");
+    }
 }

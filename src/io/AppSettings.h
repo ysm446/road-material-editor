@@ -38,8 +38,6 @@ struct DisplaySettings {
     bool showFps = false;
     // ビューポートの右上に描画の量（ドローコール・頂点・三角形）を出すか。
     bool showStats = false;
-    // ハイトの範囲（height 0 / 0.5 / 1 の位置を示す枠）をビューポートに重ねるか。
-    bool showHeightGuide = false;
     // 原点中心の50m四方、1m刻みの作業グリッド。
     bool showReferenceGrid = true;
     bool showRoadGrid = false;

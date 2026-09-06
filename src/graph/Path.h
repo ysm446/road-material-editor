@@ -117,11 +117,39 @@ struct PathCurveSample {
     float y = 0.0f;
 };
 
+// 縦断ポイント。線形の正規化位置 u に置き、その位置の高さを offset だけずらして
+// 前後を縦断曲線長 vcl の放物線でつなぐ（graph/RoadProfile.h）。
+struct PathVerticalPoint {
+    PathElementId id = 0;
+    float u = 0.0f;
+    float vclMeters = 50.0f;
+    float offsetMeters = 0.0f;
+};
+
+// バンク角ポイント。自動（設計速度から曲率に応じて決める）か手動（角度を直接指定）。
+// 手動でないポイントの設計速度も、自動角の速度補間に使う。
+struct PathBankPoint {
+    PathElementId id = 0;
+    float u = 0.0f;
+    float designSpeedKmh = 40.0f;
+    bool manual = false;
+    float angleDegrees = 0.0f;  // 正で Left 側が上がる
+};
+
 struct PathSettings {
     // true: x/y/zはワールド座標(m)。falseは旧形式のUV(x/z)と相対高さ(y)。
     bool worldSpace = false;
     std::vector<PathPoint> points;
     std::vector<PathEdge> edges;
+    // --- 道路線形（実寸 Path のみ） ---
+    std::vector<PathVerticalPoint> verticalPoints;
+    std::vector<PathBankPoint> bankPoints;
+    // バンク角を道路へ反映するか。偽なら手動ポイントがあっても水平のまま。
+    bool bankEnabled = false;
+    float designSpeedKmh = 40.0f;      // ポイントの無い所の設計速度（km/h）
+    float frictionCoefficient = 0.15f;  // 自動バンクの横方向摩擦係数
+    bool smoothBank = false;            // 距離方向のガウス平滑化
+    float bankSmoothMeters = 20.0f;
     // 新しく置く点の初期値。
     float defaultWidthMeters = 24.0f;
     float defaultFeatherMeters = 12.0f;

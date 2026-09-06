@@ -44,6 +44,8 @@ enum class ValueType : uint32_t {
 enum class NodeKind : uint32_t {
     Road = 24,
     MeshOutput = 25,
+    // 道路面の上に白線の帯ポリゴンを生成する。RoadSurfaceを受け、道路と白線をまとめて出す。
+    RoadMarking = 26,
     Surface = 0,
     Shape = 1,
     Liquid = 2,
@@ -175,6 +177,18 @@ struct RoadNodeSettings {
     float uvRepeatMeters = 1.0f;
 };
 
+// 白線（Lane Marking）。寸法は m。外側線は道路端から中心線側へ edgeInsetMeters の位置に置く。
+struct RoadMarkingNodeSettings {
+    float lineWidthMeters = 0.15f;
+    bool centerLine = true;
+    bool edgeLines = true;
+    float edgeInsetMeters = 0.5f;
+    // 路面との重なりによるちらつきを避けるため、法線方向へ浮かせる量。
+    float liftMeters = 0.005f;
+    // 帯の長さ方向でVが1増える実距離。幅方向のUは帯の左端0〜右端1。
+    float uvRepeatMeters = 1.0f;
+};
+
 // グラフを評価器の入力へ落とした結果。レイヤー列と、マスクの op の列。
 struct CompiledGraph {
     std::vector<compositor::MaterialLayer> layers;
@@ -195,7 +209,8 @@ struct CompiledGraph {
 struct OutputNodeSettings {};
 
 using NodeSettings =
-    std::variant<LayerNodeSettings, MaskNodeSettings, OutputNodeSettings, PathNodeSettings, RoadNodeSettings>;
+    std::variant<LayerNodeSettings, MaskNodeSettings, OutputNodeSettings, PathNodeSettings, RoadNodeSettings,
+                 RoadMarkingNodeSettings>;
 
 struct Node {
     GraphId id = 0;

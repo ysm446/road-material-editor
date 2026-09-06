@@ -407,9 +407,8 @@ int Application::Run() {
             m_graphStack.MarkDirty();
         }
 
-        // ハイトの範囲は深度テストのためレンダラが描く。設定の写しは持たない方針
+        // グリッドは深度テストのためレンダラが描く。設定の写しは持たない方針
         // だが、レンダラは AppSettings を知らないので、描く直前に毎フレーム渡す。
-        m_renderer.ShowHeightGuide() = m_settings.Display().showHeightGuide;
         m_renderer.ShowReferenceGrid() = m_settings.Display().showReferenceGrid;
         m_renderer.ShowRoadGrid() = m_settings.Display().showRoadGrid;
         m_renderer.ShowUvChecker() = m_settings.Display().showUvChecker;
@@ -503,7 +502,7 @@ void Application::DrawUi() {
             ImGui::TextDisabled("対象はグラフとマテリアル");
             ImGui::EndMenu();
         }
-        // ビューポートの表示に関わる切り替え（FPS / 統計 / ハイトの範囲）は
+        // ビューポートの表示に関わる切り替え（FPS / 統計 / グリッド）は
         // メニューではなくビューポート左上の「表示」ボタンに置く。
         if (ImGui::BeginMenu("ウィンドウ")) {
             if (ImGui::MenuItem("レイアウトをリセット")) {

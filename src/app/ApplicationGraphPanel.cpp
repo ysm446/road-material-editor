@@ -74,6 +74,8 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.74f, 0.70f, 0.78f, 1.0f);
         case graph::NodeKind::Path:
             return ImVec4(0.52f, 0.74f, 0.84f, 1.0f);
+        case graph::NodeKind::RoadMarking:
+            return ImVec4(0.80f, 0.80f, 0.76f, 1.0f);
         case graph::NodeKind::MaskPath:
         case graph::NodeKind::MaskArea:
             return ImVec4(0.58f, 0.74f, 0.82f, 1.0f);
@@ -844,6 +846,7 @@ void Application::DrawGraphEditor() {
             TG_LOG_INFO("ノードを追加しました: %s", NodeDisplayName(*node));
         };
         addNodeMenuItem(graph::NodeKind::Road, "Road — Pathから道路面と左右境界を生成");
+        addNodeMenuItem(graph::NodeKind::RoadMarking, "Lane Marking — 道路面に白線の帯を生成");
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Heightmap, "Heightmap — 画像を地形として読み込む");
@@ -1060,6 +1063,26 @@ void Application::DrawGraphPanel() {
             ui::EndPropertyTable();
         }
         ui::HintText("MaterialにSurfaceなどのResultを接続して材質を適用。RoadSurfaceはMesh Outputへ、Left / Rightは左右境界Path。");
+        if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
+    } else if (auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&selected->settings)) {
+        bool changed = false;
+        const graph::RoadMarkingNodeSettings defaults;
+        if (ui::BeginPropertyTable("roadMarkingRows")) {
+            changed |= ui::PropertyBool("中央線", &marking->centerLine, defaults.centerLine,
+                "道路の中心に1本引く");
+            changed |= ui::PropertyBool("外側線", &marking->edgeLines, defaults.edgeLines,
+                "左右の道路端の手前に1本ずつ引く");
+            changed |= ui::PropertyFloat("線幅", &marking->lineWidthMeters, 0.05f, 1.0f,
+                defaults.lineWidthMeters, "帯の幅", "%.2f m");
+            changed |= ui::PropertyFloat("端からの距離", &marking->edgeInsetMeters, 0.0f, 5.0f,
+                defaults.edgeInsetMeters, "道路端から外側線の中心までの距離", "%.2f m");
+            changed |= ui::PropertyFloat("浮かせ量", &marking->liftMeters, 0.0f, 0.1f,
+                defaults.liftMeters, "路面から法線方向へ持ち上げる量。0だと路面とちらつく", "%.3f m");
+            changed |= ui::PropertyFloat("UV反復長", &marking->uvRepeatMeters, 0.1f, 100.0f,
+                defaults.uvRepeatMeters, "帯の長さ方向でVが1増える実距離。幅方向のUは0〜1", "%.2f m");
+            ui::EndPropertyTable();
+        }
+        ui::HintText("RoadのRoadSurfaceを接続し、出力のRoadSurfaceをMesh Outputへ。Materialに塗料の材質を接続できる。未接続は白。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (selected->kind == graph::NodeKind::MeshOutput) {
         ui::HintText("RoadSurfaceを接続すると道路を表示する。複数のMesh Outputを同時に表示できる。");

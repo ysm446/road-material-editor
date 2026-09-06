@@ -49,6 +49,8 @@ tg::StartupOptions ParseCommandLine() {
             options.testDragCancel = true;
         } else if (argument == L"--select-path-point" && (i + 1) < argc) {
             options.selectPathPoint = ::_wtoi(argv[++i]);
+        } else if (argument == L"--profile-mode" && (i + 1) < argc) {
+            options.profileMode = ::_wtoi(argv[++i]);
         } else if (argument == L"--select-node" && (i + 1) < argc) {
             options.selectNode = ::_wtoi(argv[++i]);
         } else if (argument == L"--save-project" && (i + 1) < argc) {

@@ -1,9 +1,12 @@
 #include "graph/Road.h"
+#include "graph/RoadProfile.h"
 
 #include <algorithm>
 #include <cmath>
 
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace tg::graph {
 namespace {
@@ -77,7 +80,10 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
     // 数値誤差や接線の揺れが道路端で増幅されないようにする。直線の角は保持する。
     bool curved = false;
     for (const auto& edge : path.edges) curved |= edge.curve != PathCurve::Line;
-    if (curved) {
+    // 縦断曲線とバンクは距離に沿って連続に変わるので、直線の線形でも実距離で刻み直す。
+    const bool profiled = !path.verticalPoints.empty() || path.bankEnabled;
+    const bool resample = curved || profiled;
+    if (resample) {
         std::vector<float> lengths(centers.size(), 0.0f);
         for (size_t i = 1; i < centers.size(); ++i)
             lengths[i] = lengths[i-1] + Length(XMVectorSubtract(Load(centers[i]), Load(centers[i-1])));
@@ -96,6 +102,13 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
         }
         centers = std::move(uniform);
     }
+    // 縦断曲線。線形の高さを距離軸の放物線で置き換える。ポイントが無ければそのまま。
+    {
+        const ProfileCurve base = BuildProfileCurve(centers);
+        const std::vector<float> heights = EvaluateVerticalProfile(path, base);
+        for (size_t i = 0; i < centers.size(); ++i) centers[i].y = heights[i];
+    }
+    const ProfileCurve centerline = BuildProfileCurve(centers);
     const uint32_t columns = static_cast<uint32_t>(std::ceil(settings.widthMeters));
     const uint32_t stride = columns + 1;
     std::vector<XMFLOAT3> rights;
@@ -107,6 +120,8 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
         rights.push_back({dz / horizontal, 0.0f, -dx / horizontal});
     }
     RoadGeometry built;
+    built.stride = stride;
+    built.settings = settings;
     built.left.worldSpace = built.right.worldSpace = true;
     float distance = 0.0f;
     for (size_t i = 0; i < centers.size(); ++i) {
@@ -122,6 +137,16 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
             right = average;
         }
         if (i > 0) distance += Length(XMVectorSubtract(Load(centers[i]), Load(centers[i-1])));
+        if (path.bankEnabled) {
+            // バンク。接線まわりに横ベクトルを回す。正で Left（列 0）側が上がる。
+            const float bank = EvaluateBankAngleRadians(path, centerline, centerline.arcLengths[i]);
+            if (std::abs(bank) > 1e-6f) {
+                const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(
+                    Load(centers[std::min(i + 1, centers.size() - 1)]), Load(centers[i == 0 ? 0 : i - 1])));
+                const XMVECTOR up = XMVector3Normalize(XMVector3Cross(tangent, right));
+                right = XMVectorSubtract(XMVectorScale(right, std::cos(bank)), XMVectorScale(up, std::sin(bank)));
+            }
+        }
         const XMVECTOR offset = XMVectorScale(right, settings.widthMeters * 0.5f * miter);
         for (uint32_t column = 0; column <= columns; ++column) {
             const float across = static_cast<float>(column) / static_cast<float>(columns);
@@ -162,7 +187,7 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
     }
     // 直線は先に角のマイターを作ってから行を補間する。先に中心線だけを
     // 分割すると、角の短い区間で幅の内側が反転してしまう。
-    if (!curved) {
+    if (!resample) {
         renderer::MeshData divided;
         for (size_t row = 0; row < centers.size(); ++row) {
             size_t steps = 1;
@@ -201,40 +226,155 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
     return true;
 }
 
+bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
+                       renderer::MeshData& result, std::string& error) {
+    result = {};
+    error.clear();
+    const auto fail = [&](const char* message) { error = message; return false; };
+    const auto& surface = road.surface;
+    if (road.stride < 2 || surface.vertices.size() < road.stride * 2 ||
+        surface.vertices.size() % road.stride != 0)
+        return fail("道路面が生成されていません");
+    const float width = road.settings.widthMeters;
+    const float line = settings.lineWidthMeters;
+    if (!std::isfinite(line) || line < 0.05f || line > 1.0f ||
+        !std::isfinite(settings.edgeInsetMeters) || settings.edgeInsetMeters < 0.0f ||
+        !std::isfinite(settings.liftMeters) || settings.liftMeters < 0.0f || settings.liftMeters > 0.1f ||
+        !std::isfinite(settings.uvRepeatMeters) || settings.uvRepeatMeters < 0.1f ||
+        settings.uvRepeatMeters > 100.0f)
+        return fail("線幅は0.05〜1 m、浮かせ量は0〜0.1 m、UV反復長は0.1〜100 mにしてください");
+    // 帯の中心の横位置（m）。負が左、正が右。
+    std::vector<float> offsets;
+    if (settings.centerLine) offsets.push_back(0.0f);
+    if (settings.edgeLines) {
+        const float edge = width * 0.5f - settings.edgeInsetMeters;
+        if (edge - line * 0.5f < 0.0f) return fail("外側線が中心を越えています。端からの距離を小さくしてください");
+        if (settings.centerLine && edge - line * 0.5f < line * 0.5f)
+            return fail("道路幅に対して線が重なります。線幅か端からの距離を見直してください");
+        offsets.push_back(-edge);
+        offsets.push_back(edge);
+    }
+    if (offsets.empty()) return fail("中央線か外側線のどちらかを有効にしてください");
+    for (const float offset : offsets)
+        if (std::abs(offset) + line * 0.5f > width * 0.5f + 1e-4f)
+            return fail("線が道路の外に出ます。線幅か端からの距離を見直してください");
+    const size_t rows = surface.vertices.size() / road.stride;
+    if (rows * offsets.size() * 2 > 65536 * 3) return fail("白線の頂点数が多すぎます");
+    for (const float offset : offsets) {
+        const uint32_t base = static_cast<uint32_t>(result.vertices.size());
+        for (size_t row = 0; row < rows; ++row) {
+            const auto& left = surface.vertices[row * road.stride];
+            const auto& right = surface.vertices[row * road.stride + road.stride - 1];
+            // 左右端の差は幅にマイター倍率を掛けた横ベクトル。角でも道路端と平行な帯になる。
+            const XMVECTOR across = XMVectorSubtract(Load(right.position), Load(left.position));
+            const XMVECTOR center = XMVectorScale(XMVectorAdd(Load(left.position), Load(right.position)), 0.5f);
+            const float distance = left.uv.y * road.settings.uvRepeatMeters;
+            for (int side = 0; side < 2; ++side) {
+                const float lateral = offset + (side == 0 ? -line : line) * 0.5f;
+                const float t = lateral / width;
+                const XMVECTOR n = XMVector3Normalize(XMVectorLerp(Load(left.normal), Load(right.normal), t + 0.5f));
+                renderer::MeshVertex vertex{};
+                XMStoreFloat3(&vertex.position, XMVectorAdd(XMVectorAdd(center, XMVectorScale(across, t)),
+                                                            XMVectorScale(n, settings.liftMeters)));
+                XMStoreFloat3(&vertex.normal, n);
+                const XMVECTOR tangent = XMVector3Normalize(XMVectorSubtract(across,
+                    XMVectorScale(n, XMVectorGetX(XMVector3Dot(n, across)))));
+                XMStoreFloat4(&vertex.tangent, tangent);
+                vertex.tangent.w = -1.0f;
+                vertex.uv = {static_cast<float>(side), distance / settings.uvRepeatMeters};
+                result.vertices.push_back(vertex);
+            }
+            if (row > 0) {
+                const uint32_t a = base + static_cast<uint32_t>(row - 1) * 2;
+                result.indices.insert(result.indices.end(), {a, a + 2, a + 1, a + 1, a + 2, a + 3});
+            }
+        }
+    }
+    return true;
+}
+
 bool EvaluateRoad(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result, std::string& error) {
     std::unordered_set<GraphId> visiting;
     return Evaluate(graph, nodeId, result, error, visiting);
 }
+
+namespace {
+// Material入力に繋いだResultを、そのメッシュの材質として合成する。
+void AttachMaterial(const NodeGraph& graph, const Node& node, renderer::SceneMesh& mesh) {
+    for (const auto& pin : node.inputs) {
+        if (pin.valueType != ValueType::Material) continue;
+        if (const Node* source = graph.FindUpstreamNodeForPin(pin.id)) {
+            auto material = graph.CompileLayersTo(source->id);
+            mesh.materialStack.emplace();
+            mesh.materialStack->Layers() = std::move(material.layers);
+            mesh.materialStack->MaskOps() = std::move(material.maskOps);
+            // 1 UVタイルの実寸でハイト由来の法線を評価する。
+            mesh.materialStack->SetTerrainScale(mesh.roadMetersPerUv, 1.0f);
+        }
+    }
+}
+
+// Mesh Outputから上流へたどり、Roadを起点に白線などの部品を順に積む。
+struct MeshChain {
+    std::vector<renderer::SceneMesh> meshes;
+    RoadGeometry road;
+};
+bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chain,
+                       std::string& error, std::unordered_set<GraphId>& visiting) {
+    if (!node) { error = "Mesh OutputにRoadSurfaceを接続してください"; return false; }
+    if (visiting.size() >= 64 || !visiting.insert(node->id).second) {
+        error = "メッシュの依存が循環しているか、深すぎます"; return false;
+    }
+    bool success = false;
+    if (node->kind == NodeKind::Road) {
+        if (EvaluateRoad(graph, node->id, chain.road, error)) {
+            renderer::SceneMesh mesh;
+            mesh.geometry = chain.road.surface;
+            mesh.material.roughness = 0.85f;
+            mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
+            AttachMaterial(graph, *node, mesh);
+            chain.meshes.push_back(std::move(mesh));
+            success = true;
+        }
+    } else if (const auto* marking = std::get_if<RoadMarkingNodeSettings>(&node->settings)) {
+        const Node* upstream = node->inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node->inputs.front().id);
+        if (!upstream) {
+            error = "Lane MarkingにRoadSurfaceを接続してください";
+        } else if (EvaluateMeshChain(graph, upstream, chain, error, visiting)) {
+            renderer::SceneMesh mesh;
+            if (BuildRoadMarkings(chain.road, *marking, mesh.geometry, error)) {
+                mesh.material.baseColor = {0.85f, 0.85f, 0.82f};
+                mesh.material.roughness = 0.6f;
+                mesh.roadMetersPerUv = marking->uvRepeatMeters;
+                mesh.roadGridOverlay = false;
+                AttachMaterial(graph, *node, mesh);
+                chain.meshes.push_back(std::move(mesh));
+                success = true;
+            }
+        }
+    } else {
+        error = "Mesh OutputにはRoadかLane MarkingのRoadSurfaceを接続してください";
+    }
+    visiting.erase(node->id);
+    return success;
+}
+}  // namespace
 
 CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph) {
     CompiledMeshGraph compiled;
     for (const auto& node : graph.Nodes()) {
         if (node.kind != NodeKind::MeshOutput) continue;
         compiled.active = true;
-        const Node* road = node.inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node.inputs.front().id);
-        RoadGeometry geometry;
+        const Node* source = node.inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node.inputs.front().id);
+        MeshChain chain;
         std::string error;
-        if (!road || !EvaluateRoad(graph, road->id, geometry, error)) {
+        std::unordered_set<GraphId> visiting;
+        if (!EvaluateMeshChain(graph, source, chain, error, visiting)) {
             if (!compiled.error.empty()) compiled.error += " / ";
-            compiled.error += error.empty() ? "Mesh OutputにRoadSurfaceを接続してください" : error;
+            compiled.error += error;
             continue;
         }
-        renderer::SceneMesh mesh;
-        mesh.geometry = std::move(geometry.surface);
-        mesh.material.roughness = 0.85f;
-        mesh.roadMetersPerUv = std::get<RoadNodeSettings>(road->settings).uvRepeatMeters;
-        for (const auto& pin : road->inputs) {
-            if (pin.valueType != ValueType::Material) continue;
-            if (const Node* source = graph.FindUpstreamNodeForPin(pin.id)) {
-                auto material = graph.CompileLayersTo(source->id);
-                mesh.materialStack.emplace();
-                mesh.materialStack->Layers() = std::move(material.layers);
-                mesh.materialStack->MaskOps() = std::move(material.maskOps);
-                // 1 UVタイルの実寸でハイト由来の法線を評価する。
-                mesh.materialStack->SetTerrainScale(mesh.roadMetersPerUv, 1.0f);
-            }
-        }
-        compiled.scene.meshes.push_back(std::move(mesh));
+        for (auto& mesh : chain.meshes) compiled.scene.meshes.push_back(std::move(mesh));
     }
     return compiled;
 }

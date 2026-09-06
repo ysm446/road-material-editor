@@ -60,6 +60,8 @@ struct StartupOptions {
     // プロジェクト読込後に選択するノード。スクリーンショット検証用。
     graph::GraphId selectNode = 0;
     graph::PathElementId selectPathPoint = 0;
+    // 線形の編集モード（0 = 制御点、1 = 縦断、2 = バンク）と選択するポイント。スクリーンショット検証用。
+    int profileMode = 0;
     bool testDrag = false;
     bool testDragShift = false;
     bool testDragCancel = false;
@@ -257,9 +259,6 @@ private:
     void HandleCameraShortcuts(bool itemHovered);
     // ライトの向きを示すギズモ。動かしている間と、その直後だけ出す。
     void DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewportMax);
-    // ハイトの範囲。height 0 / 0.5 / 1 がワールドのどこに来るかを枠で示す
-    // （ビューポート左上の `表示 > ハイトの範囲`。平面のときだけ描く）。
-    void DrawHeightGuide(const ImVec2& viewportMin, const ImVec2& viewportMax);
     // ビューポート上のドラッグをブラシへ渡す。ペイントモードのときだけ呼ぶ。
     void HandlePaintInput(compositor::MaterialLayer& layer, bool itemActive,
                           const ImVec2& imageOrigin, const ImVec2& imageSize);
@@ -273,6 +272,11 @@ private:
     void HandlePathInput(graph::Node& node, bool itemActive, bool itemHovered,
                          const ImVec2& viewportMin, const ImVec2& viewportMax);
     // パスの点と線をビューポートへ重ねて描く（ImGui。深度テストはしない）。
+    // 縦断 / バンクの編集モード。制御点の代わりに線形上のポイントを扱う。
+    void HandlePathProfileInput(graph::Node& node, bool itemHovered, const ImVec2& viewportMin,
+                                const ImVec2& viewportMax);
+    void DrawPathProfileOverlay(const graph::Node& node, ImDrawList* drawList,
+                                const ImVec2& viewportMin, const ImVec2& viewportMax);
     void DrawPathOverlay(const graph::Node& node, const ImVec2& viewportMin,
                          const ImVec2& viewportMax);
     // カーソル位置を地形へ投影する。CPU 側のハイトへレイを飛ばして最初の交点を返す。
@@ -456,6 +460,20 @@ private:
         bool menuOnTerrain = false;
         float menuU = 0.0f;
         float menuV = 0.0f;
+        // 道路線形の編集モード。0 = 制御点、1 = 縦断ポイント、2 = バンクポイント。
+        static constexpr int kProfilePoints = 0;
+        static constexpr int kProfileVertical = 1;
+        static constexpr int kProfileBank = 2;
+        int profileMode = kProfilePoints;
+        // 選択 / ホバー中の縦断・バンクポイント。線に沿って u だけを動かす。
+        graph::PathElementId selectedProfile = 0;
+        graph::PathElementId hoverProfile = 0;
+        bool profileDragging = false;
+        // 手動バンクの回転リング。掴んだときの θ と角度から差分で回す。
+        bool ringHover = false;
+        bool ringDragging = false;
+        float ringStartTheta = 0.0f;
+        float ringStartAngle = 0.0f;
     };
     PathEditState m_pathEdit;
     // パスのクリップボード（アプリ内）。鎖や点の集合をコピーして、カーソルの所へ貼る。

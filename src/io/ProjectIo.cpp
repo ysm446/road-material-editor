@@ -37,7 +37,9 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // プロジェクトの版。4 で `layers` 節を廃止し、グラフ (`graph`) を唯一の合成にした
 // （旧ファイルの layers はグラフへ移行して読む）。
 // 5: 任意のメッシュシーン。旧ビルドが scene を無視して地形を表示することを防ぐ。
-constexpr int kProjectFormatVersion = 9;
+// 8: road / meshOutput ノード。9: Road の Material 入力。10: roadMarking ノード。
+// 11: Path の縦断ポイント・バンクポイント。旧ビルドが線形を平坦・水平に読むことを防ぐ。
+constexpr int kProjectFormatVersion = 11;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -608,6 +610,30 @@ json WritePath(const graph::PathSettings& path) {
     node["defaultWidth"] = path.defaultWidthMeters;
     node["defaultFeather"] = path.defaultFeatherMeters;
     node["defaultIntensity"] = path.defaultIntensity;
+    // 道路線形。縦断ポイントとバンクポイントは実寸 Path だけが持つ（無ければ書かない）。
+    if (path.worldSpace) {
+        if (!path.verticalPoints.empty()) {
+            json vertical = json::array();
+            for (const graph::PathVerticalPoint& point : path.verticalPoints) {
+                vertical.push_back({{"id", point.id}, {"u", point.u}, {"vcl", point.vclMeters},
+                                    {"offset", point.offsetMeters}});
+            }
+            node["verticalPoints"] = std::move(vertical);
+        }
+        if (!path.bankPoints.empty()) {
+            json bank = json::array();
+            for (const graph::PathBankPoint& point : path.bankPoints) {
+                bank.push_back({{"id", point.id}, {"u", point.u}, {"designSpeed", point.designSpeedKmh},
+                                {"manual", point.manual}, {"angle", point.angleDegrees}});
+            }
+            node["bankPoints"] = std::move(bank);
+        }
+        node["bankEnabled"] = path.bankEnabled;
+        node["designSpeed"] = path.designSpeedKmh;
+        node["friction"] = path.frictionCoefficient;
+        node["smoothBank"] = path.smoothBank;
+        node["bankSmoothDistance"] = path.bankSmoothMeters;
+    }
     node["nextId"] = path.nextId;
     return node;
 }
@@ -709,6 +735,40 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
             }
             maxId = std::max(maxId, edge.id);
             path.edges.push_back(edge);
+        }
+    }
+    if (path.worldSpace) {
+        path.bankEnabled = ReadBool(*node, "bankEnabled", defaults.bankEnabled);
+        path.designSpeedKmh = std::clamp(ReadFloat(*node, "designSpeed", defaults.designSpeedKmh), 0.0f, 300.0f);
+        path.frictionCoefficient = std::clamp(ReadFloat(*node, "friction", defaults.frictionCoefficient), 0.0f, 1.0f);
+        path.smoothBank = ReadBool(*node, "smoothBank", defaults.smoothBank);
+        path.bankSmoothMeters = std::clamp(ReadFloat(*node, "bankSmoothDistance", defaults.bankSmoothMeters), 0.0f, 500.0f);
+        if (const json* vertical = FindMember(*node, "verticalPoints"); vertical != nullptr && vertical->is_array()) {
+            for (const json& item : *vertical) {
+                if (!item.is_object()) continue;
+                graph::PathVerticalPoint point;
+                point.id = ReadInt(item, "id", 0);
+                if (point.id <= 0) continue;
+                point.u = std::clamp(ReadFloat(item, "u", 0.0f), 0.0f, 1.0f);
+                point.vclMeters = std::clamp(ReadFloat(item, "vcl", point.vclMeters), 0.0f, 10000.0f);
+                point.offsetMeters = std::clamp(ReadFloat(item, "offset", 0.0f), -1000.0f, 1000.0f);
+                maxId = std::max(maxId, point.id);
+                path.verticalPoints.push_back(point);
+            }
+        }
+        if (const json* bank = FindMember(*node, "bankPoints"); bank != nullptr && bank->is_array()) {
+            for (const json& item : *bank) {
+                if (!item.is_object()) continue;
+                graph::PathBankPoint point;
+                point.id = ReadInt(item, "id", 0);
+                if (point.id <= 0) continue;
+                point.u = std::clamp(ReadFloat(item, "u", 0.0f), 0.0f, 1.0f);
+                point.designSpeedKmh = std::clamp(ReadFloat(item, "designSpeed", path.designSpeedKmh), 0.0f, 300.0f);
+                point.manual = ReadBool(item, "manual", false);
+                point.angleDegrees = std::clamp(ReadFloat(item, "angle", 0.0f), -90.0f, 90.0f);
+                maxId = std::max(maxId, point.id);
+                path.bankPoints.push_back(point);
+            }
         }
     }
     path.nextId = std::max(ReadInt(*node, "nextId", 1), maxId + 1);
@@ -1136,6 +1196,13 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
             item["maskArea"] = WriteAreaMask(mask->areaMask);
         } else if (const auto* road = std::get_if<graph::RoadNodeSettings>(&node.settings)) {
             item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters}};
+        } else if (const auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&node.settings)) {
+            item["roadMarking"] = {{"lineWidth", marking->lineWidthMeters},
+                                   {"centerLine", marking->centerLine},
+                                   {"edgeLines", marking->edgeLines},
+                                   {"edgeInset", marking->edgeInsetMeters},
+                                   {"lift", marking->liftMeters},
+                                   {"uvRepeat", marking->uvRepeatMeters}};
         } else if (const auto* path = std::get_if<graph::PathNodeSettings>(&node.settings)) {
             item["path"] = WritePath(path->path);
         }
@@ -1275,6 +1342,17 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                 if (const json* road = FindMember(item, "road"); road && road->is_object()) {
                     settings.widthMeters = ReadFloat(*road, "width", settings.widthMeters);
                     settings.uvRepeatMeters = ReadFloat(*road, "uvRepeat", settings.uvRepeatMeters);
+                }
+                created.settings = settings;
+            } else if (created.kind == graph::NodeKind::RoadMarking) {
+                graph::RoadMarkingNodeSettings settings;
+                if (const json* marking = FindMember(item, "roadMarking"); marking && marking->is_object()) {
+                    settings.lineWidthMeters = ReadFloat(*marking, "lineWidth", settings.lineWidthMeters);
+                    settings.centerLine = ReadBool(*marking, "centerLine", settings.centerLine);
+                    settings.edgeLines = ReadBool(*marking, "edgeLines", settings.edgeLines);
+                    settings.edgeInsetMeters = ReadFloat(*marking, "edgeInset", settings.edgeInsetMeters);
+                    settings.liftMeters = ReadFloat(*marking, "lift", settings.liftMeters);
+                    settings.uvRepeatMeters = ReadFloat(*marking, "uvRepeat", settings.uvRepeatMeters);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::Path) {

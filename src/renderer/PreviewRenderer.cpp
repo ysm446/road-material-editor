@@ -818,6 +818,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 XMStoreFloat4x4(&drawConstants.model, XMMatrixIdentity());
                 XMStoreFloat4x4(&drawConstants.normalMatrix, XMMatrixIdentity());
                 drawConstants.roadMetersPerUv = m_meshScene.meshes[i].roadMetersPerUv;
+                if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;
                 const auto& material = m_meshScene.meshes[i].material;
                 drawConstants.baseColor = material.baseColor;
                 drawConstants.roughness = material.roughness;
@@ -1063,23 +1064,21 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     PIXEndEvent(commandList);
 
-    // ハイトの範囲の枠。シーンの深度でテストするため、ImGui ではなくここで描く。
-    if (!m_meshSceneEnabled) DrawGuideOverlay(device, pipelineCache, commandList, false);
-    DrawGuideOverlay(device, pipelineCache, commandList, true);
+    // 作業グリッド。シーンの深度でテストするため、ImGui ではなくここで描く。
+    DrawGuideOverlay(device, pipelineCache, commandList);
 
     // ImGui から SRV として読むため、ピクセルシェーダ可視の状態へ移す。
     TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
-// ハイトの範囲の枠（height 0 / 0.5 / 1 の位置）。
+// 作業グリッドの線。
 //
 // トーンマップ後の表示用テクスチャへ、露出を通さない表示色のまま描く
 // （ギズモは画面上で一定の明るさに見えるべきもの）。深度は読むだけで書かない。
-// ラベル（0.0 / 0.5 / 1.0 の文字）は Application 側の ImGui が重ねる。
 void PreviewRenderer::DrawGuideOverlay(rhi::Device& device,
                                        rhi::PipelineCache& pipelineCache,
-                                       ID3D12GraphicsCommandList* commandList, bool referenceGrid) {
-    if (referenceGrid ? !m_showReferenceGrid : !m_showHeightGuide) {
+                                       ID3D12GraphicsCommandList* commandList) {
+    if (!m_showReferenceGrid) {
         return;
     }
 
@@ -1121,7 +1120,7 @@ void PreviewRenderer::DrawGuideOverlay(rhi::Device& device,
         constants.positions[count++] = XMFLOAT4{b.x, b.y, b.z, alpha};
     };
 
-    if (referenceGrid) {
+    {
         // 1 unit = 1 m。各方向51本、50区画。基準面と同一面のメッシュとのちらつきだけを抑える。
         constants.options.x = 0.000001f;
         constexpr int halfExtent = 25;
@@ -1131,32 +1130,11 @@ void PreviewRenderer::DrawGuideOverlay(rhi::Device& device,
             addLine({coordinate, 0.0f, -25.0f}, {coordinate, 0.0f, 25.0f}, alpha);
             addLine({-25.0f, 0.0f, coordinate}, {25.0f, 0.0f, coordinate}, alpha);
         }
-    } else {
-        const float kHalf = m_planeSize * 0.5f;
-        const XMFLOAT2 corners[4] = {{-kHalf, -kHalf}, {kHalf, -kHalf}, {kHalf, kHalf},
-                                     {-kHalf, kHalf}};
-
-        // height 0 / 0.5 / 1 の矩形。0.5（基準面）だけ薄くして区別する。
-        const float levels[3] = {0.0f, 0.5f, 1.0f};
-        const float levelAlphas[3] = {0.78f, 0.43f, 0.78f};
-        for (int level = 0; level < 3; ++level) {
-            const float y = (levels[level] - 0.5f) * m_displacementScale;
-            for (int i = 0; i < 4; ++i) {
-                const XMFLOAT2& a = corners[i];
-                const XMFLOAT2& b = corners[(i + 1) % 4];
-                addLine(XMFLOAT3{a.x, y, a.y}, XMFLOAT3{b.x, y, b.y}, levelAlphas[level]);
-            }
-        }
-        // 四隅の縦の辺（height 0 → 1）。
-        for (const XMFLOAT2& corner : corners) {
-            addLine(XMFLOAT3{corner.x, -0.5f * m_displacementScale, corner.y},
-                    XMFLOAT3{corner.x, 0.5f * m_displacementScale, corner.y}, 0.55f);
-        }
     }
 
     std::memcpy(cb.cpu, &constants, sizeof(constants));
 
-    PIXBeginEvent(commandList, PIX_COLOR(160, 170, 190), referenceGrid ? "PreviewReferenceGrid" : "PreviewHeightGuide");
+    PIXBeginEvent(commandList, PIX_COLOR(160, 170, 190), "PreviewReferenceGrid");
 
     TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_RENDER_TARGET);
     // DoF が有効なフレームでは深度が SRV になっている。DSV として束ね直す

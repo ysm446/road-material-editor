@@ -109,10 +109,6 @@ void AppSettings::Load() {
             grid != display->end() && grid->is_boolean()) {
             m_display.showReferenceGrid = grid->get<bool>();
         }
-        if (const auto showHeightGuide = display->find("showHeightGuide");
-            showHeightGuide != display->end() && showHeightGuide->is_boolean()) {
-            m_display.showHeightGuide = showHeightGuide->get<bool>();
-        }
         if (const auto showAssetBand = display->find("showAssetBand");
             showAssetBand != display->end() && showAssetBand->is_boolean()) {
             m_display.showAssetBand = showAssetBand->get<bool>();
@@ -156,7 +152,6 @@ bool AppSettings::Save() const {
     display["hotReload"] = m_display.hotReload;
     display["showFps"] = m_display.showFps;
     display["showStats"] = m_display.showStats;
-    display["showHeightGuide"] = m_display.showHeightGuide;
     display["showReferenceGrid"] = m_display.showReferenceGrid;
     display["showRoadGrid"] = m_display.showRoadGrid;
     display["showUvChecker"] = m_display.showUvChecker;

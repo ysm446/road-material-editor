@@ -1,5 +1,6 @@
 #include "TestSupport.h"
 #include "graph/Road.h"
+#include "graph/RoadProfile.h"
 #include "app/UndoHistory.h"
 #include <cmath>
 
@@ -126,4 +127,174 @@ void RunRoadTests() {
     graph.DeleteLink(materialLink);
     compiled = graph::CompileMeshGraph(graph);
     Check(!compiled.scene.meshes[0].materialStack, "disconnect restores constant material");
+
+    tests::Section("Lane marking strips");
+    graph::RoadGeometry straight;
+    Check(graph::BuildRoad(path, settings, straight, error) && straight.stride == 7, "road exposes row stride");
+    graph::RoadMarkingNodeSettings marking;
+    renderer::MeshData lines;
+    Check(graph::BuildRoadMarkings(straight, marking, lines, error), "default centre and edge lines build");
+    if (!error.empty()) std::printf("Marking error: %s\n", error.c_str());
+    const size_t rows = straight.surface.vertices.size() / straight.stride;
+    Check(lines.vertices.size() == rows * 6 && lines.indices.size() == (rows - 1) * 18,
+          "three strips with two vertices per road row");
+    if (lines.vertices.size() == rows * 6) {
+        Check(std::abs(lines.vertices[0].position.x + 0.075f) < 1e-5f &&
+              std::abs(lines.vertices[1].position.x - 0.075f) < 1e-5f, "centre line is 15 cm wide at x = 0");
+        Check(std::abs(lines.vertices[rows*2].position.x + 2.575f) < 1e-5f &&
+              std::abs(lines.vertices[rows*4+1].position.x - 2.575f) < 1e-5f, "edge lines sit 0.5 m inside the road edge");
+        Check(lines.vertices[0].uv.x == 0.0f && lines.vertices[1].uv.x == 1.0f &&
+              std::abs(lines.vertices[rows*2-1].uv.y - std::sqrt(104.0f)) < 1e-4f,
+              "U spans the strip width and V measures distance");
+        Check(lines.vertices[0].position.y > straight.surface.vertices[0].position.y &&
+              lines.vertices[0].position.y < 0.01f, "strip is lifted slightly above the surface");
+        renderer::MeshScene lineScene;
+        lineScene.meshes.push_back({lines, {}});
+        Check(renderer::ValidateMeshScene(lineScene), "marking mesh has valid indices and tangents");
+    }
+    marking.uvRepeatMeters = 2.0f;
+    Check(graph::BuildRoadMarkings(straight, marking, lines, error) &&
+          std::abs(lines.vertices[rows*2-1].uv.y - std::sqrt(104.0f) * 0.5f) < 1e-4f, "UV repeat scales V");
+    marking = {};
+    marking.edgeInsetMeters = 3.0f;
+    Check(!graph::BuildRoadMarkings(straight, marking, lines, error), "edge line past the centre is rejected");
+    marking = {};
+    marking.centerLine = false;
+    marking.edgeLines = false;
+    Check(!graph::BuildRoadMarkings(straight, marking, lines, error), "no enabled lines is rejected");
+    marking = {};
+    Check(graph::BuildRoad(curve, settings, straight, error) &&
+          graph::BuildRoadMarkings(straight, marking, lines, error), "curved road markings build");
+    {
+        renderer::MeshScene curvedScene;
+        curvedScene.meshes.push_back({lines, {}});
+        Check(renderer::ValidateMeshScene(curvedScene), "curved marking mesh is valid");
+    }
+    graph::NodeGraph chain;
+    const auto chainPath = chain.CreateNode(graph::NodeKind::Path);
+    const auto chainRoad = chain.CreateNode(graph::NodeKind::Road);
+    const auto chainMarking = chain.CreateNode(graph::NodeKind::RoadMarking);
+    const auto chainOut = chain.CreateNode(graph::NodeKind::MeshOutput);
+    std::get<graph::PathNodeSettings>(chain.FindMutableNode(chainPath)->settings).path = path;
+    chain.CreateLink(chain.FindNode(chainPath)->outputs[0].id, chain.FindNode(chainRoad)->inputs[0].id);
+    chain.CreateLink(chain.FindNode(chainMarking)->outputs[0].id, chain.FindNode(chainOut)->inputs[0].id);
+    compiled = graph::CompileMeshGraph(chain);
+    Check(compiled.active && !compiled.error.empty() && compiled.scene.meshes.empty(),
+          "marking without a road reports an error");
+    Check(chain.CreateLink(chain.FindNode(chainRoad)->outputs[0].id, chain.FindNode(chainMarking)->inputs[0].id),
+          "RoadSurface connects to Lane Marking");
+    compiled = graph::CompileMeshGraph(chain);
+    Check(compiled.error.empty() && compiled.scene.meshes.size() == 2, "road and markings reach one Mesh Output");
+    if (compiled.scene.meshes.size() == 2) {
+        Check(compiled.scene.meshes[0].roadGridOverlay && !compiled.scene.meshes[1].roadGridOverlay,
+              "grid overlay is only on the road surface");
+        Check(compiled.scene.meshes[1].material.baseColor.x > 0.8f && !compiled.scene.meshes[1].materialStack,
+              "unconnected marking is white");
+    }
+    const auto paint = chain.CreateNode(graph::NodeKind::Surface);
+    chain.CreateLink(chain.FindNode(paint)->outputs[0].id, chain.FindNode(chainMarking)->inputs[1].id);
+    compiled = graph::CompileMeshGraph(chain);
+    Check(compiled.scene.meshes.size() == 2 && compiled.scene.meshes[1].materialStack &&
+          !compiled.scene.meshes[0].materialStack, "marking material does not leak to the road");
+
+    tests::Section("Vertical curve and bank angle");
+    {
+        graph::PathSettings profile;
+        profile.worldSpace = true;
+        auto p0 = graph::AddPathPoint(profile, 0, 0, 0);
+        auto p1 = graph::AddPathPoint(profile, 0, 100, p0);
+        profile.FindPoint(p1)->y = 10;
+        graph::ProfileCurve centerline;
+        std::string profileError;
+        Check(graph::BuildPathCenterline(profile, centerline, &profileError) &&
+              std::abs(centerline.TotalLength() - std::sqrt(100.0f * 100.0f + 100.0f)) < 1e-3f,
+              "centerline measures the base curve");
+        const auto vid = graph::AddVerticalPoint(profile, 0.5f);
+        graph::FindVerticalPoint(profile, vid)->offsetMeters = 4.0f;
+        graph::FindVerticalPoint(profile, vid)->vclMeters = 40.0f;
+        graph::RoadGeometry profiled;
+        Check(graph::BuildRoad(profile, settings, profiled, error), "road with a vertical point builds");
+        if (!error.empty()) std::printf("Profile error: %s\n", error.c_str());
+        const size_t profiledRows = profiled.surface.vertices.size() / profiled.stride;
+        float midY = 0.0f; float quarterY = 0.0f;
+        for (size_t row = 0; row < profiledRows; ++row) {
+            const auto& v = profiled.surface.vertices[row * profiled.stride];
+            if (std::abs(v.position.z - 50.0f) < 0.51f) midY = v.position.y;
+            if (std::abs(v.position.z - 25.0f) < 0.51f) quarterY = v.position.y;
+        }
+        // 放物線は PVI を通らず、(i1 - i2) L / 8 だけ下がる。
+        {
+            const float total = centerline.TotalLength();
+            const float i1 = 9.0f / (total * 0.5f);
+            const float i2 = 1.0f / (total * 0.5f);
+            const float expectedMid = 9.0f - (i1 - i2) * 40.0f / 8.0f;
+            Check(std::abs(midY - expectedMid) < 0.15f, "vertical point raises the profile by its offset minus the parabola drop");
+        }
+        Check(quarterY > 2.5f + 0.5f, "tangent segments climb toward the raised point");
+        Check(std::abs(profiled.surface.vertices.front().position.y) < 1e-4f &&
+              std::abs(profiled.surface.vertices[(profiledRows - 1) * profiled.stride].position.y - 10.0f) < 1e-3f,
+              "end heights stay at the control points");
+        // 曲率が続く円弧状の線形で自動バンクを確認する。
+        graph::PathSettings arc;
+        arc.worldSpace = true;
+        graph::PathElementId arcLast = 0;
+        for (int i = 0; i <= 24; ++i) {
+            const float angle = static_cast<float>(i) / 24.0f * 1.5707963f;
+            arcLast = graph::AddPathPoint(arc, 40.0f * std::sin(angle), -40.0f * std::cos(angle), arcLast);
+        }
+        arc.bankEnabled = true;
+        arc.designSpeedKmh = 60.0f;
+        graph::ProfileCurve arcCurve;
+        Check(graph::BuildPathCenterline(arc, arcCurve, &profileError), "arc centerline builds");
+        const float autoBank = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.5f);
+        const float expected = graph::ComputeAutoBankRadians(40.0f, 60.0f, 0.15f);
+        Check(expected > 0.05f && std::abs(std::abs(autoBank) - expected) < 0.05f,
+              "auto bank matches the design speed formula for the arc radius");
+        // 進行方向 +X から +Z へ曲がる。Right 側は (dz, 0, -dx) = -Z なので Left へ曲がる左カーブ = 負。
+        Check(autoBank < 0.0f, "turning toward the Left side gives a negative bank");
+        graph::RoadGeometry banked;
+        Check(graph::BuildRoad(arc, settings, banked, error), "banked road builds");
+        bool rightHigher = true;
+        for (size_t row = 3; row + 3 < banked.surface.vertices.size() / banked.stride; ++row) {
+            const auto& left = banked.surface.vertices[row * banked.stride];
+            const auto& right = banked.surface.vertices[row * banked.stride + banked.stride - 1];
+            rightHigher &= right.position.y > left.position.y + 0.1f;
+        }
+        Check(rightHigher, "negative bank raises the outer Right boundary above the inner Left boundary");
+        renderer::MeshScene bankedScene;
+        bankedScene.meshes.push_back({banked.surface, {}});
+        Check(renderer::ValidateMeshScene(bankedScene), "banked mesh is valid");
+        renderer::MeshData bankedLines;
+        Check(graph::BuildRoadMarkings(banked, graph::RoadMarkingNodeSettings{}, bankedLines, error) &&
+              bankedLines.vertices[bankedLines.vertices.size() / 2].position.y != 0.0f,
+              "markings follow the banked surface");
+        arc.bankEnabled = false;
+        Check(graph::BuildRoad(arc, settings, banked, error) &&
+              std::abs(banked.surface.vertices[5 * banked.stride].position.y -
+                       banked.surface.vertices[5 * banked.stride + banked.stride - 1].position.y) < 1e-4f,
+              "disabled bank keeps the surface level");
+        arc.bankEnabled = true;
+        const auto bid = graph::AddBankPoint(arc, 0.5f);
+        graph::FindBankPoint(arc, bid)->manual = true;
+        graph::FindBankPoint(arc, bid)->angleDegrees = -20.0f;
+        const float manual = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.5f);
+        Check(std::abs(manual + 20.0f * 3.14159265f / 180.0f) < 1e-4f, "manual point overrides the angle at its position");
+        Check(std::abs(graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.25f) - manual) < 1e-4f,
+              "first manual point holds before its position");
+        const auto autoId = graph::AddBankPoint(arc, 0.1f);
+        const float between = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.3f);
+        const float atAuto = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.1f);
+        Check(atAuto < 0.0f && between > std::min(atAuto, manual) + 1e-4f && between < std::max(atAuto, manual) - 1e-4f,
+              "auto point before a manual point interpolates toward it");
+        graph::DeleteProfilePoint(arc, autoId);
+        Check(graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.9f) < 0.0f,
+              "last manual point holds past its position");
+        arc.smoothBank = true;
+        arc.bankSmoothMeters = 20.0f;
+        const float smoothed = graph::EvaluateBankAngleRadians(arc, arcCurve, arcCurve.TotalLength() * 0.5f);
+        Check(std::isfinite(smoothed) && smoothed < 0.0f, "smoothing keeps the sign");
+        const auto frame = graph::EvaluateProfileFrame(arc, arcCurve, 0.5f);
+        Check(std::abs(frame.up.y) > 0.9f && std::abs(frame.right.y) < 1e-4f, "profile frame is horizontal before banking");
+        Check(graph::DeleteProfilePoint(arc, bid) && !graph::DeleteProfilePoint(arc, bid), "profile points delete once");
+    }
 }

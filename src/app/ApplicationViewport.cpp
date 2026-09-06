@@ -158,7 +158,7 @@ void Application::DrawViewportOverlay(const ImVec2& viewportMin, const ImVec2& v
     }
 
     // --- 重ねる情報の切り替え ------------------------------------------------
-    // FPS / 統計 / ハイトの範囲。どれもビューポートに重ねて出すものなので、
+    // FPS / 統計 / グリッド。どれもビューポートに重ねて出すものなので、
     // トップメニューではなくここに置く。切り替えたその場で設定に覚える。
     ImGui::SameLine();
     if (ImGui::Button("表示")) {
@@ -175,7 +175,6 @@ void Application::DrawViewportOverlay(const ImVec2& viewportMin, const ImVec2& v
         changed |= ImGui::MenuItem("グリッド（50 m × 50 m / 1 m間隔）", nullptr, &settings.showReferenceGrid);
         changed |= ImGui::MenuItem("道路の1 mグリッド", nullptr, &settings.showRoadGrid);
         changed |= ImGui::MenuItem("UVチェッカー", nullptr, &settings.showUvChecker);
-        changed |= ImGui::MenuItem("ハイトの範囲", nullptr, &settings.showHeightGuide);
         if (changed) {
             m_settings.Save();
         }
@@ -334,13 +333,15 @@ void Application::DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewpo
 
     const renderer::LightSettings& light = m_renderer.Light();
     const XMFLOAT3 direction = light.Direction();
-    // **見ているものの実寸に合わせる。** 素材（2m 角）でも地形（2km 角）でも
-    // 同じ見え方になるよう、平面の一辺（m）から決める。固定値にすると、
-    // 地形では原点の一点に潰れて見えなくなる。
-    // 包む球（対角）ではなく**辺の半分**にしてあるのは、対角だと視界からはみ出して
-    // リングが読めなくなるため。地形の縁に接するくらいがちょうどいい。
-    const float gizmoRadius = m_renderer.PlaneSize() * 0.5f;
-    const XMFLOAT3 origin{0.0f, 0.0f, 0.0f};
+    // **カメラの注視点に、画面へ収まる大きさで置く。** 原点固定・実寸固定だと、
+    // パンやズームで注視点を移した先で見えなくなったり、画面からはみ出したりする。
+    // 半径は注視点までの距離と縦画角から決め、リングと矢印が縦の視野の中に収まる比にする。
+    const XMFLOAT3 origin = camera.Target();
+    const XMFLOAT3 eye = camera.Position();
+    const float distance = std::sqrt((eye.x - origin.x) * (eye.x - origin.x) +
+                                     (eye.y - origin.y) * (eye.y - origin.y) +
+                                     (eye.z - origin.z) * (eye.z - origin.z));
+    const float gizmoRadius = std::max(distance * std::tan(camera.FovY() * 0.5f) * 0.45f, 1e-3f);
     const XMFLOAT3 horizontal{std::sin(light.azimuth), 0.0f, std::cos(light.azimuth)};
 
     const auto color = [fade](int r, int g, int b, int a) {
@@ -371,8 +372,8 @@ void Application::DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewpo
     ProjectedPoint previous;
     for (int i = 0; i <= kRingSegments; ++i) {
         const float t = (static_cast<float>(i) / kRingSegments) * 2.0f * 3.14159265f;
-        const ProjectedPoint current =
-            project(XMFLOAT3{std::sin(t) * gizmoRadius, 0.0f, std::cos(t) * gizmoRadius});
+        const ProjectedPoint current = project(XMFLOAT3{
+            origin.x + std::sin(t) * gizmoRadius, origin.y, origin.z + std::cos(t) * gizmoRadius});
         if (i > 0 && previous.visible && current.visible) {
             drawList->AddLine(previous.screen, current.screen, color(150, 160, 175, 130), 1.6f);
         }
@@ -387,8 +388,9 @@ void Application::DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewpo
     for (int i = 0; i <= kArcSegments; ++i) {
         const float angle = light.elevation * (static_cast<float>(i) / kArcSegments);
         const float ring = std::cos(angle) * gizmoRadius;
-        const ProjectedPoint current = project(
-            XMFLOAT3{horizontal.x * ring, std::sin(angle) * gizmoRadius, horizontal.z * ring});
+        const ProjectedPoint current = project(XMFLOAT3{origin.x + horizontal.x * ring,
+                                                        origin.y + std::sin(angle) * gizmoRadius,
+                                                        origin.z + horizontal.z * ring});
         if (i > 0 && previousArc.visible && current.visible) {
             drawList->AddLine(previousArc.screen, current.screen, color(255, 206, 112, 150), 1.6f);
         }
@@ -437,57 +439,6 @@ void Application::DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewpo
     drawList->AddRectFilled(textMin, textMax, color(8, 10, 12, 190), ui::Scaled(4.0f));
     drawList->AddText(ImVec2(textMin.x + padding.x, textMin.y + padding.y),
                       color(235, 235, 235, 255), text);
-
-    drawList->PopClipRect();
-}
-
-// ハイトの範囲のラベル（0.0 / 0.5 / 1.0）。
-//
-// **枠の線はレンダラが描く**（`PreviewRenderer::DrawHeightGuideOverlay`）。
-// シーンの深度でテストしてメッシュの向こう側を隠すためで、ImGui の
-// オーバーレイでは深度が使えない。文字だけは ImGui で重ねる
-// （手前の角に添えるので、隠れてもラベルの意味は保たれる）。
-void Application::DrawHeightGuide(const ImVec2& viewportMin, const ImVec2& viewportMax) {
-    if (!m_settings.Display().showHeightGuide) {
-        return;
-    }
-    using namespace DirectX;
-    const renderer::Camera& camera = m_renderer.GetCamera();
-    const XMMATRIX viewProjection = camera.ViewMatrix() * camera.ProjectionMatrix();
-    const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
-    if (size.x <= 0.0f || size.y <= 0.0f) {
-        return;
-    }
-
-    const float half = m_renderer.PlaneSize() * 0.5f;
-    const float scale = m_renderer.DisplacementScale();
-
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    drawList->PushClipRect(viewportMin, viewportMax, true);
-
-    struct Level {
-        float height;
-        ImU32 color;
-        const char* label;
-    };
-    // 0.5（元の面）は基準なので、レンダラの線と同じく少し落とした色にする。
-    const Level levels[] = {
-        {0.0f, IM_COL32(150, 160, 175, 200), "0.0"},
-        {0.5f, IM_COL32(150, 160, 175, 110), "0.5"},
-        {1.0f, IM_COL32(150, 160, 175, 200), "1.0"},
-    };
-
-    for (const Level& level : levels) {
-        const float y = (level.height - 0.5f) * scale;
-        // ラベルは手前の角（+X, +Z）へ。線と重ならないよう少し外へずらす。
-        const ProjectedPoint corner =
-            ProjectToViewport(viewProjection, XMFLOAT3{half, y, half}, viewportMin, size);
-        if (corner.visible) {
-            drawList->AddText(ImVec2(corner.screen.x + ui::Scaled(6.0f),
-                                     corner.screen.y - ImGui::GetTextLineHeight() * 0.5f),
-                              level.color, level.label);
-        }
-    }
 
     drawList->PopClipRect();
 }
@@ -635,7 +586,6 @@ void Application::DrawViewportPanel() {
             HandleCameraShortcuts(itemHovered);
 
             DrawAxisGizmo(camera, imageOrigin, imageMax);
-            if (!m_renderer.HasMeshScene()) DrawHeightGuide(imageOrigin, imageMax);
             DrawLightGizmo(imageOrigin, imageMax);
             if (pathNode != nullptr) {
                 DrawPathOverlay(*pathNode, imageOrigin, imageMax);

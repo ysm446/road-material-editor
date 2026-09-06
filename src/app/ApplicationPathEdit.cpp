@@ -38,6 +38,7 @@
 #include "core/Log.h"
 #include "graph/Path.h"
 #include "graph/PathRoute.h"
+#include "graph/RoadProfile.h"
 #include "ui/UiStyle.h"
 
 #include <imgui.h>
@@ -371,6 +372,508 @@ int PathGizmoHit(const PathGizmoScreen& gizmo, const ImVec2& mouse) {
     return -1;
 }
 
+// --- 道路線形（縦断 / バンク）の編集 ----------------------------------------------
+//
+// 制御点の編集とは別のモード。線形の中心線（縦断反映後）を画面へ落とし、
+// その上にポイントのマーカーを置く。ポイントは線に沿って u（0〜1）だけを動かす。
+// 手動のバンクポイントは断面の平面にリングを出し、掴んで回す。
+
+namespace {
+
+struct ProfileScreenMarker {
+    graph::PathElementId id = 0;
+    bool bank = false;
+    bool manual = false;
+    float u = 0.0f;
+    ImVec2 screen{};
+    bool visible = false;
+    graph::ProfileFrame frame;
+};
+
+struct ProfileScreen {
+    bool valid = false;
+    graph::ProfileCurve centerline;
+    std::vector<ImVec2> screen;
+    std::vector<bool> visible;
+    std::vector<ProfileScreenMarker> markers;
+    std::string error;
+};
+
+ProfileScreen BuildProfileScreen(const graph::PathSettings& path, const XMMATRIX& viewProjection,
+                                 const ImVec2& viewportMin, const ImVec2& size) {
+    ProfileScreen result;
+    if (!graph::BuildPathCenterline(path, result.centerline, &result.error)) {
+        return result;
+    }
+    result.valid = true;
+    result.screen.reserve(result.centerline.points.size());
+    result.visible.reserve(result.centerline.points.size());
+    for (const XMFLOAT3& point : result.centerline.points) {
+        const ProjectedPoint projected = ProjectToViewport(viewProjection, point, viewportMin, size);
+        result.screen.push_back(projected.screen);
+        result.visible.push_back(projected.visible);
+    }
+    const auto addMarker = [&](graph::PathElementId id, bool bank, bool manual, float u) {
+        ProfileScreenMarker marker;
+        marker.id = id;
+        marker.bank = bank;
+        marker.manual = manual;
+        marker.u = u;
+        marker.frame = graph::EvaluateProfileFrame(path, result.centerline, u);
+        const ProjectedPoint projected =
+            ProjectToViewport(viewProjection, marker.frame.position, viewportMin, size);
+        marker.screen = projected.screen;
+        marker.visible = projected.visible;
+        result.markers.push_back(marker);
+    };
+    for (const graph::PathVerticalPoint& point : path.verticalPoints) {
+        addMarker(point.id, false, false, point.u);
+    }
+    for (const graph::PathBankPoint& point : path.bankPoints) {
+        addMarker(point.id, true, point.manual, point.u);
+    }
+    return result;
+}
+
+// 中心線上でカーソルに最も近い位置の u。radius の内側に無ければ偽。
+bool NearestProfileU(const ProfileScreen& screen, const ImVec2& mouse, float radius, float& outU) {
+    if (!screen.valid || screen.screen.size() < 2) {
+        return false;
+    }
+    float best = radius;
+    bool found = false;
+    const float total = std::max(screen.centerline.TotalLength(), 1e-6f);
+    for (size_t i = 0; i + 1 < screen.screen.size(); ++i) {
+        if (!screen.visible[i] || !screen.visible[i + 1]) {
+            continue;
+        }
+        float t = 0.0f;
+        const float distance = DistanceToSegment(mouse, screen.screen[i], screen.screen[i + 1], t);
+        if (distance < best) {
+            best = distance;
+            const float a = screen.centerline.arcLengths[i];
+            const float b = screen.centerline.arcLengths[i + 1];
+            outU = std::clamp((a + (b - a) * t) / total, 0.0f, 1.0f);
+            found = true;
+        }
+    }
+    return found;
+}
+
+// 最寄りのマーカー。bank で縦断 / バンクのどちらを対象にするか選ぶ。
+graph::PathElementId NearestProfileMarker(const ProfileScreen& screen, const ImVec2& mouse,
+                                          float radius, bool bank) {
+    graph::PathElementId best = 0;
+    float bestDistance = radius;
+    for (const ProfileScreenMarker& marker : screen.markers) {
+        if (!marker.visible || marker.bank != bank) {
+            continue;
+        }
+        const float distance = Distance(mouse, marker.screen);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = marker.id;
+        }
+    }
+    return best;
+}
+
+// 回転ギズモのリング。断面の平面（right / up）に置き、θ は right から up へ回る角。
+// バンク角 a のとき Right 端は θ = -a に来る（正で Left 側が上がる = Right 側が下がる）。
+struct BankRingScreen {
+    bool valid = false;
+    ImVec2 center{};
+    std::vector<ImVec2> ring;
+    std::vector<bool> visible;
+    std::vector<float> theta;
+    ImVec2 barLeft{};
+    ImVec2 barRight{};
+    bool barVisible = false;
+    float radiusWorld = 0.0f;
+};
+
+constexpr float kBankRingPixels = 44.0f;
+constexpr int kBankRingSegments = 48;
+
+// 画面上の長さ（px）をその位置での実寸へ直す。
+float MetersPerPixelAt(const XMMATRIX& viewProjection, const XMFLOAT3& position, const ImVec2& size) {
+    const auto axes = renderer::ProjectMoveAxes(viewProjection, position, size.x, size.y, 1.0f);
+    const float pixelsPerMeter = std::max({axes.pixelsPerMeter[0], axes.pixelsPerMeter[1], axes.pixelsPerMeter[2]});
+    return pixelsPerMeter > 1e-3f ? 1.0f / pixelsPerMeter : 0.0f;
+}
+
+BankRingScreen BuildBankRing(const graph::ProfileFrame& frame, float bankRadians,
+                             const XMMATRIX& viewProjection, const ImVec2& viewportMin,
+                             const ImVec2& size) {
+    BankRingScreen ring;
+    const float metersPerPixel = MetersPerPixelAt(viewProjection, frame.position, size);
+    if (metersPerPixel <= 0.0f) {
+        return ring;
+    }
+    ring.radiusWorld = ui::Scaled(kBankRingPixels) * metersPerPixel;
+    const XMVECTOR center = XMLoadFloat3(&frame.position);
+    const XMVECTOR right = XMLoadFloat3(&frame.right);
+    const XMVECTOR up = XMLoadFloat3(&frame.up);
+    const auto project = [&](XMVECTOR world) {
+        XMFLOAT3 p;
+        XMStoreFloat3(&p, world);
+        return ProjectToViewport(viewProjection, p, viewportMin, size);
+    };
+    const ProjectedPoint projectedCenter = project(center);
+    if (!projectedCenter.visible) {
+        return ring;
+    }
+    ring.center = projectedCenter.screen;
+    for (int i = 0; i <= kBankRingSegments; ++i) {
+        const float theta = static_cast<float>(i) / kBankRingSegments * 2.0f * 3.14159265f;
+        const XMVECTOR world = XMVectorAdd(center, XMVectorScale(
+            XMVectorAdd(XMVectorScale(right, std::cos(theta)), XMVectorScale(up, std::sin(theta))),
+            ring.radiusWorld));
+        const ProjectedPoint projected = project(world);
+        ring.ring.push_back(projected.screen);
+        ring.visible.push_back(projected.visible);
+        ring.theta.push_back(theta);
+    }
+    const XMVECTOR bankRight = XMVectorSubtract(XMVectorScale(right, std::cos(bankRadians)),
+                                                XMVectorScale(up, std::sin(bankRadians)));
+    const ProjectedPoint left = project(XMVectorSubtract(center, XMVectorScale(bankRight, ring.radiusWorld)));
+    const ProjectedPoint rightEnd = project(XMVectorAdd(center, XMVectorScale(bankRight, ring.radiusWorld)));
+    ring.barLeft = left.screen;
+    ring.barRight = rightEnd.screen;
+    ring.barVisible = left.visible && rightEnd.visible;
+    ring.valid = true;
+    return ring;
+}
+
+// リング上でカーソルに最も近い θ。radius の内側に無ければ偽（radius が負なら距離を問わない）。
+bool BankRingNearestTheta(const BankRingScreen& ring, const ImVec2& mouse, float radius, float& outTheta) {
+    if (!ring.valid) {
+        return false;
+    }
+    float best = radius < 0.0f ? 1e30f : radius;
+    bool found = false;
+    for (size_t i = 0; i + 1 < ring.ring.size(); ++i) {
+        if (!ring.visible[i] || !ring.visible[i + 1]) {
+            continue;
+        }
+        float t = 0.0f;
+        const float distance = DistanceToSegment(mouse, ring.ring[i], ring.ring[i + 1], t);
+        if (distance < best) {
+            best = distance;
+            outTheta = ring.theta[i] + (ring.theta[i + 1] - ring.theta[i]) * t;
+            found = true;
+        }
+    }
+    return found;
+}
+
+float NormalizeAngle(float radians) {
+    constexpr float kTwoPi = 2.0f * 3.14159265f;
+    while (radians > 3.14159265f) radians -= kTwoPi;
+    while (radians < -3.14159265f) radians += kTwoPi;
+    return radians;
+}
+
+}  // namespace
+
+void Application::HandlePathProfileInput(graph::Node& node, bool itemHovered,
+                                         const ImVec2& viewportMin, const ImVec2& viewportMax) {
+    auto* settings = std::get_if<graph::PathNodeSettings>(&node.settings);
+    if (settings == nullptr) {
+        return;
+    }
+    graph::PathSettings& path = settings->path;
+    PathEditState& state = m_pathEdit;
+    const ImGuiIO& io = ImGui::GetIO();
+
+    // 制御点の操作状態は使わない。モードを切り替えた直後に残っていても捨てる。
+    state.dragging = false;
+    state.gizmoDragging = false;
+    state.boxPending = state.boxSelecting = false;
+    state.hoverPoint = state.hoverEdge = 0;
+    state.gizmoHover = -1;
+    if (state.selectedProfile != 0 && graph::FindVerticalPoint(path, state.selectedProfile) == nullptr &&
+        graph::FindBankPoint(path, state.selectedProfile) == nullptr) {
+        state.selectedProfile = 0;
+    }
+
+    const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
+    const renderer::Camera& camera = m_renderer.GetCamera();
+    const XMMATRIX viewProjection = camera.ViewMatrix() * camera.ProjectionMatrix();
+    const ProfileScreen screen = BuildProfileScreen(path, viewProjection, viewportMin, size);
+    const bool bankMode = state.profileMode == PathEditState::kProfileBank;
+    const ImVec2 mouse = io.MousePos;
+    const bool mouseInside = itemHovered;
+    bool changed = false;
+    bool released = false;
+
+    // 手動のバンクポイントを選んでいれば回転リングを出す。
+    graph::PathBankPoint* selectedBank = bankMode ? graph::FindBankPoint(path, state.selectedProfile) : nullptr;
+    BankRingScreen ring;
+    if (selectedBank != nullptr && selectedBank->manual && screen.valid && !state.profileDragging) {
+        const graph::ProfileFrame frame = graph::EvaluateProfileFrame(path, screen.centerline, selectedBank->u);
+        ring = BuildBankRing(frame, XMConvertToRadians(selectedBank->angleDegrees), viewProjection,
+                             viewportMin, size);
+    }
+    state.ringHover = false;
+    float ringTheta = 0.0f;
+    if (mouseInside && ring.valid && !state.ringDragging && !state.profileDragging) {
+        state.ringHover = BankRingNearestTheta(ring, mouse, ui::Scaled(kGizmoHitRadius), ringTheta);
+    }
+
+    // --- ホバー ---------------------------------------------------------------
+    state.hoverProfile = 0;
+    if (mouseInside && !state.ringDragging && !state.profileDragging && !state.ringHover) {
+        state.hoverProfile = NearestProfileMarker(screen, mouse, ui::Scaled(kPointHitRadius), bankMode);
+    }
+
+    // --- 押した -----------------------------------------------------------------
+    if (mouseInside && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (state.ringHover && selectedBank != nullptr) {
+            state.ringDragging = true;
+            state.ringStartTheta = ringTheta;
+            state.ringStartAngle = selectedBank->angleDegrees;
+        } else if (io.KeyCtrl) {
+            // 線の上にポイントを置き、そのまま掴む。
+            float u = 0.0f;
+            if (NearestProfileU(screen, mouse, ui::Scaled(kSnapRadius), u)) {
+                state.selectedProfile = bankMode ? graph::AddBankPoint(path, u) : graph::AddVerticalPoint(path, u);
+                state.profileDragging = true;
+                state.dragMoved = true;
+                state.pressPos = mouse;
+                changed = true;
+            }
+        } else if (state.hoverProfile != 0) {
+            state.selectedProfile = state.hoverProfile;
+            state.profileDragging = true;
+            state.dragMoved = false;
+            state.pressPos = mouse;
+        } else {
+            state.selectedProfile = 0;
+        }
+    }
+
+    // --- リングのドラッグ（手動の角度） ----------------------------------------------
+    if (state.ringDragging) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && selectedBank != nullptr) {
+            float theta = 0.0f;
+            if (BankRingNearestTheta(ring, mouse, -1.0f, theta)) {
+                // Right 端は θ = -a にあるので、リングを θ の正へ回すと角度は減る。
+                const float delta = NormalizeAngle(theta - state.ringStartTheta);
+                const float angle = std::clamp(state.ringStartAngle - XMConvertToDegrees(delta), -90.0f, 90.0f);
+                if (std::abs(angle - selectedBank->angleDegrees) > 1e-4f) {
+                    selectedBank->angleDegrees = angle;
+                    changed = true;
+                }
+            }
+        } else {
+            state.ringDragging = false;
+            released = true;
+        }
+    }
+
+    // --- マーカーのドラッグ（線に沿って u を動かす） ------------------------------------
+    if (state.profileDragging) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (!state.dragMoved && Distance(mouse, state.pressPos) > ui::Scaled(kDragThreshold)) {
+                state.dragMoved = true;
+            }
+            float u = 0.0f;
+            if (state.dragMoved && NearestProfileU(screen, mouse, 1e30f, u)) {
+                if (auto* vertical = graph::FindVerticalPoint(path, state.selectedProfile)) {
+                    if (vertical->u != u) { vertical->u = u; changed = true; }
+                } else if (auto* bank = graph::FindBankPoint(path, state.selectedProfile)) {
+                    if (bank->u != u) { bank->u = u; changed = true; }
+                }
+            }
+        } else {
+            state.profileDragging = false;
+            if (state.dragMoved) {
+                released = true;
+            }
+        }
+    }
+
+    // --- キー ---------------------------------------------------------------------
+    if (mouseInside && !io.WantTextInput && !state.profileDragging && !state.ringDragging) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            state.selectedProfile = 0;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && state.selectedProfile != 0) {
+            changed |= graph::DeleteProfilePoint(path, state.selectedProfile);
+            state.selectedProfile = 0;
+        }
+    }
+
+    if (changed) {
+        m_graph.MarkDirty();
+        MarkDocumentChanged();
+    }
+    if (released) {
+        m_documentJoinsEdit = true;
+    }
+}
+
+void Application::DrawPathProfileOverlay(const graph::Node& node, ImDrawList* drawList,
+                                         const ImVec2& viewportMin, const ImVec2& viewportMax) {
+    const auto* settings = std::get_if<graph::PathNodeSettings>(&node.settings);
+    if (settings == nullptr) {
+        return;
+    }
+    const graph::PathSettings& path = settings->path;
+    const PathEditState& state = m_pathEdit;
+    const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
+    const renderer::Camera& camera = m_renderer.GetCamera();
+    const XMMATRIX viewProjection = camera.ViewMatrix() * camera.ProjectionMatrix();
+    const ProfileScreen screen = BuildProfileScreen(path, viewProjection, viewportMin, size);
+    const bool bankMode = state.profileMode == PathEditState::kProfileBank;
+
+    const ImU32 shadow = IM_COL32(0, 0, 0, 120);
+    const ImU32 centerlineColor = IM_COL32(255, 220, 120, 170);
+    const ImU32 verticalColor = IM_COL32(190, 230, 120, 240);
+    const ImU32 bankAutoColor = IM_COL32(255, 190, 90, 240);
+    const ImU32 bankManualColor = IM_COL32(255, 130, 80, 240);
+    const ImU32 hoverColor = IM_COL32(255, 245, 255, 255);
+    const ImU32 selectedColor = IM_COL32(255, 255, 255, 255);
+    const ImU32 textColor = IM_COL32(235, 235, 235, 255);
+
+    if (!screen.valid) {
+        // 線形にできない Path（分岐など）。理由を線の代わりに出す。
+        const ImVec2 at(viewportMin.x + ui::Scaled(10.0f),
+                        viewportMin.y + ui::Scaled(10.0f) + ImGui::GetFrameHeight() + ui::Scaled(6.0f));
+        drawList->AddText(at, IM_COL32(255, 180, 120, 255), screen.error.c_str());
+        return;
+    }
+
+    // --- 縦断反映後の中心線 -----------------------------------------------------
+    for (size_t i = 0; i + 1 < screen.screen.size(); ++i) {
+        if (!screen.visible[i] || !screen.visible[i + 1]) {
+            continue;
+        }
+        drawList->AddLine(screen.screen[i], screen.screen[i + 1], shadow, ui::Scaled(3.0f));
+        drawList->AddLine(screen.screen[i], screen.screen[i + 1], centerlineColor, ui::Scaled(1.5f));
+    }
+
+    // --- マーカー ---------------------------------------------------------------
+    const auto project = [&](const XMFLOAT3& world) {
+        return ProjectToViewport(viewProjection, world, viewportMin, size);
+    };
+    for (const ProfileScreenMarker& marker : screen.markers) {
+        if (!marker.visible) {
+            continue;
+        }
+        const bool active = marker.bank == bankMode;
+        const bool selected = marker.id == state.selectedProfile;
+        const bool hovered = marker.id == state.hoverProfile;
+        const float radius = ui::Scaled(selected ? 6.5f : 5.5f);
+        ImU32 color = marker.bank ? (marker.manual ? bankManualColor : bankAutoColor) : verticalColor;
+        if (!active) {
+            color = (color & 0x00FFFFFFu) | (110u << 24);
+        } else if (hovered) {
+            color = hoverColor;
+        }
+        const ImVec2 c = marker.screen;
+        if (marker.bank) {
+            // バンクは断面の傾きを短い棒で示し、その中央に四角。
+            const float metersPerPixel = MetersPerPixelAt(viewProjection, marker.frame.position, size);
+            if (metersPerPixel > 0.0f) {
+                const float half = ui::Scaled(16.0f) * metersPerPixel;
+                const float a = marker.frame.bankRadians;
+                const XMVECTOR right = XMLoadFloat3(&marker.frame.right);
+                const XMVECTOR up = XMLoadFloat3(&marker.frame.up);
+                const XMVECTOR bankRight = XMVectorSubtract(XMVectorScale(right, std::cos(a)),
+                                                            XMVectorScale(up, std::sin(a)));
+                const XMVECTOR center = XMLoadFloat3(&marker.frame.position);
+                XMFLOAT3 left, rightEnd;
+                XMStoreFloat3(&left, XMVectorSubtract(center, XMVectorScale(bankRight, half)));
+                XMStoreFloat3(&rightEnd, XMVectorAdd(center, XMVectorScale(bankRight, half)));
+                const ProjectedPoint pl = project(left);
+                const ProjectedPoint pr = project(rightEnd);
+                if (pl.visible && pr.visible) {
+                    drawList->AddLine(pl.screen, pr.screen, shadow, ui::Scaled(4.0f));
+                    drawList->AddLine(pl.screen, pr.screen, color, ui::Scaled(2.0f));
+                    drawList->AddCircleFilled(pr.screen, ui::Scaled(2.5f), color, 10);
+                }
+            }
+            drawList->AddRectFilled(ImVec2(c.x - radius - 1.5f, c.y - radius - 1.5f),
+                                    ImVec2(c.x + radius + 1.5f, c.y + radius + 1.5f), shadow, ui::Scaled(2.0f));
+            if (marker.manual) {
+                drawList->AddRectFilled(ImVec2(c.x - radius, c.y - radius), ImVec2(c.x + radius, c.y + radius),
+                                        color, ui::Scaled(2.0f));
+            } else {
+                drawList->AddRectFilled(ImVec2(c.x - radius, c.y - radius), ImVec2(c.x + radius, c.y + radius),
+                                        IM_COL32(20, 22, 26, 230), ui::Scaled(2.0f));
+                drawList->AddRect(ImVec2(c.x - radius, c.y - radius), ImVec2(c.x + radius, c.y + radius),
+                                  color, ui::Scaled(2.0f), 0, ui::Scaled(2.0f));
+            }
+        } else {
+            // 縦断はひし形。
+            const ImVec2 diamond[4] = {ImVec2(c.x, c.y - radius), ImVec2(c.x + radius, c.y),
+                                       ImVec2(c.x, c.y + radius), ImVec2(c.x - radius, c.y)};
+            const float pad = ui::Scaled(1.5f);
+            const ImVec2 shadowDiamond[4] = {ImVec2(c.x, c.y - radius - pad), ImVec2(c.x + radius + pad, c.y),
+                                             ImVec2(c.x, c.y + radius + pad), ImVec2(c.x - radius - pad, c.y)};
+            drawList->AddConvexPolyFilled(shadowDiamond, 4, shadow);
+            drawList->AddConvexPolyFilled(diamond, 4, color);
+        }
+        if (selected) {
+            drawList->AddCircle(c, radius + ui::Scaled(4.0f), selectedColor, 24, ui::Scaled(1.5f));
+        }
+        // 値のラベル。線の上に重ならないよう右上へ。
+        if (active) {
+            char text[64] = {};
+            if (marker.bank) {
+                const graph::PathBankPoint* point = nullptr;
+                for (const auto& candidate : path.bankPoints) if (candidate.id == marker.id) point = &candidate;
+                if (point != nullptr && point->manual) {
+                    std::snprintf(text, sizeof(text), "手動 %.1f°", point->angleDegrees);
+                } else {
+                    std::snprintf(text, sizeof(text), "自動 %.1f°", XMConvertToDegrees(marker.frame.bankRadians));
+                }
+            } else {
+                const graph::PathVerticalPoint* point = nullptr;
+                for (const auto& candidate : path.verticalPoints) if (candidate.id == marker.id) point = &candidate;
+                if (point != nullptr) {
+                    std::snprintf(text, sizeof(text), "VCL %.0f m / %+.1f m", point->vclMeters, point->offsetMeters);
+                }
+            }
+            if (text[0] != '\0') {
+                const ImVec2 at(c.x + radius + ui::Scaled(6.0f), c.y - ImGui::GetTextLineHeight() - ui::Scaled(2.0f));
+                drawList->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), shadow, text);
+                drawList->AddText(at, textColor, text);
+            }
+        }
+    }
+
+    // --- 回転リング（手動のバンクポイント） ---------------------------------------------
+    if (bankMode && state.selectedProfile != 0 && !state.profileDragging) {
+        const graph::PathBankPoint* point = nullptr;
+        for (const auto& candidate : path.bankPoints) if (candidate.id == state.selectedProfile) point = &candidate;
+        if (point != nullptr && point->manual) {
+            const graph::ProfileFrame frame = graph::EvaluateProfileFrame(path, screen.centerline, point->u);
+            const BankRingScreen ring = BuildBankRing(frame, XMConvertToRadians(point->angleDegrees),
+                                                     viewProjection, viewportMin, size);
+            if (ring.valid) {
+                const bool active = state.ringDragging || state.ringHover;
+                const ImU32 ringColor = active ? hoverColor : IM_COL32(255, 188, 76, 230);
+                const float width = ui::Scaled(active ? 3.0f : 2.0f);
+                for (size_t i = 0; i + 1 < ring.ring.size(); ++i) {
+                    if (!ring.visible[i] || !ring.visible[i + 1]) continue;
+                    drawList->AddLine(ring.ring[i], ring.ring[i + 1], shadow, width + ui::Scaled(2.0f));
+                    drawList->AddLine(ring.ring[i], ring.ring[i + 1], ringColor, width);
+                }
+                if (ring.barVisible) {
+                    drawList->AddLine(ring.barLeft, ring.barRight, shadow, ui::Scaled(5.0f));
+                    drawList->AddLine(ring.barLeft, ring.barRight, IM_COL32(235, 235, 235, 240), ui::Scaled(3.0f));
+                    drawList->AddCircleFilled(ring.barRight, ui::Scaled(4.0f), IM_COL32(235, 235, 235, 255), 12);
+                    drawList->AddText(ImVec2(ring.barRight.x + ui::Scaled(6.0f), ring.barRight.y - ui::Scaled(7.0f)),
+                                      textColor, "R");
+                }
+            }
+        }
+    }
+}
+
 graph::Node* Application::CurrentPathNode() {
     graph::Node* node = m_graph.FindMutableNode(m_selectedGraphNode);
     if (node == nullptr || node->kind != graph::NodeKind::Path) {
@@ -532,6 +1035,13 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
         state.dragPoint = 0;
         state.dragging = false;
     }
+    // 縦断 / バンクの編集モードは別の入力処理。制御点の選択やギズモは出さない。
+    if (path.worldSpace && state.profileMode != PathEditState::kProfilePoints) {
+        HandlePathProfileInput(node, itemHovered, viewportMin, viewportMax);
+        return;
+    }
+    state.profileDragging = state.ringDragging = state.ringHover = false;
+    state.hoverProfile = 0;
 
     const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
     const renderer::Camera& camera = m_renderer.GetCamera();
@@ -1075,6 +1585,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(viewportMin, viewportMax, true);
+    const bool profileMode = path.worldSpace && state.profileMode != PathEditState::kProfilePoints;
 
     // 色。ピンの色（水色）と同じ系統で、状態は明るさで分ける。
     const ImU32 lineColor = IM_COL32(120, 200, 240, 220);
@@ -1173,7 +1684,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
     const ImGuiIO& io = ImGui::GetIO();
     const bool viewportHovered = ImGui::IsMouseHoveringRect(viewportMin, viewportMax);
     const graph::PathElementId anchor = state.selected.empty() ? 0 : state.selected.front();
-    if (io.KeyCtrl && anchor != 0 && viewportHovered && !state.dragging) {
+    if (io.KeyCtrl && anchor != 0 && viewportHovered && !state.dragging && !profileMode) {
         const PathScreenPoint* tail = cache.Find(anchor);
         ImVec2 target{};
         bool hasTarget = false;
@@ -1242,9 +1753,14 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
         }
     }
 
+    // --- 縦断 / バンクのポイントとリング ------------------------------------------
+    if (profileMode) {
+        DrawPathProfileOverlay(node, drawList, viewportMin, viewportMax);
+    }
+
     // --- 移動ギズモ -------------------------------------------------------------
     // 座標軸ギズモと同じ色（X = 赤、Z = 青）。掴める所は明るくする。
-    if (!io.KeyCtrl && !state.dragging && !state.boxPending) {
+    if (!io.KeyCtrl && !state.dragging && !state.boxPending && !profileMode) {
         const std::vector<graph::PathElementId> movable = PathMovablePoints(
             path, state.selected, state.selectedEdges, state.selectedStrandInterior);
         const PathGizmoScreen gizmo =
@@ -1292,7 +1808,27 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
         const char* action;
     };
     std::vector<HintRow> rows;
-    if (io.KeyCtrl) {
+    if (profileMode) {
+        const bool bankMode = state.profileMode == PathEditState::kProfileBank;
+        if (state.ringDragging) {
+            rows = {{"離す", "角度を確定"}};
+        } else if (state.profileDragging) {
+            rows = {{"離す", "位置を確定"}};
+        } else if (bankMode) {
+            rows = {{"Ctrl + 線をクリック", "バンクポイントを置く"},
+                    {"マーカーをドラッグ", "線に沿って動かす"},
+                    {"リングをドラッグ", "手動の角度を回す"},
+                    {"プロパティ", "設計速度 / 自動・手動 / 角度"},
+                    {"Delete / Esc", "消す / 選択を外す"},
+                    {"Alt + ドラッグ", "視点"}};
+        } else {
+            rows = {{"Ctrl + 線をクリック", "縦断ポイントを置く"},
+                    {"マーカーをドラッグ", "線に沿って動かす"},
+                    {"プロパティ", "縦断曲線長 / オフセット"},
+                    {"Delete / Esc", "消す / 選択を外す"},
+                    {"Alt + ドラッグ", "視点"}};
+        }
+    } else if (io.KeyCtrl) {
         if (anchor != 0) {
             rows = {{"クリック", "点を置いて伸ばす"},
                     {"点をクリック", "繋ぐ"},
@@ -1469,6 +2005,90 @@ bool Application::DrawPathSettings(graph::Node& node) {
             ui::PropertyEnd();
         }
         ui::EndPropertyTable();
+    }
+
+    // --- 道路線形（縦断曲線とバンク角） ------------------------------------------------
+    if (path.worldSpace) {
+        if (m_pathEdit.nodeId != node.id) {
+            m_pathEdit = PathEditState{};
+            m_pathEdit.nodeId = node.id;
+        }
+        const graph::PathSettings profileDefaults;
+        ui::SectionHeader("道路線形");
+        if (ui::BeginPropertyTable("graphPathProfileRows")) {
+            static const char* const kProfileModeLabels[] = {"制御点", "縦断ポイント", "バンクポイント"};
+            int mode = m_pathEdit.profileMode;
+            if (ui::PropertyCombo("編集", &mode, kProfileModeLabels, IM_ARRAYSIZE(kProfileModeLabels), 0,
+                                  "ビューポートで何を編集するか。縦断 / バンクでは線形の上に Ctrl＋クリックでポイントを置く")) {
+                m_pathEdit.profileMode = mode;
+                m_pathEdit.selectedProfile = 0;
+                m_pathEdit.profileDragging = m_pathEdit.ringDragging = false;
+            }
+            ui::PropertyValue("ポイント", "縦断 %zu / バンク %zu", path.verticalPoints.size(), path.bankPoints.size());
+            changed |= ui::PropertyBool("バンクを反映", &path.bankEnabled, profileDefaults.bankEnabled,
+                "道路面を接線まわりに傾ける。切ると手動ポイントがあっても水平のまま");
+            changed |= ui::PropertyFloat("設計速度", &path.designSpeedKmh, 0.0f, 200.0f, profileDefaults.designSpeedKmh,
+                "バンクポイントの無い所の設計速度（km/h）。曲率半径と合わせて自動のバンク角を決める", "%.0f km/h");
+            changed |= ui::PropertyFloat("摩擦係数", &path.frictionCoefficient, 0.0f, 1.0f, profileDefaults.frictionCoefficient,
+                "横方向の摩擦係数。大きいほど自動のバンク角が小さくなる", "%.2f");
+            changed |= ui::PropertyBool("バンクを平滑化", &path.smoothBank, profileDefaults.smoothBank,
+                "距離方向にガウス平均して、手動ポイントや曲率変化の急な角度変化をなだらかにする");
+            if (path.smoothBank) {
+                changed |= ui::PropertyFloat("平滑化距離", &path.bankSmoothMeters, 1.0f, 200.0f, profileDefaults.bankSmoothMeters,
+                    "前後にこの距離だけ角度を平均する（m）", "%.0f m");
+            }
+            ui::EndPropertyTable();
+        }
+        graph::PathVerticalPoint* vertical = graph::FindVerticalPoint(path, m_pathEdit.selectedProfile);
+        graph::PathBankPoint* bank = graph::FindBankPoint(path, m_pathEdit.selectedProfile);
+        if (vertical != nullptr) {
+            ui::SectionHeader("選択した縦断ポイント");
+            if (ui::BeginPropertyTable("graphPathVerticalRows")) {
+                changed |= ui::PropertyFloat("位置", &vertical->u, 0.0f, 1.0f, 0.5f,
+                    "線形の始点を 0、終点を 1 とした位置", "%.3f");
+                changed |= ui::PropertyFloat("縦断曲線長", &vertical->vclMeters, 0.0f, 1000.0f, 50.0f,
+                    "この点を中心に前後の勾配をつなぐ放物線の長さ（m）。前後の区間に収まらなければ短くなる", "%.0f m",
+                    ImGuiSliderFlags_Logarithmic);
+                changed |= ui::PropertyFloat("オフセット", &vertical->offsetMeters, -100.0f, 100.0f, 0.0f,
+                    "制御点から決まる高さに足す量（m）", "%.2f m");
+                ui::PropertyLabelEmpty("pathVerticalDelete");
+                if (ui::Button("削除")) {
+                    graph::DeleteProfilePoint(path, m_pathEdit.selectedProfile);
+                    m_pathEdit.selectedProfile = 0;
+                    changed = true;
+                }
+                ui::PropertyEnd();
+                ui::EndPropertyTable();
+            }
+        } else if (bank != nullptr) {
+            ui::SectionHeader("選択したバンクポイント");
+            if (ui::BeginPropertyTable("graphPathBankRows")) {
+                changed |= ui::PropertyFloat("位置", &bank->u, 0.0f, 1.0f, 0.5f,
+                    "線形の始点を 0、終点を 1 とした位置", "%.3f");
+                changed |= ui::PropertyFloat("設計速度", &bank->designSpeedKmh, 0.0f, 200.0f, path.designSpeedKmh,
+                    "この位置の設計速度（km/h）。自動のときはここから角度を求め、手動でも速度の補間点になる", "%.0f km/h");
+                changed |= ui::PropertyBool("手動", &bank->manual, false,
+                    "角度を直接指定する。ビューポートのリングを回しても変えられる");
+                if (bank->manual) {
+                    changed |= ui::PropertyFloat("角度", &bank->angleDegrees, -90.0f, 90.0f, 0.0f,
+                        "バンク角（度）。正で Left 側が上がる", "%.1f°");
+                }
+                graph::ProfileCurve centerline;
+                if (graph::BuildPathCenterline(path, centerline, nullptr)) {
+                    const float evaluated = graph::EvaluateBankAngleRadians(path, centerline,
+                        std::clamp(bank->u, 0.0f, 1.0f) * centerline.TotalLength());
+                    ui::PropertyValue("評価した角度", "%.1f°", DirectX::XMConvertToDegrees(evaluated));
+                }
+                ui::PropertyLabelEmpty("pathBankDelete");
+                if (ui::Button("削除")) {
+                    graph::DeleteProfilePoint(path, m_pathEdit.selectedProfile);
+                    m_pathEdit.selectedProfile = 0;
+                    changed = true;
+                }
+                ui::PropertyEnd();
+                ui::EndPropertyTable();
+            }
+        }
     }
 
     // 選択した点。複数選んでいれば全部に同じ値を入れる（表示は先頭の値）。

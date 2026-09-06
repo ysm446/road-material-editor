@@ -1,46 +1,13 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-06 16:10
+更新日時: 2026-09-07 00:44
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
-Road Editor への移行初期は、この既存形式を継続利用する。プロジェクト版5で明示的なメッシュ入力 scene を追加した。
-道路ノードの編集データと専用拡張子は後続で設計する。
-
-## 版7のXYZ座標
-
-実寸Path（worldSpace=true）の点は `position: [X, Y, Z]` をm単位で保存する。
-版6の `u / v / heightOffset` は読込時にX / Z / Yへ読み替える。
-旧地形Path（worldSpace=false）は既存のUVと相対高さの形式を維持する。
-
-## 版6の実寸Path
-
-`graph.nodes[].path.worldSpace` が true のとき、点の `u` はX(m)、`v` はZ(m)、
-`heightOffset` はY(m)。既存のフィールド名を維持し、範囲外の座標もそのまま保存する。
-省略時・falseは旧地形UV＋相対高さとして読む。新版は版6で保存し、旧アプリの誤解釈を防ぐ。
-カーブの種類・幅・接続とアンドゥのデータ構造は共通。メッシュ生成結果はまだPathから生成しない。
-
-## 版5のメッシュ入力
-
-形式識別子と拡張子は `terrain-graph.project` / `.tgproj` を継続し、プロジェクトの版を5へ上げた。
-マテリアル単体は版3のまま。版4以前のプロジェクトも読み込める。
-版5を認識しない旧アプリは読込を拒否するため、scene を黙って無視して地形を表示しない。
-
-トップレベルに任意の `scene: { "meshes": [...] }` を持つ。
-scene が無ければ旧地形プレビュー、空配列なら空のメッシュシーンになる。
-各要素は次の形式。現在はテクスチャ参照やモデル行列を持たない。
-
-| キー | 内容 |
-| --- | --- |
-| vertices | 頂点配列。1頂点は [px, py, pz, nx, ny, nz, tx, ty, tz, tangentW, u, v] |
-| indices | 0始まりの三角形インデックス配列。長さは3の倍数 |
-| material | [linearR, linearG, linearB, roughness, metallic]。各値は0〜1 |
-
-位置は世界座標の m。非有限値、float の範囲外、無効インデックス、非単位・非直交の
-接空間、不正な材質は文書を入れ替える前に拒否する。
-R1 の明示的メッシュ入力を保持する形式であり、道路ノードの生成キャッシュの保存形式ではない。
-
+Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は11。
+版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンクを追加した（「Road Editor で追加した版」）。
+道路専用の拡張子は後続で設計する。
 
 ## 全体像
 
@@ -85,6 +52,13 @@ material-mixer 時代の `.mmproj` / `.mmmat` も**読み込みだけ**受け付
 | 2 | レイヤーのハイトに `gain` を追加し、`base` の意味を変えた（下記） |
 | 3 | レイヤーに `kind`（種類）を追加した（下記） |
 | 4 | `layers[]` を廃止し、合成の構造を `graph` に一本化した（下記） |
+| 5 | 明示的なメッシュ入力 `scene` を追加した（Road Editor） |
+| 6 | Path に `worldSpace` を追加し、実寸座標を保存する |
+| 7 | 実寸 Path の点を `position: [X, Y, Z]` で保存する |
+| 8 | `road` / `meshOutput` ノードを追加した |
+| 9 | Road に Material 入力ピンを追加した |
+| 10 | `roadMarking` ノード（白線）を追加した |
+| 11 | Path に縦断ポイント・バンクポイントを追加した |
 
 **版を上げる基準は「キーが増えたか」ではなく「既存のキーの意味が変わったか」。**
 キーが増えただけなら、古いビルドはそれを無視して正しく読める。意味が変わった場合は、
@@ -193,9 +167,9 @@ shoreHeight, shoreFeather }`）は `kind` が `river` のノードだけが使�
 長さは m、`threshold` は全セル数に対する割合、`minSlope` は無次元。
 無ければ既定値（版は上げない）。
 
-`kind` が `path` のノードは `path` を持つ。`points[]` は
+`kind` が `path` のノードは `path` を持つ。旧地形 Path（`worldSpace` 省略または false）の `points[]` は
 `{ id, u, v, width, feather, intensity, heightOffset }`（`u` / `v` は地形平面の正規化座標、
-寸法は m）、`edges[]` は `{ id, from, to, curve, rounding, clothoidRatio, route, maxGrade,
+寸法は m。実寸 Path は「版6 / 版7」を参照）、`edges[]` は `{ id, from, to, curve, rounding, clothoidRatio, route, maxGrade,
 routedFrom, routedTo, waypoints }`（点の `id` を指す。from → to が向き。`curve` は
 `line` / `quadratic` / `cubic` / `clothoid`、`rounding` と `clothoidRatio` は 0〜1。
 無ければ直線）。経路探索の `route` は `none` / `road` / `flow`（無ければ `none`）、
@@ -218,6 +192,73 @@ routedFrom, routedTo, waypoints }`（点の `id` を指す。from → to が向�
 無次元の強さを持つ意味が無くなった。読み込み時は無視し、保存でも書かない。
 **版は上げない。** キーが消えるだけで既存のキーの意味は変わらず、
 古いビルドが新しいファイルを読んでも既定値 1.0 として従来どおり動く。
+
+## Road Editor で追加した版（5〜11）
+
+版5以降は Road Editor で追加した。版の並びは上げた順で、それぞれ旧アプリの誤読を防ぐため版を上げている。
+
+### 版5 — メッシュ入力（scene）
+
+形式識別子と拡張子は `terrain-graph.project` / `.tgproj` を継続し、プロジェクトの版を5へ上げた。
+マテリアル単体は版3のまま。版4以前のプロジェクトも読み込める。
+版5を認識しない旧アプリは読込を拒否するため、scene を黙って無視して地形を表示しない。
+
+トップレベルに任意の `scene: { "meshes": [...] }` を持つ。
+scene が無ければ旧地形プレビュー、空配列なら空のメッシュシーンになる。
+各要素は次の形式。現在はテクスチャ参照やモデル行列を持たない。
+
+| キー | 内容 |
+| --- | --- |
+| vertices | 頂点配列。1頂点は [px, py, pz, nx, ny, nz, tx, ty, tz, tangentW, u, v] |
+| indices | 0始まりの三角形インデックス配列。長さは3の倍数 |
+| material | [linearR, linearG, linearB, roughness, metallic]。各値は0〜1 |
+
+位置は世界座標の m。非有限値、float の範囲外、無効インデックス、非単位・非直交の
+接空間、不正な材質は文書を入れ替える前に拒否する。
+R1 の明示的メッシュ入力を保持する形式であり、道路ノードの生成キャッシュの保存形式ではない。
+
+### 版6 — 実寸Path
+
+`graph.nodes[].path.worldSpace` が true のとき、点の `u` はX(m)、`v` はZ(m)、
+`heightOffset` はY(m)。既存のフィールド名を維持し、範囲外の座標もそのまま保存する。
+省略時・falseは旧地形UV＋相対高さとして読む。新版は版6で保存し、旧アプリの誤解釈を防ぐ。
+カーブの種類・幅・接続とアンドゥのデータ構造は共通。
+
+### 版7 — XYZ座標
+
+実寸Path（worldSpace=true）の点は `position: [X, Y, Z]` をm単位で保存する。
+版6の `u / v / heightOffset` は読込時にX / Z / Yへ読み替える。
+旧地形Path（worldSpace=false）は既存のUVと相対高さの形式を維持する。
+
+### 版8 — Roadノード
+
+`kind: "road"` は `road: { "width": 6.0, "uvRepeat": 1.0 }` を持つ（m）。入力はPath、出力はRoadSurface / Left / Rightの順。`kind: "meshOutput"` はMesh入力1つを持つ。
+
+生成済み道路メッシュは保存せず、グラフから再構築する。既存の手入力 `scene` は独立して保持する。版7以前も読み込めるが、版8は旧アプリでの誤読を防ぐためバージョン判定で拒否される。
+
+### 版9 — RoadのMaterial入力
+
+RoadのinputsはPath、Materialの順。outputsの順序はRoadSurface、Left、Rightを維持する。材質接続は既存のlinksで保存し、生成メッシュと合成テクスチャは再構築する。版8以前のRoadには、他のIDと衝突しない新しいMaterialピンを読込時に追加し、既存の接続を保つ。
+
+### 版10 — Lane Marking（白線）
+
+`kind: "roadMarking"` は `roadMarking: { "lineWidth": 0.15, "centerLine": true, "edgeLines": true, "edgeInset": 0.5, "lift": 0.005, "uvRepeat": 1.0 }` を持つ（長さは m）。
+inputsはRoadSurface（Mesh）、Materialの順、outputsはRoadSurface（Mesh）1つ。白線メッシュは保存せず再構築する。
+旧アプリはこのノードを読み飛ばしてMesh Outputへのリンクを失い、道路が黙って消えるため版を上げた。
+
+### 版11 — Path の縦断ポイントとバンクポイント
+
+実寸 Path（worldSpace=true）の `path` に次を追加した。長さは m、速度は km/h、角度は度。
+
+| キー | 内容 |
+| --- | --- |
+| verticalPoints | `[{ id, u, vcl, offset }]`。u は 0〜1。無ければ書かない |
+| bankPoints | `[{ id, u, designSpeed, manual, angle }]`。angle は −90〜90 で正が Left 側上がり |
+| bankEnabled | バンクを道路へ反映するか（既定 false） |
+| designSpeed / friction | ポイントの無い所の設計速度（40）と摩擦係数（0.15） |
+| smoothBank / bankSmoothDistance | ガウス平滑化とその距離（20 m） |
+
+ポイントの id は点・エッジと同じ `nextId` の空間。旧アプリが線形を平坦・水平に読んで黙って違う道路を出すため版を上げた。
 
 ## `.tgproj`
 
@@ -332,7 +373,7 @@ RGB をそのまま使うマップ（ベースカラー / 法線）はテクス�
   並びで、ピンの型やラベルはノードの定義から再生成する（ファイルには書かない）。
 - `kind` は名前で書く（`surface` / `shape` / `liquid` / `heightmap` /
   `heightmapBlur` / `maskImage` / `maskFluvial` / `maskSlope` / `maskLevels` /
-  `maskBlur` / `maskBlend` / `output`）。知らない種類のノードは読み飛ばす。
+  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking`）。知らない種類のノードは読み飛ばす。
 - レイヤー設定を持つノード（surface / shape / liquid / heightmap /
   heightmapBlur）は `layer` に
   旧 `layers[]` の要素と同じ形を持つ。テクスチャ / マテリアル / ペイントの参照も
@@ -396,13 +437,3 @@ RGB をそのまま使うマップ（ベースカラー / 法線）はテクス�
   フォルダ検索は子フォルダを含み、同名ファイルが複数ある場合は最初の候補を使う。
 - 値の型が食い違っている → その項目だけ既定値に落とす。
 - レイヤーが 1 枚も無い → 下地を 1 枚だけ置く（空のスタックは操作の起点が無い）。
-
-## 版8: 道路ノード
-
-`kind: "road"` は `road: { "width": 6.0, "uvRepeat": 1.0 }` を持つ（m）。入力はPath、出力はRoadSurface / Left / Rightの順。`kind: "meshOutput"` はMesh入力1つを持つ。
-
-生成済み道路メッシュは保存せず、グラフから再構築する。既存の手入力 `scene` は独立して保持する。版7以前も読み込めるが、版8は旧アプリでの誤読を防ぐためバージョン判定で拒否される。
-
-## 版9: RoadのMaterial入力
-
-RoadのinputsはPath、Materialの順。outputsの順序はRoadSurface、Left、Rightを維持する。材質接続は既存のlinksで保存し、生成メッシュと合成テクスチャは再構築する。版8以前のRoadには、他のIDと衝突しない新しいMaterialピンを読込時に追加し、既存の接続を保つ。

@@ -1,7 +1,7 @@
 # node-graph — ノードグラフの設計
 
 作成日時: 2026-09-02 12:50
-更新日時: 2026-09-07 08:30
+更新日時: 2026-09-07 08:50
 
 `src/graph/` とグラフパネル（`src/app/ApplicationGraphPanel.cpp`）の設計。
 ノード編集と移行前の評価経路、Road / Mesh Output による道路メッシュの評価を記録する。
@@ -274,7 +274,8 @@ Roadは約1 m四方のセルを三角形2枚で構成する。カーブ・端の
   進行方向と対向の境が `centerLateral`（中央線の位置）、同方向の車線の間が `dividers`（破線の位置）。対向 0 なら中央線は無い。
 - Lane Marking の中央線は `centerLateral` に引く（道路の中心とは限らない）。車線境界線は `dividers` に破線（長さ・間隔、間隔 0 で実線）で引く。
   破線は `SampleRoadSurface` で距離ごとに帯を作り、行をまたぐ区間は行ごとに刻む。矢印は各車線の中央に、車線の向きで置く。
-- Road Mask の轍（`laneOffsetMeters`）はまだ手入力。車線数から自動で置くのは今後。
+- Road Mask の轍は `tracksFromLanes` で各車線の中央に置く（`bothLanes` が偽なら進行方向の車線だけ）。`BakeRoadMask` に `RoadLanes` を渡す。
+  路肩には車線が無いので nullptr を渡し、手入力の `laneOffsetMeters` に落ちる。旧ファイルはキーが無いので手入力のまま。
 
 ## Lane Marking（白線）
 

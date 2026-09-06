@@ -675,7 +675,7 @@ void AttachMaterial(const NodeGraph& graph, const Node& node, renderer::SceneMes
 
 // Road のスロット 1〜4 と道路マスク。スロット 2〜4 は材質とマスクの両方が繋がったときだけ有効。
 void AttachRoadLayers(const NodeGraph& graph, const Node& node, const RoadNodeSettings& settings,
-                      float lengthMeters, renderer::SceneMesh& mesh) {
+                      float lengthMeters, renderer::SceneMesh& mesh, const RoadLanes* lanes) {
     std::vector<const Pin*> materialPins;
     std::vector<const Pin*> maskPins;
     for (const auto& pin : node.inputs) {
@@ -711,7 +711,7 @@ void AttachRoadLayers(const NodeGraph& graph, const Node& node, const RoadNodeSe
         anyLayer = true;
     }
     if (anyLayer) {
-        const RoadMaskImage image = BakeRoadMask(channels, settings.widthMeters, lengthMeters);
+        const RoadMaskImage image = BakeRoadMask(channels, settings.widthMeters, lengthMeters, lanes);
         mesh.roadMask.width = image.width;
         mesh.roadMask.height = image.height;
         mesh.roadMask.rgba = image.rgba;
@@ -775,8 +775,10 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             mesh.material.roughness = 0.85f;
             mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
             mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
+            // 轍などのマスクは車線の並びを見る。
+            const RoadLanes lanes = ComputeRoadLanes(chain.road.settings, graph.RoadNetwork().leftHandTraffic);
             AttachRoadLayers(graph, *node, chain.road.settings,
-                             chain.road.rowDistances.empty() ? 0.0f : chain.road.rowDistances.back(), mesh);
+                             chain.road.rowDistances.empty() ? 0.0f : chain.road.rowDistances.back(), mesh, &lanes);
             chain.roadIndex = AppendChainMesh(chain, std::move(mesh), node->id);
             success = true;
         }
@@ -849,9 +851,9 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             mesh.material.roughness = 0.9f;
             mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
             mesh.displacementMeters = chain.road.settings.displacementMeters;
-            // 材質スロットとマスクは Road と同じ。横位置は境界が Right、外側が Left。
+            // 材質スロットとマスクは Road と同じ。横位置は境界が Right、外側が Left。車線は無い。
             AttachRoadLayers(graph, *node, chain.road.settings,
-                             chain.road.rowDistances.empty() ? 0.0f : chain.road.rowDistances.back(), mesh);
+                             chain.road.rowDistances.empty() ? 0.0f : chain.road.rowDistances.back(), mesh, nullptr);
             chain.roadIndex = AppendChainMesh(chain, std::move(mesh), node->id);
             success = true;
         }

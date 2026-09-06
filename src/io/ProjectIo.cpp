@@ -1244,6 +1244,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                 {"trackWidth", roadMaskSettings->trackWidthMeters},
                                 {"feather", roadMaskSettings->featherMeters},
                                 {"bothLanes", roadMaskSettings->bothLanes},
+                                {"tracksFromLanes", roadMaskSettings->tracksFromLanes},
                                 {"edgeWidth", roadMaskSettings->edgeWidthMeters},
                                 {"edgeSide", EnumName(kRoadMaskSideNames, static_cast<uint32_t>(roadMaskSettings->edgeSide))},
                                 {"noiseScale", roadMaskSettings->noiseScaleMeters},
@@ -1475,6 +1476,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.trackWidthMeters = ReadFloat(*mask, "trackWidth", settings.trackWidthMeters);
                     settings.featherMeters = ReadFloat(*mask, "feather", settings.featherMeters);
                     settings.bothLanes = ReadBool(*mask, "bothLanes", settings.bothLanes);
+                    // キーが無い旧ファイルは手入力のまま（既定の真にすると見た目が変わる）。
+                    settings.tracksFromLanes = ReadBool(*mask, "tracksFromLanes", false);
                     settings.edgeWidthMeters = ReadFloat(*mask, "edgeWidth", settings.edgeWidthMeters);
                     static const char* const kRoadMaskSideNames[] = {"both", "left", "right"};
                     settings.edgeSide = static_cast<graph::RoadMaskSide>(

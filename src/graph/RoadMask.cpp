@@ -1,4 +1,5 @@
 #include "graph/RoadMask.h"
+#include "graph/Road.h"
 
 #include <algorithm>
 #include <cmath>
@@ -56,17 +57,25 @@ float Band(float x, float center, float width, float feather) {
 }  // namespace
 
 float EvaluateRoadMask(const RoadMaskNodeSettings& settings, float lateralMeters, float distanceMeters,
-                       float halfWidthMeters, float lengthMeters) {
+                       float halfWidthMeters, float lengthMeters, const RoadLanes* lanes) {
     (void)lengthMeters;
     float value = 0.0f;
     switch (settings.shape) {
         case RoadMaskShape::WheelTracks: {
-            // 車線中央から左右へ trackSpacing / 2 の 2 本。両車線なら中心線の左右に置く。
-            const float lanes[2] = {settings.laneOffsetMeters, -settings.laneOffsetMeters};
-            const int laneCount = settings.bothLanes ? 2 : 1;
-            for (int lane = 0; lane < laneCount; ++lane) {
+            // 車線中央から左右へ trackSpacing / 2 の 2 本。
+            // 車線に合わせるときは Road の各車線（対向を含めるかは bothLanes）、手入力なら中心線 ± laneOffset。
+            std::vector<float> centers;
+            if (settings.tracksFromLanes && lanes != nullptr && !lanes->laneCenters.empty()) {
+                for (size_t i = 0; i < lanes->laneCenters.size(); ++i) {
+                    if (settings.bothLanes || lanes->laneForward[i]) centers.push_back(lanes->laneCenters[i]);
+                }
+            } else {
+                centers.push_back(settings.laneOffsetMeters);
+                if (settings.bothLanes) centers.push_back(-settings.laneOffsetMeters);
+            }
+            for (const float laneCenter : centers) {
                 for (int side = -1; side <= 1; side += 2) {
-                    const float center = lanes[lane] + static_cast<float>(side) * settings.trackSpacingMeters * 0.5f;
+                    const float center = laneCenter + static_cast<float>(side) * settings.trackSpacingMeters * 0.5f;
                     value = std::max(value, Band(lateralMeters, center, settings.trackWidthMeters, settings.featherMeters));
                 }
             }
@@ -106,7 +115,7 @@ float EvaluateRoadMask(const RoadMaskNodeSettings& settings, float lateralMeters
 }
 
 RoadMaskImage BakeRoadMask(const RoadMaskNodeSettings* const channels[3], float widthMeters,
-                           float lengthMeters) {
+                           float lengthMeters, const RoadLanes* lanes) {
     RoadMaskImage image;
     if (!(widthMeters > 0.0f) || !(lengthMeters > 0.0f) || !std::isfinite(widthMeters) || !std::isfinite(lengthMeters))
         return image;
@@ -122,7 +131,7 @@ RoadMaskImage BakeRoadMask(const RoadMaskNodeSettings* const channels[3], float 
             uint8_t* texel = &image.rgba[(size_t(y) * image.width + x) * 4];
             for (int channel = 0; channel < 3; ++channel) {
                 const float value = channels[channel]
-                    ? EvaluateRoadMask(*channels[channel], lateral, distance, halfWidth, lengthMeters) : 0.0f;
+                    ? EvaluateRoadMask(*channels[channel], lateral, distance, halfWidth, lengthMeters, lanes) : 0.0f;
                 texel[channel] = static_cast<uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
             }
             texel[3] = 255;

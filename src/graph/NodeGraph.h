@@ -255,6 +255,10 @@ struct RoadMaskNodeSettings {
     float trackSpacingMeters = 1.5f;
     float trackWidthMeters = 0.35f;
     float featherMeters = 0.25f;
+    // 真なら Road の車線数から各車線の中央に置く（laneOffsetMeters は使わない）。
+    // 旧ファイルにキーが無ければ偽（手入力のまま）。路肩など車線の無い面では手入力に落ちる。
+    bool tracksFromLanes = true;
+    // 対向車線にも置くか（車線に合わせるとき）。手入力のときは中心線の左右両方に置くか。
     bool bothLanes = true;
     // 端の減衰。端で 1 になる幅と、その内側のぼかし幅。側を選ぶと片側の端だけになる。
     float edgeWidthMeters = 0.3f;

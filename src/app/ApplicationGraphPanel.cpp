@@ -1260,15 +1260,20 @@ void Application::DrawGraphPanel() {
             }
             switch (roadMask->shape) {
                 case graph::RoadMaskShape::WheelTracks:
-                    changed |= ui::PropertyFloat("車線中央", &roadMask->laneOffsetMeters, 0.0f, 10.0f, defaults.laneOffsetMeters,
-                                                 "中心線から車線中央までの距離", "%.2f m");
+                    changed |= ui::PropertyBool("車線に合わせる", &roadMask->tracksFromLanes, defaults.tracksFromLanes,
+                                                "Road の車線数から各車線の中央に置く。路肩など車線の無い面では手入力の値を使う");
+                    if (!roadMask->tracksFromLanes) {
+                        changed |= ui::PropertyFloat("車線中央", &roadMask->laneOffsetMeters, 0.0f, 10.0f, defaults.laneOffsetMeters,
+                                                     "中心線から車線中央までの距離", "%.2f m");
+                    }
                     changed |= ui::PropertyFloat("タイヤ間隔", &roadMask->trackSpacingMeters, 0.5f, 3.0f, defaults.trackSpacingMeters,
                                                  "左右のタイヤの間隔", "%.2f m");
                     changed |= ui::PropertyFloat("帯の幅", &roadMask->trackWidthMeters, 0.05f, 2.0f, defaults.trackWidthMeters,
                                                  "轍 1 本の幅", "%.2f m");
                     changed |= ui::PropertyFloat("ぼかし", &roadMask->featherMeters, 0.0f, 2.0f, defaults.featherMeters,
                                                  "帯の縁を 0 へ落とす幅", "%.2f m");
-                    changed |= ui::PropertyBool("両車線", &roadMask->bothLanes, defaults.bothLanes, "中心線の左右両方に置く");
+                    changed |= ui::PropertyBool("両車線", &roadMask->bothLanes, defaults.bothLanes,
+                                                "対向車線にも置く。手入力のときは中心線の左右両方に置く");
                     break;
                 case graph::RoadMaskShape::EdgeFalloff: {
                     static const char* const kSideLabels[] = {"両側", "左", "右"};

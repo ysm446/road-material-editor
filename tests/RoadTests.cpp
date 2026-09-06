@@ -488,6 +488,26 @@ void RunRoadTests() {
               std::abs(graph::EvaluateRoadMask(tracks, -1.5f - 0.75f, 10.0f, half, 100.0f) - 1.0f) < 1e-5f,
               "wheel tracks are 1 at lane centre +- half the track spacing");
         Check(graph::EvaluateRoadMask(tracks, 0.0f, 10.0f, half, 100.0f) == 0.0f, "wheel tracks are 0 on the centre line");
+        // 車線に合わせる: 幅 9 m、進行方向 2 ＋ 対向 1（右側通行）。車線中央は -3, 0, +3。
+        {
+            graph::RoadNodeSettings laneRoad;
+            laneRoad.widthMeters = 9.0f;
+            laneRoad.lanesForward = 2;
+            laneRoad.lanesBackward = 1;
+            const graph::RoadLanes lanes = graph::ComputeRoadLanes(laneRoad, false);
+            graph::RoadMaskNodeSettings laneTracks = tracks;
+            laneTracks.tracksFromLanes = true;
+            Check(std::abs(graph::EvaluateRoadMask(laneTracks, -3.0f + 0.75f, 10.0f, 4.5f, 100.0f, &lanes) - 1.0f) < 1e-5f &&
+                  std::abs(graph::EvaluateRoadMask(laneTracks, 0.75f, 10.0f, 4.5f, 100.0f, &lanes) - 1.0f) < 1e-5f &&
+                  std::abs(graph::EvaluateRoadMask(laneTracks, 3.0f - 0.75f, 10.0f, 4.5f, 100.0f, &lanes) - 1.0f) < 1e-5f,
+                  "lane-based wheel tracks sit in every lane");
+            laneTracks.bothLanes = false;
+            Check(graph::EvaluateRoadMask(laneTracks, 3.0f - 0.75f, 10.0f, 4.5f, 100.0f, &lanes) == 0.0f &&
+                  std::abs(graph::EvaluateRoadMask(laneTracks, -3.0f + 0.75f, 10.0f, 4.5f, 100.0f, &lanes) - 1.0f) < 1e-5f,
+                  "forward-only wheel tracks skip the opposing lane");
+            Check(std::abs(graph::EvaluateRoadMask(laneTracks, 1.5f + 0.75f, 10.0f, half, 100.0f, nullptr) - 1.0f) < 1e-5f,
+                  "without lane info the manual lane offset is used");
+        }
         graph::RoadMaskNodeSettings edge;
         edge.shape = graph::RoadMaskShape::EdgeFalloff;
         edge.breakupAmount = 0.0f;

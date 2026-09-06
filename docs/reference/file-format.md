@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 08:30
+更新日時: 2026-09-07 08:50
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -269,6 +269,7 @@ inputsはRoadSurface（Mesh）、Materialの順、outputsはRoadSurface（Mesh�
 - `road.displacement`（既定 0）— Material のハイトで路面を押し出す量（m）。`road.uvAlongU` / `roadMarking.uvAlongU`（既定 false）— 長さ方向を U にする。
 - `road.lanesForward`（既定 1、1〜8）/ `road.lanesBackward`（既定 1、0〜8）— 車線数。車線幅は全幅÷合計。対向 0 で一方通行。
 - `roadMarking.laneLines`（既定 true）、`dashLength`（5）、`dashGap`（5）— 同方向の車線の間の破線。間隔 0 で実線。
+- `roadMask.tracksFromLanes`（新規ノードは true、**キーが無い旧ファイルは false**）— 轍を Road の車線数から各車線の中央に置く。`bothLanes` は対向車線にも置くか。
 ### 版12 — Road の材質スロットと Road Mask
 
 Road の inputs は Path、Material、Material 2〜4、Mask 2〜4 の順（版11 以前のファイルは足りないピンへ新しい ID を振る）。

@@ -10,9 +10,12 @@
 // 設計は docs/design/road-material-layers.md。
 namespace tg::graph {
 
+struct RoadLanes;
+
 // 1 点の評価。halfWidth は道路幅の半分、length は道路の全長（m）。
+// lanes を渡すと轍を各車線の中央に置ける（tracksFromLanes のとき）。nullptr なら手入力の車線中央。
 float EvaluateRoadMask(const RoadMaskNodeSettings& settings, float lateralMeters, float distanceMeters,
-                       float halfWidthMeters, float lengthMeters);
+                       float halfWidthMeters, float lengthMeters, const RoadLanes* lanes = nullptr);
 
 // 道路 1 本ぶんのマスク画像（RGBA8）。R / G / B がスロット 2〜4、A は予約（255）。
 struct RoadMaskImage {
@@ -23,6 +26,6 @@ struct RoadMaskImage {
 };
 // channels[i] が nullptr のスロットは 0。列 0 が Right 端（u = 0）、行 0 が始点。
 RoadMaskImage BakeRoadMask(const RoadMaskNodeSettings* const channels[3], float widthMeters,
-                           float lengthMeters);
+                           float lengthMeters, const RoadLanes* lanes = nullptr);
 
 }  // namespace tg::graph

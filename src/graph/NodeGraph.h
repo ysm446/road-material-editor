@@ -212,6 +212,7 @@ enum class RoadMaskShape : uint32_t {
     EdgeFalloff = 1,  // 道路端からの距離で減衰
     LengthNoise = 2,  // 長さ方向のノイズをしきい値で切る
     Constant = 3,     // 一様
+    WorldNoise = 4,   // ワールド XZ の等方ノイズ（FBM）をしきい値で切る。路肩や地面と地続きの模様
 };
 
 // デカール。Path（Surface に道路を繋いだ面上のパス）に沿った幅 widthMeters の帯を、

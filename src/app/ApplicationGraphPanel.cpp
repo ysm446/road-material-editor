@@ -1338,7 +1338,7 @@ void Application::DrawGraphPanel() {
         bool changed = false;
         const graph::RoadMaskNodeSettings defaults;
         if (ui::BeginPropertyTable("roadMaskRows")) {
-            static const char* const kShapeLabels[] = {"轍", "端の減衰", "長さ方向ノイズ", "一様"};
+            static const char* const kShapeLabels[] = {"轍", "端の減衰", "長さ方向ノイズ", "一様", "ワールドノイズ"};
             int shape = static_cast<int>(roadMask->shape);
             if (ui::PropertyCombo("形", &shape, kShapeLabels, IM_ARRAYSIZE(kShapeLabels), 0,
                                   "轍: 車線中央 ± タイヤ間隔/2 の帯。端の減衰: 道路端で 1。長さ方向ノイズ: しきい値で切る")) {
@@ -1377,8 +1377,11 @@ void Application::DrawGraphPanel() {
                     break;
                 }
                 case graph::RoadMaskShape::LengthNoise:
+                case graph::RoadMaskShape::WorldNoise:
                     changed |= ui::PropertyFloat("ノイズの大きさ", &roadMask->noiseScaleMeters, 0.1f, 50.0f, defaults.noiseScaleMeters,
-                                                 "ノイズ 1 周期の実距離", "%.1f m", ImGuiSliderFlags_Logarithmic);
+                                                 roadMask->shape == graph::RoadMaskShape::WorldNoise
+                                                     ? "ノイズ 1 周期の実距離。ワールド XZ で評価するので方向性が無く、路肩や隣の道路と模様が続く"
+                                                     : "ノイズ 1 周期の実距離", "%.1f m", ImGuiSliderFlags_Logarithmic);
                     changed |= ui::PropertyFloat("しきい値", &roadMask->threshold, 0.0f, 1.0f, defaults.threshold,
                                                  "これより大きい所が 1", "%.2f");
                     changed |= ui::PropertyFloat("柔らかさ", &roadMask->softness, 0.01f, 1.0f, defaults.softness,

@@ -1254,7 +1254,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                                                shoulder->layerUvRepeatMeters[2], shoulder->layerUvRepeatMeters[3]})},
                                 {"layerBlendRange", shoulder->layerBlendRange}};
         } else if (const auto* roadMaskSettings = std::get_if<graph::RoadMaskNodeSettings>(&node.settings)) {
-            static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant"};
+            static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant", "worldNoise"};
             static const char* const kRoadMaskSideNames[] = {"both", "left", "right"};
             item["roadMask"] = {{"shape", EnumName(kRoadMaskShapeNames, static_cast<uint32_t>(roadMaskSettings->shape))},
                                 {"laneOffset", roadMaskSettings->laneOffsetMeters},
@@ -1515,7 +1515,7 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
             } else if (created.kind == graph::NodeKind::RoadMask) {
                 graph::RoadMaskNodeSettings settings;
                 if (const json* mask = FindMember(item, "roadMask"); mask && mask->is_object()) {
-                    static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant"};
+                    static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant", "worldNoise"};
                     settings.shape = static_cast<graph::RoadMaskShape>(
                         EnumValue(kRoadMaskShapeNames, *mask, "shape", static_cast<uint32_t>(settings.shape)));
                     settings.laneOffsetMeters = ReadFloat(*mask, "laneOffset", settings.laneOffsetMeters);

@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 10:40
+更新日時: 2026-09-07 11:00
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -271,6 +271,7 @@ inputsはRoadSurface（Mesh）、Materialの順、outputsはRoadSurface（Mesh�
 - `road.lanesForward`（既定 1、1〜8）/ `road.lanesBackward`（既定 1、0〜8）— 車線数。車線幅は全幅÷合計。対向 0 で一方通行。
 - `roadMarking.laneLines`（既定 true）、`dashLength`（5）、`dashGap`（5）— 同方向の車線の間の破線。間隔 0 で実線。
 - 材質の `brightness`（既定 1、0〜8）— ベースカラーに掛ける倍率。色相・彩度の後に掛け、結果を 0〜1 に収める。`.tgmat` も同じ。
+- `roadMask.shape` に `worldNoise` を追加 — ワールド XZ の等方ノイズ。`noiseScale` / `threshold` / `softness` / `seed` は長さ方向ノイズと共通。旧ビルドは既定の形に落ちる。
 - `roadMask.tracksFromLanes`（新規ノードは true、**キーが無い旧ファイルは false**）— 轍を Road の車線数から各車線の中央に置く。`bothLanes` は対向車線にも置くか。
 - `shoulder.stepHeight`（既定 0、0〜0.5）/ `shoulder.stepWidth`（既定 0.05、0.005〜1）— 舗装端の段差と面取り列の幅（m）。段差 0 で列は増えない。
 - 実寸 Path の `points[].stopLine`（0 なし / 1 進行方向 / 2 対向 / 3 両方、0 は書かない）— その点の位置の停止線。
@@ -279,7 +280,7 @@ inputsはRoadSurface（Mesh）、Materialの順、outputsはRoadSurface（Mesh�
 
 Road の inputs は Path、Material、Material 2〜4、Mask 2〜4 の順（版11 以前のファイルは足りないピンへ新しい ID を振る）。
 `road` に `layerWorldUv`（bool ×4）、`layerUvRepeat`（m ×4。[0] は未使用で `uvRepeat` を使う）、`layerBlendRange` を追加。
-`kind: "roadMask"` は `roadMask: { shape（wheelTracks / edgeFalloff / lengthNoise / constant）, laneOffset, trackSpacing, trackWidth,
+`kind: "roadMask"` は `roadMask: { shape（wheelTracks / edgeFalloff / lengthNoise / constant / worldNoise）, laneOffset, trackSpacing, trackWidth,
 feather, bothLanes, edgeWidth, noiseScale, threshold, softness, seed, breakupAmount, breakupScale, strength, invert }` を持つ。
 旧ビルドはスロット 2〜4 のリンクを捨てて下地だけを出すため版を上げた。
 

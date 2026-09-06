@@ -642,6 +642,38 @@ void RunRoadTests() {
         Check(hi - lo > 0.2f && lo >= 0.0f && hi <= 1.0f, "breakup varies along the length within 0..1");
         const graph::RoadMaskNodeSettings* channels[3] = {&edge, nullptr, &tracks};
         const auto image = graph::BakeRoadMask(channels, 6.0f, 20.0f);
+        // ワールドノイズ: ワールド座標で評価するので、同じ場所なら道路座標が違っても同じ値。
+        {
+            graph::RoadMaskNodeSettings world;
+            world.shape = graph::RoadMaskShape::WorldNoise;
+            world.breakupAmount = 0.0f;
+            world.noiseScaleMeters = 3.0f;
+            const float wa = graph::EvaluateRoadMask(world, 0.0f, 0.0f, 3.0f, 100.0f, nullptr, 12.5f, -4.0f, true);
+            const float wb = graph::EvaluateRoadMask(world, 2.0f, 50.0f, 3.0f, 100.0f, nullptr, 12.5f, -4.0f, true);
+            const float wc = graph::EvaluateRoadMask(world, 0.0f, 0.0f, 3.0f, 100.0f, nullptr, 40.0f, 17.0f, true);
+            Check(wa == wb && wa >= 0.0f && wa <= 1.0f, "world noise depends on world position, not road coordinates");
+            bool varies = wc != wa;
+            for (int i = 0; i < 16 && !varies; ++i)
+                varies = graph::EvaluateRoadMask(world, 0.0f, 0.0f, 3.0f, 100.0f, nullptr, 40.0f + i * 1.7f, 17.0f, true) != wa;
+            Check(varies, "world noise varies across space");
+            // 焼き込みでは行の左右端からワールド座標を補間する。geometry 無しでは道路座標で代用。
+            graph::PathSettings wp;
+            wp.worldSpace = true;
+            const auto w0 = graph::AddPathPoint(wp, 0, 0, 0);
+            graph::AddPathPoint(wp, 0, 20, w0);
+            graph::RoadGeometry wroad;
+            graph::RoadNodeSettings wsettings;
+            Check(graph::BuildRoad(wp, wsettings, wroad, error), "road for world-noise bake");
+            const graph::RoadMaskNodeSettings* wchannels[3] = {&world, nullptr, nullptr};
+            const auto baked = graph::BakeRoadMask(wchannels, 6.0f, 20.0f, nullptr, &wroad);
+            // 中央の列（横位置 0）、行 y の距離 = 20 * (y+0.5)/H → ワールド (0, distance)。
+            const uint32_t y = baked.height / 2;
+            const float distance = 20.0f * (static_cast<float>(y) + 0.5f) / static_cast<float>(baked.height);
+            const float expected = graph::EvaluateRoadMask(world, 0.0f, distance, 3.0f, 20.0f, nullptr, 0.0f, distance, true);
+            const uint8_t texel = baked.rgba[(size_t(y) * baked.width + baked.width / 2) * 4];
+            Check(baked.IsValid() && std::abs(static_cast<float>(texel) / 255.0f - expected) < 0.02f,
+                  "baked world noise matches the world position of the texel");
+        }
         Check(image.IsValid() && image.width == 256 && image.height == 320, "mask image is 256 wide and 16 px per metre");
         if (image.IsValid()) {
             const uint8_t* rightEdge = &image.rgba[0];

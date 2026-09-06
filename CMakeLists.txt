@@ -99,6 +99,8 @@ set(tg_sources
     src/app/UndoHistory.h
     src/core/Log.cpp
     src/core/Log.h
+    src/graph/Road.cpp
+    src/graph/Road.h
     src/graph/NodeGraph.cpp
     src/graph/NodeGraph.h
     src/graph/Path.cpp
@@ -269,6 +271,8 @@ enable_testing()
 
 add_executable(road_editor_tests
     tests/TestMain.cpp
+    tests/RoadTests.cpp
+    src/graph/Road.cpp
     tests/MeshSceneTests.cpp
     src/renderer/MeshData.cpp
     src/io/MeshSceneIo.cpp

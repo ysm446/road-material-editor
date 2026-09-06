@@ -185,6 +185,10 @@ public:
     // フレームの外で生成結果を渡す。検証・転送が失敗したら現在のシーンを保つ。
     bool SetMeshScene(rhi::Device& device, const MeshScene& scene);
     void ClearMeshScene(rhi::Device& device);
+    bool SetGeneratedMeshScene(rhi::Device& device, const MeshScene& scene);
+    bool RestoreAuthoredMeshScene(rhi::Device& device);
+    bool HasAuthoredMeshScene() const { return m_authoredSceneEnabled; }
+    const MeshScene& AuthoredScene() const { return m_authoredScene; }
     bool HasMeshScene() const { return m_meshSceneEnabled; }
     const MeshScene& Scene() const { return m_meshScene; }
 
@@ -288,6 +292,9 @@ private:
                           ID3D12GraphicsCommandList* commandList, bool referenceGrid);
 
     Mesh m_plane;
+    bool UploadMeshScene(rhi::Device& device, const MeshScene& scene);
+    MeshScene m_authoredScene;
+    bool m_authoredSceneEnabled = false;
     MeshScene m_meshScene;
     std::vector<Mesh> m_sceneMeshes;
     bool m_meshSceneEnabled = false;

@@ -129,6 +129,10 @@ private:
                            bool maskResolves = true);
     // グラフの変更をコンパイル結果（m_graphStack）へ反映する。フレームの頭で呼ぶ。
     void SyncGraphStack();
+    void SyncMeshGraph();
+    uint64_t m_meshGraphRevision = 0;
+    bool m_meshGraphActive = false;
+    std::string m_meshGraphError;
     // 選択中のノードを控える / 貼り付ける（Ctrl+C / Ctrl+V）。
     void CopySelectedGraphNodes();
     // 控えたノードを貼る。viewCenter は今のキャンバスの中央（キャンバス座標）で、

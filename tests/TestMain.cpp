@@ -6,6 +6,7 @@
 
 #include "TestSupport.h"
 
+void RunRoadTests();
 void RunMeshSceneTests();
 void RunFrameLimiterTests();
 void RunNodeGraphTests();
@@ -13,6 +14,7 @@ void RunUiInteractionTests();
 void RunUndoHistoryTests();
 
 int main() {
+    RunRoadTests();
     RunMeshSceneTests();
     RunUiInteractionTests();
     RunUndoHistoryTests();

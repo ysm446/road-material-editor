@@ -1431,21 +1431,23 @@ bool Application::DrawPathSettings(graph::Node& node) {
             }
             ui::PropertyEnd();
         }
-        // ここは**新しく置く点の初期値**。既にある点には効かない（点ごとの値か、鎖の上書きで決める）。
-        changed |= ui::PropertyFloat("幅（初期値）", &path.defaultWidthMeters, 0.5f, 2000.0f,
-                                     defaults.defaultWidthMeters,
-                                     "新しく置く点の幅（m）。既にある点には効かない。"
-                                     "マスクではこの幅の内側が 1 になる",
-                                     "%.1f m", ImGuiSliderFlags_Logarithmic);
-        changed |= ui::PropertyFloat("フェザー（初期値）", &path.defaultFeatherMeters, 0.0f,
-                                     2000.0f, defaults.defaultFeatherMeters,
-                                     "新しく置く点のフェザー（m）。既にある点には効かない。"
-                                     "幅の外側をこの距離で 0 へ落とす",
-                                     "%.1f m", ImGuiSliderFlags_Logarithmic);
-        changed |= ui::PropertyFloat("強さ（初期値）", &path.defaultIntensity, 0.0f, 1.0f,
-                                     defaults.defaultIntensity,
-                                     "新しく置く点のマスクの強さ。既にある点には効かない",
-                                     "%.2f");
+        if (!path.worldSpace) {
+            // ここは**新しく置く点の初期値**。既にある点には効かない（点ごとの値か、鎖の上書きで決める）。
+            changed |= ui::PropertyFloat("幅（初期値）", &path.defaultWidthMeters, 0.5f, 2000.0f,
+                                         defaults.defaultWidthMeters,
+                                         "新しく置く点の幅（m）。既にある点には効かない。"
+                                         "マスクではこの幅の内側が 1 になる",
+                                         "%.1f m", ImGuiSliderFlags_Logarithmic);
+            changed |= ui::PropertyFloat("フェザー（初期値）", &path.defaultFeatherMeters, 0.0f,
+                                         2000.0f, defaults.defaultFeatherMeters,
+                                         "新しく置く点のフェザー（m）。既にある点には効かない。"
+                                         "幅の外側をこの距離で 0 へ落とす",
+                                         "%.1f m", ImGuiSliderFlags_Logarithmic);
+            changed |= ui::PropertyFloat("強さ（初期値）", &path.defaultIntensity, 0.0f, 1.0f,
+                                         defaults.defaultIntensity,
+                                         "新しく置く点のマスクの強さ。既にある点には効かない",
+                                         "%.2f");
+        }
         ui::PropertyLabelEmpty("pathClear");
         ImGui::BeginDisabled(path.points.empty());
         if (ui::Button("全部消す", ui::kWideButtonWidth)) {
@@ -1502,17 +1504,17 @@ bool Application::DrawPathSettings(graph::Node& node) {
                 }
                 changed |= axes != 0;
             }
-            pointChanged |= ui::PropertyFloat("幅", &edit.widthMeters, 0.5f, 2000.0f,
-                                              path.defaultWidthMeters, "この点での幅（m）",
-                                              "%.1f m", ImGuiSliderFlags_Logarithmic);
-            pointChanged |= ui::PropertyFloat("フェザー", &edit.featherMeters, 0.0f, 2000.0f,
-                                              path.defaultFeatherMeters,
-                                              "この点でのフェザー（m）", "%.1f m",
-                                              ImGuiSliderFlags_Logarithmic);
-            pointChanged |= ui::PropertyFloat("強さ", &edit.intensity, 0.0f, 1.0f,
-                                              path.defaultIntensity, "この点でのマスクの強さ",
-                                              "%.2f");
             if (!path.worldSpace) {
+                pointChanged |= ui::PropertyFloat("幅", &edit.widthMeters, 0.5f, 2000.0f,
+                                                  path.defaultWidthMeters, "この点での幅（m）",
+                                                  "%.1f m", ImGuiSliderFlags_Logarithmic);
+                pointChanged |= ui::PropertyFloat("フェザー", &edit.featherMeters, 0.0f, 2000.0f,
+                                                  path.defaultFeatherMeters,
+                                                  "この点でのフェザー（m）", "%.1f m",
+                                                  ImGuiSliderFlags_Logarithmic);
+                pointChanged |= ui::PropertyFloat("強さ", &edit.intensity, 0.0f, 1.0f,
+                                                  path.defaultIntensity, "この点でのマスクの強さ",
+                                                  "%.2f");
                 pointChanged |= ui::PropertyFloat("高さのずれ", &edit.y, -200.0f, 200.0f, 0.0f,
                     "地形からの高さのずれ（m）", "%.1f m");
             }
@@ -1554,11 +1556,11 @@ bool Application::DrawPathSettings(graph::Node& node) {
             for (const graph::PathEdge* edge : edges) {
                 if (edge->curve != curve || std::abs(edge->rounding - rounding) > 1e-4f ||
                     std::abs(edge->clothoidRatio - clothoidRatio) > 1e-4f ||
-                    edge->route != route || std::abs(edge->maxGradePercent - maxGrade) > 1e-4f ||
+                    (!path.worldSpace && (edge->route != route || std::abs(edge->maxGradePercent - maxGrade) > 1e-4f ||
                     edge->overrideValues != overrideValues ||
                     std::abs(edge->widthMeters - edgeWidth) > 1e-4f ||
                     std::abs(edge->featherMeters - edgeFeather) > 1e-4f ||
-                    std::abs(edge->intensity - edgeIntensity) > 1e-4f) {
+                    std::abs(edge->intensity - edgeIntensity) > 1e-4f))) {
                     mixed = true;
                 }
             }
@@ -1593,32 +1595,34 @@ bool Application::DrawPathSettings(graph::Node& node) {
                     }
                     changed = true;
                 }
-                // 幅の上書き。入れると鎖の上では点の値を補間せず、ここの値で一定になる。
-                bool valuesChanged = ui::PropertyBool(
-                    "幅を鎖で決める", &overrideValues, false,
-                    "この鎖の上では点の幅 / フェザー / 強さを使わず、下の値で一定にする。"
-                    "点の値は残るので、切れば戻る。高さのずれは点ごとのまま");
-                if (overrideValues) {
-                    valuesChanged |= ui::PropertyFloat(
-                        "幅", &edgeWidth, 0.5f, 2000.0f, path.defaultWidthMeters,
-                        "この鎖の幅（m）。マスクではこの幅の内側が 1 になる", "%.1f m",
-                        ImGuiSliderFlags_Logarithmic);
-                    valuesChanged |= ui::PropertyFloat(
-                        "フェザー", &edgeFeather, 0.0f, 2000.0f, path.defaultFeatherMeters,
-                        "この鎖のフェザー（m）。幅の外側をこの距離で 0 へ落とす", "%.1f m",
-                        ImGuiSliderFlags_Logarithmic);
-                    valuesChanged |= ui::PropertyFloat("強さ", &edgeIntensity, 0.0f, 1.0f,
-                                                       path.defaultIntensity,
-                                                       "この鎖のマスクの強さ", "%.2f");
-                }
-                if (valuesChanged) {
-                    for (graph::PathEdge* edge : edges) {
-                        edge->overrideValues = overrideValues;
-                        edge->widthMeters = edgeWidth;
-                        edge->featherMeters = edgeFeather;
-                        edge->intensity = edgeIntensity;
+                if (!path.worldSpace) {
+                    // 幅の上書き。入れると鎖の上では点の値を補間せず、ここの値で一定になる。
+                    bool valuesChanged = ui::PropertyBool(
+                        "幅を鎖で決める", &overrideValues, false,
+                        "この鎖の上では点の幅 / フェザー / 強さを使わず、下の値で一定にする。"
+                        "点の値は残るので、切れば戻る。高さのずれは点ごとのまま");
+                    if (overrideValues) {
+                        valuesChanged |= ui::PropertyFloat(
+                            "幅", &edgeWidth, 0.5f, 2000.0f, path.defaultWidthMeters,
+                            "この鎖の幅（m）。マスクではこの幅の内側が 1 になる", "%.1f m",
+                            ImGuiSliderFlags_Logarithmic);
+                        valuesChanged |= ui::PropertyFloat(
+                            "フェザー", &edgeFeather, 0.0f, 2000.0f, path.defaultFeatherMeters,
+                            "この鎖のフェザー（m）。幅の外側をこの距離で 0 へ落とす", "%.1f m",
+                            ImGuiSliderFlags_Logarithmic);
+                        valuesChanged |= ui::PropertyFloat("強さ", &edgeIntensity, 0.0f, 1.0f,
+                                                           path.defaultIntensity,
+                                                           "この鎖のマスクの強さ", "%.2f");
                     }
-                    changed = true;
+                    if (valuesChanged) {
+                        for (graph::PathEdge* edge : edges) {
+                            edge->overrideValues = overrideValues;
+                            edge->widthMeters = edgeWidth;
+                            edge->featherMeters = edgeFeather;
+                            edge->intensity = edgeIntensity;
+                        }
+                        changed = true;
+                    }
                 }
                 if (!path.worldSpace) {
                 // 経路探索。鎖のエッジ全部に同じ設定を入れ、変えたらすぐ計算し直す。
@@ -1681,7 +1685,9 @@ bool Application::DrawPathSettings(graph::Node& node) {
                 ui::EndPropertyTable();
             }
             if (mixed) {
-                ui::HintText("鎖の中で曲線 / 幅 / 経路探索の設定が混在している。変えると全部に入る");
+                ui::HintText(path.worldSpace
+                    ? "鎖の中で曲線の設定が混在している。変えると全部に入る"
+                    : "鎖の中で曲線 / 幅 / 経路探索の設定が混在している。変えると全部に入る");
             }
         }
     }

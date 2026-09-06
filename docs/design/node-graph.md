@@ -1,7 +1,7 @@
 # node-graph — ノードグラフの設計
 
 作成日時: 2026-09-02 12:50
-更新日時: 2026-09-06 12:59
+更新日時: 2026-09-06 14:25
 
 `src/graph/` とグラフパネル（`src/app/ApplicationGraphPanel.cpp`）の設計。
 ノード編集と移行前の評価経路を記録する。道路メッシュの評価器は未実装。
@@ -218,3 +218,9 @@ Mask Path / Areaへ渡す際は評価対象のサイズに応じてUVへ変換�
 `.tgproj` の `graph` 節（版 4 から合成の唯一の持ち主）。詳細と旧 `layers[]`
 からの移行規則は [reference/file-format.md](../reference/file-format.md) の
 「ノードグラフ」「版 4」を参照。
+
+## Road / Mesh Output
+
+`Path → Road → Mesh Output` で道路を表示する。Roadは幅とUV反復長を持ち、RoadSurface（Mesh）、Left / Right（Path）を出す。左右は進行方向基準。境界もRoadの入力に接続できる。
+
+複数Mesh Outputは同時に表示する。未接続・不正な枝は空となり理由をプロパティ領域に表示する。生成処理はCPUデータを返し、グラフ改版時にフレーム外でGPUへ転送する。Mesh Output表示中は旧地形プレビューより優先する。

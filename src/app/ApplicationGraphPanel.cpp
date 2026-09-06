@@ -1,3 +1,4 @@
+#include "graph/Road.h"
 // ノードグラフパネル。imgui-node-editor によるエディタと、
 // 選択中ノードのプロパティ（レイヤーパネルと共有）を持つ。
 //
@@ -96,6 +97,8 @@ ImVec4 PinTypeColor(graph::ValueType valueType) {
         case graph::ValueType::Path:
             return ImVec4(0.55f, 0.80f, 0.95f, 1.0f);
         // マテリアルは緑。4 チャンネル一式（ハイトを含む）。
+        case graph::ValueType::Mesh:
+            return ImGui::GetStyleColorVec4(ImGuiCol_PlotLines);
         case graph::ValueType::Material:
         default:
             return ImVec4(0.70f, 0.93f, 0.78f, 1.0f);
@@ -229,6 +232,21 @@ void Application::SetPreviewGraphNode(graph::GraphId nodeId, graph::GraphId outp
             }
         }
     }
+}
+
+void Application::SyncMeshGraph() {
+    if (m_meshGraphRevision == m_graph.Revision()) return;
+    auto compiled = graph::CompileMeshGraph(m_graph);
+    const bool uploaded = compiled.active
+        ? m_renderer.SetGeneratedMeshScene(m_device, compiled.scene)
+        : (!m_meshGraphActive || m_renderer.RestoreAuthoredMeshScene(m_device));
+    m_meshGraphError = compiled.error;
+    if (!uploaded) m_meshGraphError = "道路メッシュをGPUへ転送できませんでした";
+    if (uploaded) {
+        m_meshGraphActive = compiled.active;
+        m_meshSelection = MeshSelectionState{};
+    }
+    m_meshGraphRevision = m_graph.Revision();
 }
 
 void Application::SyncGraphStack() {
@@ -825,6 +843,9 @@ void Application::DrawGraphEditor() {
             // ステータスバーに残す。追加が効いたかを画面で確かめられるようにする。
             TG_LOG_INFO("ノードを追加しました: %s", NodeDisplayName(*node));
         };
+        addNodeMenuItem(graph::NodeKind::Road, "Road — Pathから道路面と左右境界を生成");
+        addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
+        ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Heightmap, "Heightmap — 画像を地形として読み込む");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Surface, "Surface — 素材を高さで張り合わせる");
@@ -865,7 +886,7 @@ void Application::DrawGraphEditor() {
                         "Mask Blend — マスク 2 枚を合成する");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Path,
-                        "Path — 地形の上に線を引く（道路 / 川 / 氷河のガイド）");
+                        "Path — 実寸の3次元カーブを編集");
         addNodeMenuItem(graph::NodeKind::MaskPath,
                         "Mask Path — パスの足跡をマスクにする");
         addNodeMenuItem(graph::NodeKind::MaskArea,
@@ -961,7 +982,7 @@ void Application::DrawGraphPanel() {
     }
 
     if (m_renderer.HasMeshScene()) {
-        ui::HintText("メッシュシーンを表示中。Pathのカーブを編集できます。道路メッシュ生成は今後追加します。");
+        ui::HintText("メッシュシーンを表示中。Path → Road → Mesh Outputで道路を生成できます。");
         if (ui::BeginPropertyTable("meshSceneRows")) {
             ui::PropertyValue("メッシュ数", "%zu", m_renderer.Scene().meshes.size());
             ui::EndPropertyTable();
@@ -990,7 +1011,13 @@ void Application::DrawGraphPanel() {
 
     // **プレビュー対象は選択とは別。** どれが画面に出ているかをここに出し、
     // 出力へ戻す手段も置く（出力ピンのクリックで切り替わる、と気づけるように）。
-    {
+    if (m_meshGraphActive) {
+        if (ui::BeginPropertyTable("meshGraphPreviewRow")) {
+            ui::PropertyValue("プレビュー", "%s", "Mesh Output");
+            ui::EndPropertyTable();
+        }
+        ui::HintText("Mesh Outputへ接続した道路を表示中。Pathを選択するとカーブを編集できます。");
+    } else {
         const graph::Node* previewNode = m_graph.FindNode(m_previewGraphNode);
         const char* previewName =
             (previewNode != nullptr) ? NodeDisplayName(*previewNode) : "Output";
@@ -1017,10 +1044,25 @@ void Application::DrawGraphPanel() {
         ImGui::Spacing();
     }
 
+    if (!m_meshGraphError.empty()) ui::HintText("%s", m_meshGraphError.c_str());
     graph::Node* selected = m_graph.FindMutableNode(m_selectedGraphNode);
     if (selected == nullptr) {
         ui::HintText("ノードを選ぶと設定が出る。背景の右クリックで追加、"
                      "ピンをドラッグして接続、Ctrl+C / Ctrl+V でコピー");
+    } else if (auto* road = std::get_if<graph::RoadNodeSettings>(&selected->settings)) {
+        bool changed = false;
+        const graph::RoadNodeSettings defaults;
+        if (ui::BeginPropertyTable("roadRows")) {
+            changed |= ui::PropertyFloat("道路幅", &road->widthMeters, 0.1f, 50.0f,
+                defaults.widthMeters, "中心線から左右へ半分ずつ広げる全幅", "%.2f m");
+            changed |= ui::PropertyFloat("UV反復長", &road->uvRepeatMeters, 0.1f, 100.0f,
+                defaults.uvRepeatMeters, "UVが1増える実距離。道路の長さと幅の両方に適用する", "%.2f m");
+            ui::EndPropertyTable();
+        }
+        ui::HintText("RoadSurfaceをMesh Outputへ接続する。Left / Rightは進行方向から見た境界Path。");
+        if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
+    } else if (selected->kind == graph::NodeKind::MeshOutput) {
+        ui::HintText("RoadSurfaceを接続すると道路を表示する。複数のMesh Outputを同時に表示できる。");
     } else if (auto* settings = std::get_if<graph::LayerNodeSettings>(&selected->settings)) {
         bool changed = false;
         if (ui::BeginPropertyTable("graphNodeBasicRows")) {

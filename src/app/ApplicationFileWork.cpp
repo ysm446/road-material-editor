@@ -216,6 +216,9 @@ void Application::ResetProject() {
     m_previewGraphNode = 0;
     m_previewGraphPin = 0;
     m_compiledGraphRevision = 0;
+    m_meshGraphRevision = 0;
+    m_meshGraphActive = false;
+    m_meshGraphError.clear();
     m_graphStack.MarkDirty();
     RequestGraphNodePlacement();
 
@@ -294,6 +297,9 @@ void Application::ProcessPendingFileWork() {
             m_previewGraphNode = 0;
             m_previewGraphPin = 0;
             m_compiledGraphRevision = 0;
+            m_meshGraphRevision = 0;
+            m_meshGraphActive = false;
+            m_meshGraphError.clear();
             m_graphStack.MarkDirty();
             RequestGraphNodePlacement();
             m_selectedMaterial = 0;

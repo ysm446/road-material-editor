@@ -277,6 +277,23 @@ XMMATRIX PreviewRenderer::LightViewProjection() const {
 }
 
 bool PreviewRenderer::SetMeshScene(rhi::Device& device, const MeshScene& scene) {
+    if (!UploadMeshScene(device, scene)) return false;
+    m_authoredScene = scene;
+    m_authoredSceneEnabled = true;
+    return true;
+}
+
+bool PreviewRenderer::SetGeneratedMeshScene(rhi::Device& device, const MeshScene& scene) {
+    return UploadMeshScene(device, scene);
+}
+
+bool PreviewRenderer::RestoreAuthoredMeshScene(rhi::Device& device) {
+    if (m_authoredSceneEnabled) return UploadMeshScene(device, m_authoredScene);
+    ClearMeshScene(device);
+    return true;
+}
+
+bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scene) {
     if (!ValidateMeshScene(scene)) return false;
     std::vector<Mesh> uploaded(scene.meshes.size());
     for (size_t i = 0; i < uploaded.size(); ++i) {
@@ -285,7 +302,7 @@ bool PreviewRenderer::SetMeshScene(rhi::Device& device, const MeshScene& scene) 
             return false;
         }
     }
-    ClearMeshScene(device);
+    for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes = std::move(uploaded);
     m_meshScene = scene;
     m_meshSceneRadius = MeshSceneRadius(scene);
@@ -294,6 +311,8 @@ bool PreviewRenderer::SetMeshScene(rhi::Device& device, const MeshScene& scene) 
 }
 
 void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
+    m_authoredScene = {};
+    m_authoredSceneEnabled = false;
     for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes.clear();
     m_meshScene.meshes.clear();
@@ -353,6 +372,8 @@ void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
 }
 
 void PreviewRenderer::ResetSettings() {
+    m_authoredScene = {};
+    m_authoredSceneEnabled = false;
     m_meshSceneEnabled = false;
     const PreviewDefaults& defaults = kPreviewDefaults;
     m_tonemap = defaults.tonemap;

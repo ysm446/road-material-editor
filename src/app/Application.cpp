@@ -290,6 +290,7 @@ int Application::Run() {
         ProcessPendingFileWork();
         // 経路探索用の地形（Path ノードの Base）の焼き直しも GPU 待機を伴うため、フレームの外で。
         ProcessPendingPathRoutes();
+        SyncMeshGraph();
 
         // 開発用: 数フレーム描いてから合成結果を書き出して終了する。
         if (!m_options.exportDirectory.empty() && m_frameCounter >= m_options.screenshotFrame) {

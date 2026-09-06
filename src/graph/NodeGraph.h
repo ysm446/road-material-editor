@@ -38,9 +38,12 @@ enum class ValueType : uint32_t {
     Mask = 1,
     // パス（地形の上に引いた向き付きの線）。Path ノードが出し、Mask Path が読む。
     Path = 2,
+    Mesh = 3,
 };
 
 enum class NodeKind : uint32_t {
+    Road = 24,
+    MeshOutput = 25,
     Surface = 0,
     Shape = 1,
     Liquid = 2,
@@ -167,6 +170,11 @@ struct PathNodeSettings {
     PathSettings path;
 };
 
+struct RoadNodeSettings {
+    float widthMeters = 6.0f;
+    float uvRepeatMeters = 1.0f;
+};
+
 // グラフを評価器の入力へ落とした結果。レイヤー列と、マスクの op の列。
 struct CompiledGraph {
     std::vector<compositor::MaterialLayer> layers;
@@ -187,7 +195,7 @@ struct CompiledGraph {
 struct OutputNodeSettings {};
 
 using NodeSettings =
-    std::variant<LayerNodeSettings, MaskNodeSettings, OutputNodeSettings, PathNodeSettings>;
+    std::variant<LayerNodeSettings, MaskNodeSettings, OutputNodeSettings, PathNodeSettings, RoadNodeSettings>;
 
 struct Node {
     GraphId id = 0;

@@ -37,7 +37,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // プロジェクトの版。4 で `layers` 節を廃止し、グラフ (`graph`) を唯一の合成にした
 // （旧ファイルの layers はグラフへ移行して読む）。
 // 5: 任意のメッシュシーン。旧ビルドが scene を無視して地形を表示することを防ぐ。
-constexpr int kProjectFormatVersion = 7;
+constexpr int kProjectFormatVersion = 8;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -1134,6 +1134,8 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
             item["blend"] = WriteBlend(mask->blend);
             item["maskPath"] = WritePathMask(mask->pathMask);
             item["maskArea"] = WriteAreaMask(mask->areaMask);
+        } else if (const auto* road = std::get_if<graph::RoadNodeSettings>(&node.settings)) {
+            item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters}};
         } else if (const auto* path = std::get_if<graph::PathNodeSettings>(&node.settings)) {
             item["path"] = WritePath(path->path);
         }
@@ -1268,6 +1270,13 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                 settings.pathMask = ReadPathMask(item, "maskPath");
                 settings.areaMask = ReadAreaMask(item, "maskArea");
                 created.settings = std::move(settings);
+            } else if (created.kind == graph::NodeKind::Road) {
+                graph::RoadNodeSettings settings;
+                if (const json* road = FindMember(item, "road"); road && road->is_object()) {
+                    settings.widthMeters = ReadFloat(*road, "width", settings.widthMeters);
+                    settings.uvRepeatMeters = ReadFloat(*road, "uvRepeat", settings.uvRepeatMeters);
+                }
+                created.settings = settings;
             } else if (created.kind == graph::NodeKind::Path) {
                 graph::PathNodeSettings settings;
                 settings.path = ReadPath(item, "path");
@@ -1858,7 +1867,7 @@ bool SaveProject(const std::filesystem::path& path, rhi::Device& device,
     document["activeSky"] = activeSkyIndex;
 
     document["preview"] = WritePreview(refs.renderer);
-    if (refs.renderer.HasMeshScene()) document["scene"] = WriteMeshScene(refs.renderer.Scene());
+    if (refs.renderer.HasAuthoredMeshScene()) document["scene"] = WriteMeshScene(refs.renderer.AuthoredScene());
 
     if (!WriteJsonFile(savePath, document)) {
         return false;

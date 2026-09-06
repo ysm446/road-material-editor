@@ -138,7 +138,19 @@ constexpr std::array<PinDefinition, 1> kSourceNodePins = {{
     {PinKind::Output, ValueType::Material, "Result"},
 }};
 
-constexpr std::array<NodeDefinition, 24> kNodeDefinitions = {{
+constexpr std::array<PinDefinition, 4> kRoadPins = {{
+    {PinKind::Input, ValueType::Path, "Path"},
+    {PinKind::Output, ValueType::Mesh, "RoadSurface"},
+    {PinKind::Output, ValueType::Path, "Left"},
+    {PinKind::Output, ValueType::Path, "Right"},
+}};
+constexpr std::array<PinDefinition, 1> kMeshOutputPins = {{
+    {PinKind::Input, ValueType::Mesh, "Mesh"},
+}};
+
+constexpr std::array<NodeDefinition, 26> kNodeDefinitions = {{
+    {NodeKind::Road, "road", "Road", kRoadPins},
+    {NodeKind::MeshOutput, "meshOutput", "Mesh Output", kMeshOutputPins},
     {NodeKind::Heightmap, "heightmap", "Heightmap", kSourceNodePins},
     {NodeKind::Surface, "surface", "Surface", kLayerNodePins},
     {NodeKind::Shape, "shape", "Shape", kLayerNodePins},
@@ -417,6 +429,8 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = std::move(settings);
     } else if (IsMaskNodeKind(kind)) {
         node.settings = MaskNodeSettings{};
+    } else if (kind == NodeKind::Road) {
+        node.settings = RoadNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
         std::get<PathNodeSettings>(node.settings).path.worldSpace = true;

@@ -1091,13 +1091,18 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     // Surface に道路が繋がった / 外れたときに座標の意味を切り替える。
     // 繋いだときは今の世界座標を面の座標へ写す。外したときは数値をそのまま実寸として扱う。
     {
-        const graph::RoadGeometry* surfaceRoad = path.worldSpace ? SurfacePathRoad(node) : nullptr;
+        // 「面上か」はリンクで決める。道路の評価に一時的に失敗しても座標の意味は変えない
+        // （実寸へ戻して次のフレームで再変換すると点が壊れる）。
+        const bool bound = path.worldSpace && graph::FindSurfaceRoad(m_graph, node) != nullptr;
+        const graph::RoadGeometry* surfaceRoad = bound ? SurfacePathRoad(node) : nullptr;
         if (surfaceRoad != nullptr && !path.surfaceSpace) {
             for (graph::PathPoint& point : path.points) {
                 float distance = 0.0f;
                 float lateral = 0.0f;
                 if (graph::RoadSurfaceCoordinates(*surfaceRoad, {point.x, point.y, point.z}, distance, lateral)) {
-                    point.x = lateral;
+                    // 道路の外にあった点は路面の端へ寄せる。面の外は編集できないため。
+                    const float halfWidth = surfaceRoad->settings.widthMeters * 0.5f;
+                    point.x = std::clamp(lateral, -halfWidth, halfWidth);
                     point.z = distance;
                     point.y = 0.0f;
                 }
@@ -1106,7 +1111,7 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
             state.profileMode = PathEditState::kProfilePoints;
             m_graph.MarkDirty();
             MarkDocumentChanged();
-        } else if (surfaceRoad == nullptr && path.surfaceSpace) {
+        } else if (!bound && path.surfaceSpace) {
             path.surfaceSpace = false;
             m_graph.MarkDirty();
             MarkDocumentChanged();

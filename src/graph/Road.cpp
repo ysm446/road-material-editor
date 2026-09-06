@@ -230,6 +230,18 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
         }
         mesh = std::move(divided);
     }
+    // 行ごとの実距離。UV の向きを入れ替えても部品（白線・デカール）が同じ距離を使えるように持つ。
+    {
+        const size_t rowCount = mesh.vertices.size() / stride;
+        built.rowDistances.assign(rowCount, 0.0f);
+        for (size_t row = 1; row < rowCount; ++row) {
+            const XMVECTOR a = XMVectorScale(XMVectorAdd(Load(mesh.vertices[(row - 1) * stride].position),
+                                                         Load(mesh.vertices[(row - 1) * stride + columns].position)), 0.5f);
+            const XMVECTOR b = XMVectorScale(XMVectorAdd(Load(mesh.vertices[row * stride].position),
+                                                         Load(mesh.vertices[row * stride + columns].position)), 0.5f);
+            built.rowDistances[row] = built.rowDistances[row - 1] + Length(XMVectorSubtract(b, a));
+        }
+    }
     result = std::move(built);
     return true;
 }
@@ -241,7 +253,7 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
     const auto fail = [&](const char* message) { error = message; return false; };
     const auto& surface = road.surface;
     if (road.stride < 2 || surface.vertices.size() < road.stride * 2 ||
-        surface.vertices.size() % road.stride != 0)
+        surface.vertices.size() % road.stride != 0 || road.rowDistances.size() != surface.vertices.size() / road.stride)
         return fail("道路面が生成されていません");
     const float width = road.settings.widthMeters;
     const float line = settings.lineWidthMeters;
@@ -280,7 +292,7 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
             // 左右端の差は幅にマイター倍率を掛けた横ベクトル。角でも道路端と平行な帯になる。
             const XMVECTOR across = XMVectorSubtract(Load(right.position), Load(left.position));
             const XMVECTOR center = XMVectorScale(XMVectorAdd(Load(left.position), Load(right.position)), 0.5f);
-            const float distance = left.uv.y * road.settings.uvRepeatMeters;
+            const float distance = road.rowDistances[row];
             for (int side = 0; side < 2; ++side) {
                 const float lateral = offset + (side == 0 ? -line : line) * 0.5f;
                 const float t = lateral / width;
@@ -321,8 +333,7 @@ struct SurfaceSample {
 SurfaceSample SampleRoadSurface(const RoadGeometry& road, float distance, float lateral) {
     const auto& v = road.surface.vertices;
     const size_t rows = v.size() / road.stride;
-    const float metersPerUv = road.settings.uvRepeatMeters;
-    const auto rowDistance = [&](size_t row) { return v[row * road.stride].uv.y * metersPerUv; };
+    const auto rowDistance = [&](size_t row) { return road.rowDistances[row]; };
     size_t upper = 1;
     while (upper + 1 < rows && rowDistance(upper) < distance) ++upper;
     const size_t lower = upper - 1;
@@ -345,9 +356,7 @@ SurfaceSample SampleRoadSurface(const RoadGeometry& road, float distance, float 
 // 進行方向の矢印。左右の車線の中央に一定間隔で置く。走行側の車線は線形の向き、対向車線は逆向き。
 void BuildArrowMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
                         bool leftHandTraffic, renderer::MeshData& result) {
-    const auto& v = road.surface.vertices;
-    const size_t rows = v.size() / road.stride;
-    const float total = v[(rows - 1) * road.stride].uv.y * road.settings.uvRepeatMeters;
+    const float total = road.rowDistances.empty() ? 0.0f : road.rowDistances.back();
     const float width = road.settings.widthMeters;
     const float length = settings.arrowLengthMeters;
     if (total < length + 1.0f) return;
@@ -508,13 +517,8 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             mesh.material.roughness = 0.85f;
             mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
             mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
-            {
-                const auto& v = chain.road.surface.vertices;
-                const float length = v.empty() ? 0.0f : v.back().uv.y * chain.road.settings.uvRepeatMeters;
-                AttachRoadLayers(graph, *node, chain.road.settings,
-                                 chain.road.settings.uvAlongU ? (v.empty() ? 0.0f : v.back().uv.x * chain.road.settings.uvRepeatMeters) : length,
-                                 mesh);
-            }
+            AttachRoadLayers(graph, *node, chain.road.settings,
+                             chain.road.rowDistances.empty() ? 0.0f : chain.road.rowDistances.back(), mesh);
             chain.roadIndex = static_cast<int>(chain.meshes.size());
             chain.meshes.push_back(std::move(mesh));
             success = true;
@@ -585,7 +589,6 @@ bool RoadSurfaceCoordinates(const RoadGeometry& road, const XMFLOAT3& world, flo
     const auto& v = road.surface.vertices;
     if (road.stride < 2 || v.size() < road.stride * 2) return false;
     const size_t rows = v.size() / road.stride;
-    const float metersPerUv = road.settings.uvRepeatMeters;
     const XMVECTOR p = Load(world);
     float bestError = 1e30f;
     for (size_t row = 0; row + 1 < rows; ++row) {
@@ -610,8 +613,8 @@ bool RoadSurfaceCoordinates(const RoadGeometry& road, const XMFLOAT3& world, flo
         const float error = XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(p, nearest)));
         if (error < bestError) {
             bestError = error;
-            const float d0 = v[row * road.stride].uv.y * metersPerUv;
-            const float d1 = v[(row + 1) * road.stride].uv.y * metersPerUv;
+            const float d0 = road.rowDistances[row];
+            const float d1 = road.rowDistances[row + 1];
             outDistanceMeters = d0 + (d1 - d0) * t;
             outLateralMeters = s * road.settings.widthMeters;
         }

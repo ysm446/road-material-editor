@@ -14,6 +14,8 @@ struct RoadGeometry {
     // surface は行×列の格子。1行の頂点数（列数+1）と生成時の設定。白線などの部品が行を参照する。
     uint32_t stride = 0;
     RoadNodeSettings settings;
+    // 行ごとの始点からの実距離（m）。UV の向きに依存しない。
+    std::vector<float> rowDistances;
 };
 bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
                RoadGeometry& result, std::string& error);

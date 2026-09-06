@@ -1,0 +1,309 @@
+// プレビュー設定パネルと「ライティング」パネル。
+// どちらも合成結果ではなく、見え方（レンダラ側の設定）を扱う。
+
+#include "app/Application.h"
+
+#include "app/ApplicationUiHelpers.h"
+#include "core/FileDialog.h"
+#include "core/Log.h"
+#include "io/ProjectIo.h"
+#include "ui/UiStyle.h"
+
+#include <imgui.h>
+#include <imgui_internal.h>
+
+#include <DirectXMath.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+namespace tg {
+
+void Application::DrawMaterialPanel() {
+    // **ここでは前面を要求しない。** レイヤーと同じ枠のタブなので、
+    // 両方が要求すると後から描いたほうが勝ち、既定の前面が定まらない。
+    if (ImGui::Begin("プレビュー設定")) {
+        if (m_renderer.HasMeshScene()) ui::HintText("メッシュの実寸形状と個別の材質を表示しています。");
+        if (!m_renderer.HasMeshScene() && ui::BeginPropertyTable("previewRows")) {
+            const renderer::PreviewDefaults& defaults = renderer::kPreviewDefaults;
+            ui::PropertyBool("合成結果", &m_renderer.UseMaterialTextures(),
+                             defaults.useMaterialTextures,
+                             "オフにすると、レイヤー合成を使わず単色マテリアルで表示する");
+            // マスクを見ているときだけ効く。行は常に出す（表示の好みなので）。
+            ui::PropertyBool("マスクの飽和に斜線", &m_renderer.MaskSaturationHatch(),
+                             defaults.maskSaturationHatch,
+                             "マスクのプレビューで、0 か 1 に張り付いた所へ斜線を引く。"
+                             "濃淡が付いている所と、上限に当たって潰れた所を見分けられる");
+
+            // 平面の大きさ（m）。**ジオメトリだけがメートル**で、
+            // テクスチャは無次元のまま（1 UV が何 m かは決めない）。
+            //
+            // **グラフに Heightmap ノードがあるときは、その実寸に従う。**
+            // 地形の大きさは見え方の設定ではなく読み込んだデータの性質なので、
+            // 決める場所はノード側の 1 か所だけにする。
+            const bool scaleFromGraph = (m_graph.FindChainScale(m_previewGraphNode) != nullptr);
+            if (!scaleFromGraph) {
+                ui::PropertyFloat("平面のサイズ", &m_renderer.PlaneSize(), 0.5f, 8192.0f,
+                                  defaults.planeSize,
+                                  "平面の一辺の長さ（m）。素材は 2m 前後、"
+                                  "地形なら 1000m 以上。カメラと影の範囲もこれに追従する",
+                                  "%.1f m", ImGuiSliderFlags_Logarithmic);
+            }
+
+            if (m_renderer.UseMaterialTextures()) {
+                // 上限は「平面の辺の半分」。素材（2m 角）なら 1m、
+                // 地形（2km 角）なら 1000m まで指定できる。
+                // ハイト 0〜1 の全幅がこの高さに対応するので、
+                // 「この地形の標高差は何 m か」をそのまま入れる。
+                if (scaleFromGraph) {
+                    // ノードが実寸を持っているときは表示だけにする。
+                    // 同じ値を 2 か所から編集できると、どちらが効くのか分からなくなる。
+                    ui::PropertyValue("平面のサイズ", "%.1f m", m_renderer.PlaneSize());
+                    ui::PropertyValue("変位量", "%.1f m", m_renderer.DisplacementScale());
+                } else {
+                    const float displacementMax =
+                        std::max(1.0f, m_renderer.PlaneSize() * 0.5f);
+                    ui::PropertyFloat(
+                        "変位量", &m_renderer.DisplacementScale(), 0.0f, displacementMax,
+                        defaults.displacementScale,
+                        "ハイトを形状に反映する量（ディスプレイスメント）。"
+                        "ハイト 0〜1 の全幅がこの高さ（m）になる。0 なら形は変わらない",
+                        "%.2f m", 0, 0.01f);
+                }
+
+                ui::PropertyBool("テセレーション", &m_renderer.TessellationEnabled(),
+                                 defaults.tessellationEnabled,
+                                 "画面上の辺が長いところだけメッシュを細かく割る。"
+                                 "変位量を上げたときに形がなめらかになる");
+                if (m_renderer.TessellationEnabled()) {
+                    ui::PropertyFloat("分割の上限", &m_renderer.TessellationFactor(), 1.0f, 16.0f,
+                                      defaults.tessellationFactor,
+                                      "1 辺をこの回数まで割る。上げるほど重くなる",
+                                      "%.0f", 0, 1.0f);
+                }
+
+                // 形の細かさの上限。地形の一辺 ÷ 分割数 が 1 マスの大きさになる。
+                // テセレーションは「画面上で辺が伸びたときだけ」割るので、
+                // 引きの絵ではこの分割数がそのまま形の限界になる。
+                int subdivisions = 0;
+                for (int i = 0; i < IM_ARRAYSIZE(kMeshSubdivisionValues); ++i) {
+                    if (kMeshSubdivisionValues[i] == m_renderer.MeshSubdivisions()) {
+                        subdivisions = i;
+                    }
+                }
+                char meshHint[128] = {};
+                std::snprintf(meshHint, sizeof(meshHint),
+                              "平面を何分割するか。いまは 1 マス %.1f m。"
+                              "上げるほど細かい形が出るが重くなる",
+                              m_renderer.PlaneSize() /
+                                  static_cast<float>(m_renderer.MeshSubdivisions()));
+                if (ui::PropertyCombo("メッシュ分割", &subdivisions, kMeshSubdivisionLabels,
+                                      IM_ARRAYSIZE(kMeshSubdivisionLabels), 0, meshHint)) {
+                    m_renderer.RequestMeshSubdivisions(kMeshSubdivisionValues[subdivisions]);
+                }
+
+                int resolution = ResolutionIndex(m_renderer.MaterialResolution());
+                if (ui::PropertyCombo("合成解像度", &resolution, kResolutionLabels,
+                                      IM_ARRAYSIZE(kResolutionLabels),
+                                      ResolutionIndex(defaults.materialResolution),
+                                      "編集中のプレビュー解像度。上げるほど細部が出るが重くなる")) {
+                    m_renderer.RequestMaterialResolution(kResolutionValues[resolution]);
+                }
+            } else {
+                renderer::MaterialSettings& material = m_renderer.Material();
+                ui::PropertyColorLinear("ベースカラー", &material.baseColor.x,
+                                        &kDefaultMaterial.baseColor.x);
+                ui::PropertyFloat("ラフネス", &material.roughness, 0.0f, 1.0f,
+                                  kDefaultMaterial.roughness, nullptr, "%.2f");
+                ui::PropertyFloat("メタルネス", &material.metallic, 0.0f, 1.0f,
+                                  kDefaultMaterial.metallic, nullptr, "%.2f");
+            }
+            ui::EndPropertyTable();
+        }
+
+        ui::SectionHeader("カメラ");
+        if (ui::BeginPropertyTable("cameraRows")) {
+            // 露出を絞り / シャッター / ISO で決めているので、レンズも同じ言葉で扱う。
+            // ラジアンのままだと何 mm 相当なのか分からない。
+            renderer::Camera& camera = m_renderer.GetCamera();
+            float focalLength = renderer::FocalLengthFromFovY(camera.FovY());
+            if (ui::PropertyFloat("焦点距離", &focalLength, 12.0f, 200.0f,
+                                  renderer::FocalLengthFromFovY(kDefaultCamera.fovY),
+                                  "35mm フルサイズ換算。小さいほど広角で、遠近が強く出る",
+                                  "%.0f mm", ImGuiSliderFlags_Logarithmic, 1.0f)) {
+                camera.SetFovY(renderer::FovYFromFocalLength(focalLength));
+            }
+            // **F 値はレンズの値なのでここに置く。** 露出（絞り）とボケの
+            // どちらも同じ 1 つの値で決まる。EV を直接指定していると露出の節から
+            // 絞りの行が消えるので、レンズ側に置いておかないと触れなくなる。
+            ui::PropertyFloat("F 値", &m_renderer.Exposure().aperture, 1.0f, 32.0f,
+                              renderer::ExposureSettings{}.aperture,
+                              "絞り。小さいほどボケが強く、露出は明るくなる", "F%.1f",
+                              ImGuiSliderFlags_Logarithmic);
+            ui::PropertyValue("画角", "%.1f 度（垂直）", RadiansToDegrees(camera.FovY()));
+            ui::PropertyLabelEmpty("cameraReset");
+            if (ui::Button("視点をリセット", ui::kWideButtonWidth)) {
+                m_renderer.GetCamera().Reset();
+            }
+            ui::PropertyEnd();
+            ui::EndPropertyTable();
+        }
+
+        // **レンズの値はここに出さない。** 焦点距離も F 値もカメラの節が持っていて、
+        // すぐ上に見えている。同じ値を並べると、どちらが効いているのか分からなくなる。
+        ui::SectionHeader("被写界深度");
+        renderer::DofSettings& dof = m_renderer.Dof();
+        const renderer::DofSettings kDefaultDof;
+        if (ui::BeginPropertyTable("dofRows")) {
+            ui::PropertyBool("有効", &dof.enabled, kDefaultDof.enabled,
+                             "ビューポートの見え方だけに掛かる。合成結果と書き出しには効かない");
+
+            ImGui::BeginDisabled(!dof.enabled);
+
+            ui::PropertyBool("注視点に追従", &dof.focusOnTarget, kDefaultDof.focusOnTarget,
+                             "軌道カメラなので、見ているものは常に注視点にある。"
+                             "切ると距離を手で決められる");
+            ImGui::BeginDisabled(dof.focusOnTarget);
+            ui::PropertyFloat("ピント距離", &dof.focusDistance, 0.1f, 50.0f,
+                              kDefaultDof.focusDistance,
+                              "カメラからピント面まで。ワールドの 1 単位を 1m とみなす",
+                              "%.2f m", ImGuiSliderFlags_Logarithmic);
+            ImGui::EndDisabled();
+            ui::PropertyValue("実効ピント距離", "%.2f m", m_renderer.FocusDistance());
+
+            ui::PropertyFloat("ミニチュア", &dof.miniatureScale, 1.0f, 10000.0f,
+                              kDefaultDof.miniatureScale,
+                              "1 で実物大。上げるほど模型を撮った計算になり、"
+                              "同じレンズでもボケが強くなる。実寸のままだと地形は"
+                              "遠すぎて 1 画素もボケない。2km の地形を引きで見るなら "
+                              "3000〜10000 が目安",
+                              "1 : %.0f", ImGuiSliderFlags_Logarithmic);
+            ui::PropertyFloat("ボケの強さ", &dof.blurScale, 0.25f, 16.0f, kDefaultDof.blurScale,
+                              "1 で現実どおり。2m 角の地面を広角で撮れば現実でも"
+                              "全域にピントが合うので、見せたい量まで持ち上げるための誇張。"
+                              "倍率を使わずに出したいなら望遠へ寄せる",
+                              "x%.2f", ImGuiSliderFlags_Logarithmic);
+            ui::PropertyFloat("最大ぼけ", &dof.maxBlurPixels, 1.0f, 64.0f,
+                              kDefaultDof.maxBlurPixels,
+                              "画面上のぼけ半径の上限。現実の式のままだと極端になるので、"
+                              "表示のための頭打ちとして持つ。上げるほど重くなる",
+                              "%.0f px");
+
+            static const char* const kShapeLabels[] = {"円", "三角形", "六角形", "八角形"};
+            int shape = static_cast<int>(dof.shape);
+            if (ui::PropertyCombo("絞りの形", &shape, kShapeLabels, IM_ARRAYSIZE(kShapeLabels),
+                                  static_cast<int>(kDefaultDof.shape), "ボケの形になる")) {
+                dof.shape = static_cast<renderer::ApertureShape>(shape);
+            }
+            ImGui::BeginDisabled(dof.shape == renderer::ApertureShape::Circle);
+            ui::PropertyFloat("絞りの向き", &dof.rotationDegrees, 0.0f, 180.0f,
+                              kDefaultDof.rotationDegrees, "多角形のボケの角度", "%.0f 度");
+            ImGui::EndDisabled();
+            ImGui::EndDisabled();
+            ui::EndPropertyTable();
+        }
+        ui::HintText("ボケ量は焦点距離・F 値・ピント距離で決まる。ワールドの 1 単位 = 1m");
+    }
+    ImGui::End();
+}
+
+void Application::DrawLightingPanel() {
+    if (ImGui::Begin("ライティング")) {
+        renderer::LightSettings& light = m_renderer.Light();
+
+        ui::SectionHeader("ライト");
+        if (ui::BeginPropertyTable("lightRows")) {
+            float azimuthDeg = RadiansToDegrees(light.azimuth);
+            if (ui::PropertyFloat("方位角", &azimuthDeg, -180.0f, 180.0f,
+                                  RadiansToDegrees(kDefaultLight.azimuth),
+                                  "太陽の向き（水平方向）", "%.0f 度")) {
+                light.azimuth = DegreesToRadians(azimuthDeg);
+            }
+            float elevationDeg = RadiansToDegrees(light.elevation);
+            if (ui::PropertyFloat("仰角", &elevationDeg, -89.0f, 89.0f,
+                                  RadiansToDegrees(kDefaultLight.elevation),
+                                  "太陽の高さ。低いほど影が伸びる", "%.0f 度")) {
+                light.elevation = DegreesToRadians(elevationDeg);
+            }
+            ui::PropertyFloat("照度", &light.illuminance, 0.0f, 200000.0f,
+                              kDefaultLight.illuminance,
+                              "lux。晴天の直射日光がおよそ 100000 lux", "%.0f");
+            ui::PropertyColorLinear("光の色", &light.color.x, &kDefaultLight.color.x);
+            ui::PropertyBool("影", &m_renderer.ShadowEnabled(),
+                             renderer::kPreviewDefaults.shadowEnabled,
+                             "ディレクショナルライトの影を落とす。"
+                             "ディスプレイスメントで押し出した形にも落ちる");
+            ui::EndPropertyTable();
+        }
+
+        ui::SectionHeader("露出");
+        renderer::ExposureSettings& exposure = m_renderer.Exposure();
+        if (ui::BeginPropertyTable("exposureRows")) {
+            ui::PropertyBool("EV を直接指定", &exposure.useManualEv, kDefaultExposure.useManualEv,
+                             "オフにすると絞り / シャッター / ISO から EV100 を求める");
+            if (exposure.useManualEv) {
+                ui::PropertyFloat("EV100", &exposure.manualEv100, -6.0f, 20.0f,
+                                  kDefaultExposure.manualEv100, nullptr, "%.2f");
+            } else {
+                // **編集はカメラの節の「F 値」1 か所だけ。** ここは EV の内訳を
+                // 読むための表示に留める（絞りはレンズの値で、ボケにも効くため）。
+                ui::PropertyValue("絞り", "F%.1f（カメラ）", exposure.aperture);
+
+                float shutterDenominator = 1.0f / exposure.shutterSpeed;
+                if (ui::PropertyFloat("シャッター", &shutterDenominator, 1.0f, 4000.0f,
+                                      1.0f / kDefaultExposure.shutterSpeed,
+                                      "秒の逆数。大きいほど暗くなる", "1/%.0f 秒",
+                                      ImGuiSliderFlags_Logarithmic)) {
+                    exposure.shutterSpeed = 1.0f / shutterDenominator;
+                }
+                ui::PropertyFloat("ISO", &exposure.iso, 50.0f, 6400.0f, kDefaultExposure.iso,
+                                  "感度。大きいほど明るくなる", "%.0f",
+                                  ImGuiSliderFlags_Logarithmic);
+            }
+            ui::PropertyValue("EV100", "%.2f  (exposure %.3e)", exposure.Ev100(),
+                              exposure.Exposure());
+            ui::EndPropertyTable();
+        }
+
+        // **環境そのもの（何を空にするか）は天球パネルが持つ。**
+        // ここに残すのは、天球ではなく見え方に属する設定だけ。
+        ui::SectionHeader("環境 (IBL)");
+        if (ui::BeginPropertyTable("iblRows")) {
+            const renderer::SkyAsset* activeSky = m_skyLibrary.Active();
+            ui::PropertyValue("天球", "%s", (activeSky != nullptr) ? activeSky->name.c_str() : "-");
+            ui::PropertyValue("環境", "%s", m_renderer.GetEnvironment().SourceName().c_str());
+            ui::PropertyValue("equirect", "%u x %u", m_renderer.GetEnvironment().EquirectWidth(),
+                              m_renderer.GetEnvironment().EquirectHeight());
+            ui::PropertyBool("背景を表示", &m_renderer.ShowSkybox(),
+                             renderer::kPreviewDefaults.showSkybox,
+                             "オフにすると背景色だけになる。IBL の寄与は残る");
+            ImGui::BeginDisabled(!m_renderer.ShowSkybox());
+            ui::PropertyBool("背景をぼかす", &m_renderer.SkyboxBlur(),
+                             renderer::kPreviewDefaults.skyboxBlur,
+                             "背景だけを柔らかくする。素材を見比べるときに、"
+                             "背景の細部が目移りの原因にならないようにする。"
+                             "IBL の寄与と陰影は変わらない");
+            ImGui::EndDisabled();
+            ui::EndPropertyTable();
+        }
+        ui::HintText("空の切り替えと輝度は「天球」パネルで設定する");
+
+        ui::SectionHeader("トーンマップ");
+        if (ui::BeginPropertyTable("tonemapRows")) {
+            static const char* const kTonemapLabels[] = {"なし", "Reinhard", "ACES"};
+            int tonemap = static_cast<int>(m_renderer.Tonemap());
+            if (ui::PropertyCombo("方式", &tonemap, kTonemapLabels, IM_ARRAYSIZE(kTonemapLabels),
+                                  static_cast<int>(renderer::kPreviewDefaults.tonemap))) {
+                m_renderer.Tonemap() = static_cast<renderer::TonemapMode>(tonemap);
+            }
+            ui::EndPropertyTable();
+        }
+    }
+    ImGui::End();
+}
+
+}  // namespace tg

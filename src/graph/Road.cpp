@@ -46,13 +46,154 @@ bool Evaluate(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result,
             success = BuildRoad(source->label == "Left" ? parent.left : parent.right,
                                 *settings, result, error);
         }
+    } else if (upstream && upstream->kind == NodeKind::Shoulder) {
+        // 路肩の Outer（外側の境界）から道路を作る。路肩の格子は left に Outer を持つ。
+        RoadGeometry parent;
+        if (EvaluateShoulder(graph, upstream->id, parent, error)) {
+            success = BuildRoad(parent.left, *settings, result, error);
+        }
     } else {
         error = "実寸Pathを接続してください";
     }
     visiting.erase(nodeId);
     return success;
 }
+
+// 路肩の Path 入力の上流を、境界を持つ格子（Road / Shoulder）として評価する。
+// edgeColumn は境界の列、innerColumn は外向きを決める隣の列。
+bool EvaluateBoundarySource(const NodeGraph& graph, const Node& shoulderNode, RoadGeometry& source,
+                            uint32_t& edgeColumn, uint32_t& innerColumn, std::string& error, int depth) {
+    if (depth >= 64) { error = "路肩の依存が深すぎます"; return false; }
+    if (shoulderNode.inputs.empty()) { error = "路肩の Path が無い"; return false; }
+    const Pin* pin = nullptr;
+    for (const auto& link : graph.Links()) {
+        if (link.endPin == shoulderNode.inputs.front().id) pin = graph.FindPin(link.startPin);
+    }
+    const Node* upstream = pin ? graph.FindNode(pin->nodeId) : nullptr;
+    if (!upstream) { error = "Road の Left / Right か Shoulder の Outer を接続してください"; return false; }
+    bool built = false;
+    if (upstream->kind == NodeKind::Road) {
+        built = EvaluateRoad(graph, upstream->id, source, error);
+        if (built && pin->label != "Left" && pin->label != "Right") { error = "路肩には Road の Left / Right を繋いでください"; return false; }
+        // Road の格子は列 0 が Right、列末尾が Left。
+        edgeColumn = (pin->label == "Left") ? source.stride - 1 : 0;
+        innerColumn = (pin->label == "Left") ? source.stride - 2 : 1;
+    } else if (upstream->kind == NodeKind::Shoulder) {
+        RoadGeometry parentSource;
+        uint32_t parentEdge = 0, parentInner = 0;
+        const auto* parentSettings = std::get_if<ShoulderNodeSettings>(&upstream->settings);
+        built = parentSettings &&
+                EvaluateBoundarySource(graph, *upstream, parentSource, parentEdge, parentInner, error, depth + 1) &&
+                BuildShoulder(parentSource, parentEdge, parentInner, *parentSettings, source, error);
+        // 路肩の格子は列末尾が Outer。
+        edgeColumn = source.stride - 1;
+        innerColumn = source.stride - 2;
+    } else {
+        error = "路肩には Road の Left / Right か Shoulder の Outer を繋いでください";
+    }
+    return built;
+}
 }  // namespace
+
+bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t innerColumn,
+                   const ShoulderNodeSettings& settings, RoadGeometry& result, std::string& error) {
+    result = {};
+    error.clear();
+    const auto fail = [&](const char* message) { error = message; return false; };
+    if (!std::isfinite(settings.widthMeters) || settings.widthMeters < 0.1f || settings.widthMeters > 50.0f ||
+        !std::isfinite(settings.crossSlopePercent) || std::abs(settings.crossSlopePercent) > 50.0f ||
+        !std::isfinite(settings.uvRepeatMeters) || settings.uvRepeatMeters < 0.1f || settings.uvRepeatMeters > 100.0f)
+        return fail("幅は0.1〜50 m、横断勾配は±50%、UV反復長は0.1〜100 mにしてください");
+    const auto& sv = source.surface.vertices;
+    if (source.stride < 2 || sv.size() < source.stride * 2) return fail("境界の元になる面が生成されていません");
+    if (edgeColumn >= source.stride || innerColumn >= source.stride || edgeColumn == innerColumn) return fail("境界の列が不正です");
+    const size_t rows = sv.size() / source.stride;
+    if (source.rowDistances.size() != rows) return fail("境界の実距離が揃っていません");
+    const uint32_t columns = static_cast<uint32_t>(std::ceil(settings.widthMeters));
+    const uint32_t stride = columns + 1;
+    if (rows * stride > 65536) return fail("路肩の分割数が多すぎます");
+    RoadGeometry built;
+    built.stride = stride;
+    // 下流（Decal など）が読む設定。幅・反復長・UV の向きは路肩のもの、押し出しは 0。
+    built.settings.widthMeters = settings.widthMeters;
+    built.settings.uvRepeatMeters = settings.uvRepeatMeters;
+    built.settings.uvAlongU = settings.uvAlongU;
+    built.settings.displacementMeters = 0.0f;
+    built.rowDistances = source.rowDistances;
+    built.left.worldSpace = built.right.worldSpace = true;
+    const float drop = settings.crossSlopePercent * 0.01f;
+    for (size_t row = 0; row < rows; ++row) {
+        const XMFLOAT3& edge = sv[row * source.stride + edgeColumn].position;
+        const XMFLOAT3& inner = sv[row * source.stride + innerColumn].position;
+        // 外向きは境界から隣の列を引いた水平成分。境界の頂点はそのまま列 0 に写す（水密）。
+        XMVECTOR outward = XMVectorSet(edge.x - inner.x, 0.0f, edge.z - inner.z, 0.0f);
+        if (Length(outward) < 1e-5f) return fail("境界の幅が 0 の行があります");
+        outward = XMVector3Normalize(outward);
+        for (uint32_t column = 0; column <= columns; ++column) {
+            const float lateral = settings.widthMeters * static_cast<float>(column) / static_cast<float>(columns);
+            renderer::MeshVertex vertex{};
+            if (column == 0) {
+                vertex.position = edge;
+            } else {
+                XMStoreFloat3(&vertex.position, XMVectorAdd(Load(edge), XMVectorScale(outward, lateral)));
+                vertex.position.y -= drop * lateral;
+            }
+            vertex.uv = {lateral / settings.uvRepeatMeters, source.rowDistances[row] / settings.uvRepeatMeters};
+            if (settings.uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
+            vertex.roadUv = vertex.uv;
+            built.surface.vertices.push_back(vertex);
+            if (column == 0) AddBoundaryPoint(built.right, vertex.position);
+            if (column == columns) AddBoundaryPoint(built.left, vertex.position);
+        }
+        if (row > 0) {
+            for (uint32_t column = 0; column < columns; ++column) {
+                const uint32_t a = static_cast<uint32_t>(row - 1) * stride + column;
+                // 列の向きは左右どちらの境界かで変わるので、三角形ごとに法線が上を向くよう並べる。
+                const uint32_t tris[2][3] = {{a, a + stride, a + 1}, {a + 1, a + stride, a + stride + 1}};
+                for (const auto& tri : tris) {
+                    uint32_t x = tri[0], y = tri[1], z = tri[2];
+                    const auto& v = built.surface.vertices;
+                    const XMVECTOR n = XMVector3Cross(XMVectorSubtract(Load(v[y].position), Load(v[x].position)),
+                                                     XMVectorSubtract(Load(v[z].position), Load(v[x].position)));
+                    if (XMVectorGetY(n) < 0.0f) std::swap(y, z);
+                    built.surface.indices.insert(built.surface.indices.end(), {x, y, z});
+                }
+            }
+        }
+    }
+    auto& mesh = built.surface;
+    for (size_t i = 0; i < mesh.indices.size(); i += 3) {
+        auto& a = mesh.vertices[mesh.indices[i]];
+        auto& b = mesh.vertices[mesh.indices[i + 1]];
+        auto& c = mesh.vertices[mesh.indices[i + 2]];
+        const XMVECTOR n = XMVector3Cross(XMVectorSubtract(Load(b.position), Load(a.position)),
+                                         XMVectorSubtract(Load(c.position), Load(a.position)));
+        if (XMVectorGetY(n) <= 1e-7f) return fail("幅に対してカーブが急すぎて路肩が反転します");
+        for (auto* vertex : {&a, &b, &c}) XMStoreFloat3(&vertex->normal, XMVectorAdd(Load(vertex->normal), n));
+    }
+    for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+        auto& vertex = mesh.vertices[i];
+        const XMVECTOR n = XMVector3Normalize(Load(vertex.normal));
+        const XMVECTOR across = XMVectorSubtract(Load(mesh.vertices[(i / stride) * stride + columns].position),
+                                                 Load(mesh.vertices[(i / stride) * stride].position));
+        const XMVECTOR t = XMVector3Normalize(XMVectorSubtract(across, XMVectorScale(n, XMVectorGetX(XMVector3Dot(n, across)))));
+        XMStoreFloat3(&vertex.normal, n);
+        XMStoreFloat4(&vertex.tangent, t);
+        vertex.tangent.w = -1.0f;
+    }
+    result = std::move(built);
+    return true;
+}
+
+bool EvaluateShoulder(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result, std::string& error) {
+    const Node* node = graph.FindNode(nodeId);
+    const auto* settings = node ? std::get_if<ShoulderNodeSettings>(&node->settings) : nullptr;
+    if (!settings) { error = "Shoulder ノードではありません"; return false; }
+    RoadGeometry source;
+    uint32_t edgeColumn = 0, innerColumn = 0;
+    return EvaluateBoundarySource(graph, *node, source, edgeColumn, innerColumn, error, 0) &&
+           BuildShoulder(source, edgeColumn, innerColumn, *settings, result, error);
+}
 
 bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
                RoadGeometry& result, std::string& error) {
@@ -499,15 +640,42 @@ void AttachRoadLayers(const NodeGraph& graph, const Node& node, const RoadNodeSe
 // Mesh Outputから上流へたどり、Roadを起点に白線などの部品を順に積む。
 struct MeshChain {
     std::vector<renderer::SceneMesh> meshes;
+    // meshes と同じ並びで、そのメッシュを作ったノード。Merge や複数の Mesh Output で
+    // 同じノードのメッシュを 2 回積まないための鍵。
+    std::vector<GraphId> sources;
     RoadGeometry road;
     // 道路面が chain.meshes の何番目か。白線の押し出し元にする。
     int roadIndex = -1;
 };
+int AppendChainMesh(MeshChain& chain, renderer::SceneMesh mesh, GraphId source) {
+    chain.meshes.push_back(std::move(mesh));
+    chain.sources.push_back(source);
+    return static_cast<int>(chain.meshes.size()) - 1;
+}
 // 複数の理由を「 / 」で繋いで残す。
 void AppendError(std::string& errors, const std::string& error) {
     if (error.empty()) return;
     if (!errors.empty()) errors += " / ";
     errors += error;
+}
+// from の各メッシュを into へ写す。同じノード由来のメッシュは into にあるものを使い、
+// displacementSource は写した先の番号へ付け替える。戻り値は from の番号 → into の番号。
+std::vector<int> MergeChainMeshes(MeshChain& into, MeshChain& from) {
+    std::vector<int> remap(from.meshes.size(), -1);
+    for (size_t i = 0; i < from.meshes.size(); ++i) {
+        const GraphId source = from.sources[i];
+        int existing = -1;
+        for (size_t j = 0; j < into.sources.size(); ++j) {
+            if (into.sources[j] == source) { existing = static_cast<int>(j); break; }
+        }
+        if (existing >= 0) { remap[i] = existing; continue; }
+        renderer::SceneMesh mesh = std::move(from.meshes[i]);
+        if (mesh.displacementSource >= 0) {
+            mesh.displacementSource = remap[static_cast<size_t>(mesh.displacementSource)];
+        }
+        remap[i] = AppendChainMesh(into, std::move(mesh), source);
+    }
+    return remap;
 }
 // 戻り値は「道路面（chain.road）が出来たか」。白線・Decal などの部品が失敗しても
 // 上流までの部品は残し、理由だけ errors に足す（途中の 1 つの失敗で道路ごと消さない）。
@@ -528,10 +696,26 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
             AttachRoadLayers(graph, *node, chain.road.settings,
                              chain.road.rowDistances.empty() ? 0.0f : chain.road.rowDistances.back(), mesh);
-            chain.roadIndex = static_cast<int>(chain.meshes.size());
-            chain.meshes.push_back(std::move(mesh));
+            chain.roadIndex = AppendChainMesh(chain, std::move(mesh), node->id);
             success = true;
         }
+    } else if (node->kind == NodeKind::Merge) {
+        // 繋いだ枝を順に積む。同じノード由来のメッシュは 1 回だけ。下流の部品は最初の枝の面に乗る。
+        bool first = true;
+        for (const Pin& pin : node->inputs) {
+            const Node* upstream = graph.FindUpstreamNodeForPin(pin.id);
+            if (!upstream) continue;
+            MeshChain branch;
+            if (!EvaluateMeshChain(graph, upstream, branch, errors, visiting)) continue;
+            const std::vector<int> remap = MergeChainMeshes(chain, branch);
+            if (first) {
+                chain.road = std::move(branch.road);
+                chain.roadIndex = branch.roadIndex >= 0 ? remap[static_cast<size_t>(branch.roadIndex)] : -1;
+                first = false;
+            }
+            success = true;
+        }
+        if (!success) error = "Mesh 1 に RoadSurface を接続してください";
     } else if (const auto* marking = std::get_if<RoadMarkingNodeSettings>(&node->settings)) {
         const Node* upstream = node->inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node->inputs.front().id);
         if (!upstream) {
@@ -549,7 +733,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.displacementSource = chain.roadIndex;
                 mesh.useBlendMode = true;
                 AttachMaterial(graph, *node, mesh);
-                chain.meshes.push_back(std::move(mesh));
+                AppendChainMesh(chain, std::move(mesh), node->id);
             }
         }
     } else if (const auto* decal = std::get_if<DecalNodeSettings>(&node->settings)) {
@@ -572,11 +756,23 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.displacementSource = chain.roadIndex;
                 mesh.useBlendMode = true;
                 AttachMaterial(graph, *node, mesh);
-                chain.meshes.push_back(std::move(mesh));
+                AppendChainMesh(chain, std::move(mesh), node->id);
             }
         }
+    } else if (node->kind == NodeKind::Shoulder) {
+        // 路肩は Road とは別の枝。以後の白線・Decal は路肩の面に乗る。
+        if (EvaluateShoulder(graph, node->id, chain.road, error)) {
+            renderer::SceneMesh mesh;
+            mesh.geometry = chain.road.surface;
+            mesh.material.baseColor = {0.42f, 0.38f, 0.32f};
+            mesh.material.roughness = 0.9f;
+            mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
+            AttachMaterial(graph, *node, mesh);
+            chain.roadIndex = AppendChainMesh(chain, std::move(mesh), node->id);
+            success = true;
+        }
     } else {
-        error = "Mesh OutputにはRoad / Lane Marking / DecalのRoadSurfaceを接続してください";
+        error = "Mesh OutputにはRoad / Lane Marking / Decal / Shoulder / MergeのRoadSurfaceを接続してください";
     }
     if (!error.empty()) { const NodeDefinition* def = FindNodeDefinition(node->kind); AppendError(errors, std::string(def ? def->title : "?") + ": " + error); }
     visiting.erase(node->id);
@@ -767,6 +963,8 @@ bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const
 
 CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph, GraphId previewNodeId) {
     CompiledMeshGraph compiled;
+    // 複数の Mesh Output が同じノードのメッシュを出しても 1 回だけ積む。
+    MeshChain all;
     const auto appendChain = [&](const Node* source) {
         MeshChain chain;
         std::unordered_set<GraphId> visiting;
@@ -775,24 +973,21 @@ CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph, GraphId previewNodeId
         const bool hasRoad = EvaluateMeshChain(graph, source, chain, errors, visiting);
         AppendError(compiled.error, errors);
         if (!hasRoad) return;
-        const int base = static_cast<int>(compiled.scene.meshes.size());
-        for (auto& mesh : chain.meshes) {
-            if (mesh.displacementSource >= 0) mesh.displacementSource += base;
-            compiled.scene.meshes.push_back(std::move(mesh));
-        }
+        MergeChainMeshes(all, chain);
     };
     // 途中のノードを見る指定があれば、そのノードまでの鎖だけを出す（Mesh Output は使わない）。
     if (const Node* preview = graph.FindNode(previewNodeId);
         preview != nullptr && IsMeshNodeKind(preview->kind)) {
         compiled.active = true;
         appendChain(preview);
-        return compiled;
+    } else {
+        for (const auto& node : graph.Nodes()) {
+            if (node.kind != NodeKind::MeshOutput) continue;
+            compiled.active = true;
+            appendChain(node.inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node.inputs.front().id));
+        }
     }
-    for (const auto& node : graph.Nodes()) {
-        if (node.kind != NodeKind::MeshOutput) continue;
-        compiled.active = true;
-        appendChain(node.inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node.inputs.front().id));
-    }
+    compiled.scene.meshes = std::move(all.meshes);
     return compiled;
 }
 }  // namespace tg::graph

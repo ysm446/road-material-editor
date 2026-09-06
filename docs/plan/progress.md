@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-07 06:30
+更新日時: 2026-09-07 07:20
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -14,18 +14,33 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 
 ## 次にやること
 
-- **路肩ノード（次に着手）**。境界の頂点共有、断面、端の層。設計は docs/design/road-material-layers.md「路肩との接続」。その後に白線の破線・停止線、Decal の道路マスクへのスタンプ。
+- **路肩ノードの第二段（次に着手）**。端の層（道路側の材質を境界からの距離で減衰、道路と同じハイトを読む）、段差の面取り列、ワールド XZ 座標の材質。設計は docs/design/road-material-layers.md「路肩との接続」。その後に白線の破線・停止線、Decal の道路マスクへのスタンプ。
 - ひび割れデカール（後回し。割れ目の素材を先に探す必要がある）。枝分かれした面上の Path に帯を置く。幹と枝を分け、枝は点ごとの幅とアルファで先細り・先薄れ。分岐点のつなぎ、割れ目の材質。詳細は plan.md の R4「ひび割れデカール」。
 - R2 の残り。遠く離れた区間同士の自己交差検査。縦断・バンクの手動操作（Ctrl＋クリック、ドラッグ、リング）の実機確認。
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
 
+### 2026-09-07 07:20 — Merge ノード
+
+- `NodeKind::Merge`。入力は可変長で、`NodeGraph::NormalizeVariablePins` が「繋がった入力＋空き 1 本」に整える（リンク作成・削除、ノード削除、`Replace` の後）。読込は定義の 1 本に加えてファイルにある分だけ入力を足す。保存形式は版15。
+- 鎖の評価に `MeshChain::sources`（メッシュを作ったノード ID）を足し、`MergeChainMeshes` で同じノード由来のメッシュを 1 回だけ積む。`CompileMeshGraph` も全 Mesh Output を通してこの重複除去を使う。
+- 確認画像 `data/ui_merge.png`（`data/sample_road_merge.tgproj`。道路＋白線＋デカールの枝と左右の Shoulder を Merge に集め、Mesh Output は 1 つ）。
+- 同じ Road が 2 枝に入ったときの重複除去は済んだので、前の項の注意は解消。
+
+### 2026-09-07 06:50 — Shoulder ノード（路肩の第一段）
+
+- `ShoulderNodeSettings`（幅、横断勾配 %、UV 反復長、UV の向き）と `BuildShoulder` / `EvaluateShoulder`（`graph/Road.cpp`）。境界の列をそのまま列 0 に写し、隣の列から外向きを決めて押し出す。列末尾が Outer。
+- Path 入力の上流は Road の Left / Right か Shoulder の Outer（`EvaluateBoundarySource`）。Road の Path 入力も Shoulder の Outer を受ける。
+- 鎖の評価では Shoulder は Road とは別の枝（chain.road が路肩の格子になる）。道路と一緒に出すには Merge に集める。保存形式は版14。
+- 確認画像 `data/ui_shoulder.png`（`data/sample_road_shoulder.tgproj`、左右 1.5 m、4%）。境界は水密。
+- 残り（第二段）: 端の層（道路側の材質を境界からの距離で減衰）、段差の面取り列、ワールド XZ 座標の材質、道路の押し出し量との段差の扱い（道路が変位 0.05 m で路肩が 0 だと境界に段ができる。端の層で同じハイトを読ませて解く）。
+
 ### 2026-09-07 06:10 — 道路メッシュの部分描画と途中経過の表示
 
 - `EvaluateMeshChain` の戻り値を「道路面が出来たか」にし、白線・Decal の失敗は理由だけ残して上流までを積む。Decal の Path を空にしても道路が消えない。
 - `CompileMeshGraph(graph, previewNodeId)` で Road / Lane Marking / Decal までの鎖だけを出せるようにし、出力ピンのクリックをメッシュノードにも広げた（`IsMeshNodeKind`）。2D 合成のプレビュー対象からはメッシュノードを除く。
-- Merge ノード（複数の枝を 1 つの Mesh Output へ）は未実装。同じ Road が 2 つの枝に入ると道路面が 2 回積まれるため、実装時は Road 単位の重複除去が要る。
+- Merge ノードは 07:20 に実装（上の項）。
 
 ### 2026-09-07 05:24 — 面上のパスの修正
 

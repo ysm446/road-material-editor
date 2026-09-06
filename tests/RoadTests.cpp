@@ -582,4 +582,131 @@ void RunRoadTests() {
               emptyDecal.error.find("Decal") != std::string::npos,
               "decal with an empty path keeps the road and reports the reason");
     }
+
+    tests::Section("Shoulder");
+    {
+        graph::NodeGraph sg;
+        const auto sPath = sg.CreateNode(graph::NodeKind::Path);
+        const auto sRoad = sg.CreateNode(graph::NodeKind::Road);
+        const auto sLeft = sg.CreateNode(graph::NodeKind::Shoulder);
+        const auto sRight = sg.CreateNode(graph::NodeKind::Shoulder);
+        const auto sOut = sg.CreateNode(graph::NodeKind::MeshOutput);
+        std::get<graph::PathNodeSettings>(sg.FindMutableNode(sPath)->settings).path = path;
+        sg.CreateLink(sg.FindNode(sPath)->outputs[0].id, sg.FindNode(sRoad)->inputs[0].id);
+        Check(sg.CreateLink(sg.FindNode(sRoad)->outputs[1].id, sg.FindNode(sLeft)->inputs[0].id), "Road Left connects to Shoulder Path");
+        Check(sg.CreateLink(sg.FindNode(sRoad)->outputs[2].id, sg.FindNode(sRight)->inputs[0].id), "Road Right connects to Shoulder Path");
+        Check(!sg.CanCreateLink(sg.FindNode(sRoad)->outputs[0].id, sg.FindNode(sLeft)->inputs[0].id), "RoadSurface cannot connect to Shoulder Path");
+        Check(sg.CreateLink(sg.FindNode(sLeft)->outputs[0].id, sg.FindNode(sOut)->inputs[0].id), "Shoulder RoadSurface connects to Mesh Output");
+        graph::RoadGeometry sRoadGeo, leftGeo, rightGeo;
+        Check(graph::EvaluateRoad(sg, sRoad, sRoadGeo, error), "shoulder test road evaluates");
+        Check(graph::EvaluateShoulder(sg, sLeft, leftGeo, error) && graph::EvaluateShoulder(sg, sRight, rightGeo, error),
+              "left and right shoulders evaluate");
+        const size_t sRows = sRoadGeo.surface.vertices.size() / sRoadGeo.stride;
+        Check(leftGeo.stride == 3 && leftGeo.surface.vertices.size() == sRows * leftGeo.stride, "1.5 m shoulder has 2 cells per row");
+        const auto near = [](const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b) {
+            return std::abs(a.x - b.x) < 1e-4f && std::abs(a.y - b.y) < 1e-4f && std::abs(a.z - b.z) < 1e-4f;
+        };
+        bool shared = true, outward = true, sloped = true, upward = true;
+        for (size_t row = 0; row < sRows; ++row) {
+            const auto& roadLeft = sRoadGeo.surface.vertices[row * sRoadGeo.stride + sRoadGeo.stride - 1].position;
+            const auto& roadRight = sRoadGeo.surface.vertices[row * sRoadGeo.stride].position;
+            const auto& roadCenter = sRoadGeo.surface.vertices[row * sRoadGeo.stride + sRoadGeo.stride / 2].position;
+            const auto& leftInner = leftGeo.surface.vertices[row * leftGeo.stride].position;
+            const auto& leftOuter = leftGeo.surface.vertices[row * leftGeo.stride + leftGeo.stride - 1].position;
+            const auto& rightInner = rightGeo.surface.vertices[row * rightGeo.stride].position;
+            const auto& rightOuter = rightGeo.surface.vertices[row * rightGeo.stride + rightGeo.stride - 1].position;
+            shared &= near(leftInner, roadLeft) && near(rightInner, roadRight);
+            // 外側の点は道路中心からさらに遠い（左は左へ、右は右へ）。
+            const auto dist = [&](const DirectX::XMFLOAT3& p) { return std::hypot(p.x - roadCenter.x, p.z - roadCenter.z); };
+            outward &= dist(leftOuter) > dist(roadLeft) + 1.4f && dist(rightOuter) > dist(roadRight) + 1.4f;
+            sloped &= std::abs((roadLeft.y - leftOuter.y) - 0.06f) < 1e-3f;
+        }
+        for (const auto& v : leftGeo.surface.vertices) upward &= v.normal.y > 0.5f;
+        Check(shared, "shoulder inner column shares the road boundary vertices");
+        Check(outward, "shoulders extend away from the road on both sides regardless of traffic side");
+        Check(sloped, "4% cross slope drops 6 cm over 1.5 m");
+        Check(upward, "shoulder normals point up on both sides");
+        Check(leftGeo.left.points.size() == sRows && leftGeo.right.points.size() == sRows, "shoulder exports Outer and inner boundary paths");
+        auto shoulderCompiled = graph::CompileMeshGraph(sg);
+        Check(shoulderCompiled.error.empty() && shoulderCompiled.scene.meshes.size() == 1 &&
+              shoulderCompiled.scene.meshes[0].geometry.vertices.size() == leftGeo.surface.vertices.size(),
+              "Shoulder reaches the Mesh Output as its own mesh");
+        // 路肩の Outer からさらに路肩を張る。内側の列は前の路肩の外側の列と一致する。
+        const auto sOuter = sg.CreateNode(graph::NodeKind::Shoulder);
+        Check(sg.CreateLink(sg.FindNode(sLeft)->outputs[1].id, sg.FindNode(sOuter)->inputs[0].id), "Shoulder Outer connects to another Shoulder");
+        graph::RoadGeometry outerGeo;
+        Check(graph::EvaluateShoulder(sg, sOuter, outerGeo, error), "chained shoulder evaluates");
+        bool chainedShared = outerGeo.surface.vertices.size() == sRows * outerGeo.stride;
+        for (size_t row = 0; chainedShared && row < sRows; ++row) {
+            chainedShared &= near(outerGeo.surface.vertices[row * outerGeo.stride].position,
+                                  leftGeo.surface.vertices[row * leftGeo.stride + leftGeo.stride - 1].position);
+        }
+        Check(chainedShared, "chained shoulder shares the previous Outer column");
+        // Outer から Road も作れる。
+        const auto sRoad2 = sg.CreateNode(graph::NodeKind::Road);
+        Check(sg.CreateLink(sg.FindNode(sLeft)->outputs[1].id, sg.FindNode(sRoad2)->inputs[0].id), "Shoulder Outer connects to a Road");
+        graph::RoadGeometry road2;
+        Check(graph::EvaluateRoad(sg, sRoad2, road2, error), "a road can follow a shoulder Outer");
+        // Path を外すと理由が出る。
+        graph::GraphId leftLink = 0;
+        for (const auto& link : sg.Links()) if (link.endPin == sg.FindNode(sLeft)->inputs[0].id) leftLink = link.id;
+        sg.DeleteLink(leftLink);
+        shoulderCompiled = graph::CompileMeshGraph(sg);
+        Check(shoulderCompiled.scene.meshes.empty() && shoulderCompiled.error.find("Shoulder") != std::string::npos,
+              "unconnected shoulder reports its reason");
+    }
+
+    tests::Section("Merge");
+    {
+        graph::NodeGraph mg;
+        const auto mPath = mg.CreateNode(graph::NodeKind::Path);
+        const auto mRoad = mg.CreateNode(graph::NodeKind::Road);
+        const auto mLeft = mg.CreateNode(graph::NodeKind::Shoulder);
+        const auto mRight = mg.CreateNode(graph::NodeKind::Shoulder);
+        const auto mMarking = mg.CreateNode(graph::NodeKind::RoadMarking);
+        const auto mMerge = mg.CreateNode(graph::NodeKind::Merge);
+        const auto mOut = mg.CreateNode(graph::NodeKind::MeshOutput);
+        std::get<graph::PathNodeSettings>(mg.FindMutableNode(mPath)->settings).path = path;
+        mg.CreateLink(mg.FindNode(mPath)->outputs[0].id, mg.FindNode(mRoad)->inputs[0].id);
+        mg.CreateLink(mg.FindNode(mRoad)->outputs[1].id, mg.FindNode(mLeft)->inputs[0].id);
+        mg.CreateLink(mg.FindNode(mRoad)->outputs[2].id, mg.FindNode(mRight)->inputs[0].id);
+        mg.CreateLink(mg.FindNode(mRoad)->outputs[0].id, mg.FindNode(mMarking)->inputs[0].id);
+        Check(mg.FindNode(mMerge)->inputs.size() == 1 && mg.FindNode(mMerge)->inputs[0].label == "Mesh 1",
+              "new Merge starts with one free input");
+        // 繋ぐたびに空きが 1 本増える。
+        Check(mg.CreateLink(mg.FindNode(mMarking)->outputs[0].id, mg.FindNode(mMerge)->inputs[0].id) &&
+              mg.FindNode(mMerge)->inputs.size() == 2 && mg.FindNode(mMerge)->inputs[1].label == "Mesh 2",
+              "connecting Mesh 1 adds a free Mesh 2");
+        Check(mg.CreateLink(mg.FindNode(mLeft)->outputs[0].id, mg.FindNode(mMerge)->inputs[1].id) &&
+              mg.CreateLink(mg.FindNode(mRight)->outputs[0].id, mg.FindNode(mMerge)->inputs[2].id) &&
+              mg.FindNode(mMerge)->inputs.size() == 4, "three connected inputs leave one free Mesh 4");
+        Check(mg.CreateLink(mg.FindNode(mMerge)->outputs[0].id, mg.FindNode(mOut)->inputs[0].id), "Merge connects to Mesh Output");
+        auto merged = graph::CompileMeshGraph(mg);
+        Check(merged.error.empty() && merged.scene.meshes.size() == 4, "Merge outputs road, markings, and both shoulders");
+        // 同じ Road を 2 つの枝から積んでも 1 回。白線の押し出し元は道路の番号を指す。
+        Check(mg.CreateLink(mg.FindNode(mRoad)->outputs[0].id, mg.FindNode(mMerge)->inputs[3].id) &&
+              mg.FindNode(mMerge)->inputs.size() == 5, "connecting Mesh 4 adds Mesh 5");
+        merged = graph::CompileMeshGraph(mg);
+        Check(merged.scene.meshes.size() == 4, "the same Road through two branches is stacked once");
+        Check(merged.scene.meshes.size() == 4 && merged.scene.meshes[1].displacementSource == 0 &&
+              merged.scene.meshes[1].useBlendMode, "markings still displace from the merged road");
+        // Merge を途中ノードとして見ると、同じ 4 枚。
+        Check(graph::CompileMeshGraph(mg, mMerge).scene.meshes.size() == 4, "previewing the Merge node shows its merged meshes");
+        // 別の Mesh Output が同じ Road を出しても重複しない。
+        const auto mOut2 = mg.CreateNode(graph::NodeKind::MeshOutput);
+        mg.CreateLink(mg.FindNode(mRoad)->outputs[0].id, mg.FindNode(mOut2)->inputs[0].id);
+        Check(graph::CompileMeshGraph(mg).scene.meshes.size() == 4, "a second Mesh Output does not duplicate the road");
+        // 外すと空きが詰まる。
+        graph::GraphId leftLink = 0;
+        for (const auto& link : mg.Links()) if (link.endPin == mg.FindNode(mMerge)->inputs[1].id) leftLink = link.id;
+        mg.DeleteLink(leftLink);
+        const auto* mergeNode = mg.FindNode(mMerge);
+        Check(mergeNode->inputs.size() == 4 && mergeNode->inputs[3].label == "Mesh 4", "disconnecting compacts the inputs and keeps one free");
+        Check(graph::CompileMeshGraph(mg).scene.meshes.size() == 3, "disconnected shoulder leaves the merge");
+        // 空きピンの並びは Replace（読み込み・アンドゥ）でも保たれる。
+        auto nodes = mg.Nodes(); auto links = mg.Links();
+        mg.Replace(nodes, links);
+        Check(mg.FindNode(mMerge)->inputs.size() == 4 && graph::CompileMeshGraph(mg).scene.meshes.size() == 3,
+              "Replace keeps the connected inputs and one free input");
+    }
 }

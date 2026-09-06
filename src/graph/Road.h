@@ -42,6 +42,13 @@ bool RayHitsRoad(const RoadGeometry& road, const DirectX::XMFLOAT3& origin, cons
                  DirectX::XMFLOAT3& outHit);
 // Path の Surface 入力から上流をたどり、面を作っている Road ノードを返す。無ければ nullptr。
 const Node* FindSurfaceRoad(const NodeGraph& graph, const Node& pathNode);
+// 路肩。source の格子の列 edgeColumn（境界）を内側の列としてそのまま使い、隣の列 innerColumn から
+// 外向きを決めて widthMeters 押し出す。結果も行×列の格子（列 0 が境界、列末尾が Outer）で、
+// left に Outer、right に境界の点列を実寸 Path として持つ。rowDistances は source を写す。
+bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t innerColumn,
+                   const ShoulderNodeSettings& settings, RoadGeometry& result, std::string& error);
+// Shoulder ノードを評価する。Path 入力の上流（Road の Left / Right、Shoulder の Outer）をたどる。
+bool EvaluateShoulder(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result, std::string& error);
 // 面上のパス（surfaceSpace）に沿った帯。uv は幅方向 0〜1、長さ方向はパスに沿った実距離÷UV反復長。
 bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const DecalNodeSettings& settings,
                 renderer::MeshData& result, std::string& error);

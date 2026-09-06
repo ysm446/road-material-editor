@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 05:11
+更新日時: 2026-09-07 07:20
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -61,6 +61,8 @@ material-mixer 時代の `.mmproj` / `.mmmat` も**読み込みだけ**受け付
 | 11 | Path に縦断ポイント・バンクポイントを追加した。`graph.roadNetwork` と Lane Marking の矢印はキー追加のみ |
 | 12 | Road に Material 2〜4 / Mask 2〜4 のピンと `roadMask` ノードを追加した |
 | 13 | Path の入力を Surface（Mesh 型）にし、`surfaceSpace` と `decal` ノードを追加した |
+| 14 | `shoulder` ノード（路肩）を追加した |
+| 15 | `merge` ノード（入力数が可変）を追加した |
 
 **版を上げる基準は「キーが増えたか」ではなく「既存のキーの意味が変わったか」。**
 キーが増えただけなら、古いビルドはそれを無視して正しく読める。意味が変わった場合は、
@@ -280,6 +282,19 @@ Path の inputs[0] は Surface（Mesh 型）。旧地形の Base（Material 型�
 `kind: "decal"` は `decal: { "width": 1.0, "lift": 0.008, "uvRepeat": 1.0, "uvAlongU": false }` を持ち、
 inputs は RoadSurface、Path、Material の順、outputs は RoadSurface。
 
+### 版 14 — shoulder ノード
+
+`kind: "shoulder"` は `shoulder: { "width": 1.5, "crossSlope": 4.0, "uvRepeat": 1.0, "uvAlongU": false }` を持つ
+（width は m、crossSlope は %）。inputs は Path、Material の順、outputs は RoadSurface、Outer の順。
+Path には Road の Left / Right か別の shoulder の Outer を繋ぐ。旧ビルドは shoulder を読み飛ばして Outer 以降のリンクを失うため版を上げた。
+
+### 版 15 — merge ノード
+
+`kind: "merge"` は設定を持たない。inputs は Mesh 型の可変長（`Mesh 1` … `Mesh N`）で、**繋がっている入力の後ろに空きが 1 本**付く。
+ファイルには inputs の ID をある分だけ書く。読込時は定義の 1 本に加えてファイルにある分だけ入力を足し、
+リンクを読んだ後に「繋がった入力を順に残して空きを 1 本」に整える（`NodeGraph::NormalizeVariablePins`）。outputs は RoadSurface。
+旧ビルドは merge を読み飛ばして Mesh Output との接続を失うため版を上げた。
+
 同じ版でキーだけ追加したもの（無ければ既定値）:
 
 - 材質の `opacity`（既定 1）、`blendMode`（`opaque` / `masked` / `translucent`、既定 opaque）、`maskThreshold`（0.5）、`maps.opacity`（テクスチャ + チャンネル）。`.tgmat` も同じ。
@@ -398,7 +413,7 @@ RGB をそのまま使うマップ（ベースカラー / 法線）はテクス�
   並びで、ピンの型やラベルはノードの定義から再生成する（ファイルには書かない）。
 - `kind` は名前で書く（`surface` / `shape` / `liquid` / `heightmap` /
   `heightmapBlur` / `maskImage` / `maskFluvial` / `maskSlope` / `maskLevels` /
-  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking` / `roadMask` / `decal`）。知らない種類のノードは読み飛ばす。
+  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking` / `roadMask` / `decal` / `shoulder` / `merge`）。知らない種類のノードは読み飛ばす。
 - レイヤー設定を持つノード（surface / shape / liquid / heightmap /
   heightmapBlur）は `layer` に
   旧 `layers[]` の要素と同じ形を持つ。テクスチャ / マテリアル / ペイントの参照も

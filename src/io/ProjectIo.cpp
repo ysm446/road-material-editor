@@ -41,7 +41,9 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 11: Path の縦断ポイント・バンクポイント。旧ビルドが線形を平坦・水平に読むことを防ぐ。
 // 12: Road の材質スロット 2〜4 と roadMask ノード。旧ビルドがスロット 2〜4 のリンクを捨てて下地だけを出すことを防ぐ。
 // 13: Path の Surface 入力（Mesh 型）と surfaceSpace、decal ノード。
-constexpr int kProjectFormatVersion = 13;
+// 14: shoulder ノード。旧ビルドが路肩を読み飛ばして Outer 以降のリンクを失うことを防ぐ。
+// 15: merge ノード（入力数が可変）。旧ビルドが Merge を読み飛ばして Mesh Output との接続を失うことを防ぐ。
+constexpr int kProjectFormatVersion = 15;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -1223,6 +1225,9 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
         } else if (const auto* decal = std::get_if<graph::DecalNodeSettings>(&node.settings)) {
             item["decal"] = {{"width", decal->widthMeters}, {"lift", decal->liftMeters},
                              {"uvRepeat", decal->uvRepeatMeters}, {"uvAlongU", decal->uvAlongU}};
+        } else if (const auto* shoulder = std::get_if<graph::ShoulderNodeSettings>(&node.settings)) {
+            item["shoulder"] = {{"width", shoulder->widthMeters}, {"crossSlope", shoulder->crossSlopePercent},
+                                {"uvRepeat", shoulder->uvRepeatMeters}, {"uvAlongU", shoulder->uvAlongU}};
         } else if (const auto* roadMaskSettings = std::get_if<graph::RoadMaskNodeSettings>(&node.settings)) {
             static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant"};
             item["roadMask"] = {{"shape", EnumName(kRoadMaskShapeNames, static_cast<uint32_t>(roadMaskSettings->shape))},
@@ -1351,6 +1356,19 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     created.outputs.push_back(std::move(createdPin));
                 }
             }
+            // 入力数が可変のノード（Merge）は、ファイルにある分だけ入力を足す。
+            // 型とラベルは最後の入力定義に合わせ、並びは読み込み後に NormalizeVariablePins が整える。
+            if (created.kind == graph::NodeKind::Merge && inputIds != nullptr && inputIds->is_array() &&
+                !created.inputs.empty()) {
+                for (; inputIndex < inputIds->size(); ++inputIndex) {
+                    if (!(*inputIds)[inputIndex].is_number_integer()) continue;
+                    graph::Pin extra = created.inputs.back();
+                    extra.id = (*inputIds)[inputIndex].get<int>();
+                    extra.label = "Mesh " + std::to_string(created.inputs.size() + 1);
+                    maxId = std::max(maxId, extra.id);
+                    created.inputs.push_back(std::move(extra));
+                }
+            }
 
             if (graph::IsLayerNodeKind(created.kind)) {
                 graph::LayerNodeSettings settings;
@@ -1411,6 +1429,15 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.liftMeters = ReadFloat(*decal, "lift", settings.liftMeters);
                     settings.uvRepeatMeters = ReadFloat(*decal, "uvRepeat", settings.uvRepeatMeters);
                     settings.uvAlongU = ReadBool(*decal, "uvAlongU", settings.uvAlongU);
+                }
+                created.settings = settings;
+            } else if (created.kind == graph::NodeKind::Shoulder) {
+                graph::ShoulderNodeSettings settings;
+                if (const json* shoulder = FindMember(item, "shoulder"); shoulder && shoulder->is_object()) {
+                    settings.widthMeters = ReadFloat(*shoulder, "width", settings.widthMeters);
+                    settings.crossSlopePercent = ReadFloat(*shoulder, "crossSlope", settings.crossSlopePercent);
+                    settings.uvRepeatMeters = ReadFloat(*shoulder, "uvRepeat", settings.uvRepeatMeters);
+                    settings.uvAlongU = ReadBool(*shoulder, "uvAlongU", settings.uvAlongU);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::RoadMask) {

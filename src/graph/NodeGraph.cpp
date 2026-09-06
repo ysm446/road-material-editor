@@ -129,6 +129,19 @@ constexpr std::array<PinDefinition, 4> kDecalPins = {{
     {PinKind::Input, ValueType::Material, "Material"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
+// 路肩のピン。Path には Road の Left / Right か、別の路肩の Outer を繋ぐ。
+// Outer は外側の境界（実寸 Path）で、次の路肩や縁石へ渡す。
+constexpr std::array<PinDefinition, 4> kShoulderPins = {{
+    {PinKind::Input, ValueType::Path, "Path"},
+    {PinKind::Input, ValueType::Material, "Material"},
+    {PinKind::Output, ValueType::Mesh, "RoadSurface"},
+    {PinKind::Output, ValueType::Path, "Outer"},
+}};
+// Merge のピン。入力は可変で、繋ぐたびに空きが 1 本増える（NormalizeVariablePins）。
+constexpr std::array<PinDefinition, 2> kMergePins = {{
+    {PinKind::Input, ValueType::Mesh, "Mesh 1"},
+    {PinKind::Output, ValueType::Mesh, "RoadSurface"},
+}};
 
 // パスの足跡をマスクにするピン。
 constexpr std::array<PinDefinition, 2> kMaskPathPins = {{
@@ -171,10 +184,12 @@ constexpr std::array<PinDefinition, 3> kRoadMarkingPins = {{
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 
-constexpr std::array<NodeDefinition, 29> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 31> kNodeDefinitions = {{
     {NodeKind::Road, "road", "Road", kRoadPins},
     {NodeKind::RoadMask, "roadMask", "Road Mask", kRoadMaskPins},
     {NodeKind::Decal, "decal", "Decal", kDecalPins},
+    {NodeKind::Shoulder, "shoulder", "Shoulder", kShoulderPins},
+    {NodeKind::Merge, "merge", "Merge", kMergePins},
     {NodeKind::RoadMarking, "roadMarking", "Lane Marking", kRoadMarkingPins},
     {NodeKind::MeshOutput, "meshOutput", "Mesh Output", kMeshOutputPins},
     {NodeKind::Heightmap, "heightmap", "Heightmap", kSourceNodePins},
@@ -261,7 +276,8 @@ bool IsLayerMaskSourceKind(NodeKind kind) {
 }
 
 bool IsMeshNodeKind(NodeKind kind) {
-    return kind == NodeKind::Road || kind == NodeKind::RoadMarking || kind == NodeKind::Decal;
+    return kind == NodeKind::Road || kind == NodeKind::RoadMarking || kind == NodeKind::Decal ||
+           kind == NodeKind::Shoulder || kind == NodeKind::Merge;
 }
 
 bool IsPreviewableNodeKind(NodeKind kind) {
@@ -433,6 +449,7 @@ bool NodeGraph::CreateLink(GraphId startPin, GraphId endPin) {
     // 入力ピンは 1 本だけ。既にある接続は置き換える。
     std::erase_if(m_links, [endPin](const Link& link) { return link.endPin == endPin; });
     m_links.push_back({AllocateGraphId(), startPin, endPin});
+    NormalizeVariablePins();
     MarkDirty();
     return true;
 }
@@ -443,8 +460,32 @@ bool NodeGraph::DeleteLink(GraphId linkId) {
     if (m_links.size() == oldSize) {
         return false;
     }
+    NormalizeVariablePins();
     MarkDirty();
     return true;
+}
+
+void NodeGraph::NormalizeVariablePins() {
+    for (Node& node : m_nodes) {
+        if (node.kind != NodeKind::Merge) continue;
+        // 繋がっている入力を順に残し、末尾に空きを 1 本だけ置く。ラベルは並びで振り直す。
+        std::vector<Pin> connected;
+        for (const Pin& pin : node.inputs) {
+            const bool linked = std::any_of(m_links.begin(), m_links.end(),
+                                            [&](const Link& link) { return link.endPin == pin.id; });
+            if (linked) connected.push_back(pin);
+        }
+        Pin spare;
+        spare.id = AllocateGraphId();
+        spare.nodeId = node.id;
+        spare.kind = PinKind::Input;
+        spare.valueType = ValueType::Mesh;
+        connected.push_back(std::move(spare));
+        for (size_t i = 0; i < connected.size(); ++i) {
+            connected[i].label = "Mesh " + std::to_string(i + 1);
+        }
+        node.inputs = std::move(connected);
+    }
 }
 
 GraphId NodeGraph::CreateNode(NodeKind kind) {
@@ -469,6 +510,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = RoadMaskNodeSettings{};
     } else if (kind == NodeKind::Decal) {
         node.settings = DecalNodeSettings{};
+    } else if (kind == NodeKind::Shoulder) {
+        node.settings = ShoulderNodeSettings{};
+    } else if (kind == NodeKind::Merge) {
+        node.settings = MergeNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
         std::get<PathNodeSettings>(node.settings).path.worldSpace = true;
@@ -512,6 +557,7 @@ bool NodeGraph::DeleteNode(GraphId nodeId) {
                std::find(pinIds.begin(), pinIds.end(), link.endPin) != pinIds.end();
     });
     std::erase_if(m_nodes, [nodeId](const Node& candidate) { return candidate.id == nodeId; });
+    NormalizeVariablePins();
     MarkDirty();
     return true;
 }
@@ -527,6 +573,7 @@ void NodeGraph::Replace(std::vector<Node> nodes, std::vector<Link> links) {
                end->kind != PinKind::Input || start->valueType != end->valueType;
     });
     RebuildNextGraphId();
+    NormalizeVariablePins();
     MarkDirty();
 }
 

@@ -52,6 +52,10 @@ enum class NodeKind : uint32_t {
     RoadMask = 27,
     // 面上のパスに沿って帯を貼るデカール。ひび・補修跡・汚れなどの模様。
     Decal = 28,
+    // 路肩。Road の Left / Right（または別の路肩の Outer）の境界の頂点を起点に、外側へ断面を押し出す。
+    Shoulder = 29,
+    // 複数の Mesh の枝を 1 つの RoadSurface にまとめる。同じノード由来のメッシュは 1 回だけ積む。
+    Merge = 30,
     Surface = 0,
     Shape = 1,
     Liquid = 2,
@@ -213,6 +217,20 @@ struct DecalNodeSettings {
     bool uvAlongU = false;
 };
 
+// 路肩。境界の点列（Road の Left / Right、路肩の Outer）をそのまま内側の列にして、
+// 外側へ widthMeters 押し出した格子。境界の頂点を共有するので道路と水密になる。
+// 列 0 が内側（境界）、列末尾が外側（Outer）。進行方向の左右や走行側には依存しない。
+struct ShoulderNodeSettings {
+    float widthMeters = 1.5f;
+    // 横断勾配（%）。正なら外側へ向かって下がる。
+    float crossSlopePercent = 4.0f;
+    float uvRepeatMeters = 1.0f;
+    bool uvAlongU = false;
+};
+
+// Merge。設定は持たない。Mesh 1〜4 に繋いだ枝を順に積み、下流の白線・Decal は最初の枝の面に乗る。
+struct MergeNodeSettings {};
+
 struct RoadMaskNodeSettings {
     RoadMaskShape shape = RoadMaskShape::WheelTracks;
     // 轍。車線中央の中心線からの距離、タイヤ間隔、帯の幅、縁のぼかし。
@@ -280,7 +298,8 @@ struct OutputNodeSettings {};
 
 using NodeSettings =
     std::variant<LayerNodeSettings, MaskNodeSettings, OutputNodeSettings, PathNodeSettings, RoadNodeSettings,
-                 RoadMarkingNodeSettings, RoadMaskNodeSettings, DecalNodeSettings>;
+                 RoadMarkingNodeSettings, RoadMaskNodeSettings, DecalNodeSettings, ShoulderNodeSettings,
+                 MergeNodeSettings>;
 
 struct Node {
     GraphId id = 0;
@@ -368,6 +387,9 @@ public:
 
     // 変更があったことを記録する。Application はこれを見て再コンパイルする。
     void MarkDirty() { ++m_revision; }
+    // 入力数が可変のノード（Merge）の入力を整える。繋がった入力を順に残し、末尾に空きを 1 本置く。
+    // リンクやノードを変えた後と読み込み後に呼ぶ。
+    void NormalizeVariablePins();
     uint64_t Revision() const { return m_revision; }
 
 private:
@@ -446,7 +468,7 @@ bool IsHeightMaskNodeKind(NodeKind kind);
 // この 3 つの Mask は「そのレイヤーを合成した時点の作業用テクスチャ」から焼くので、
 // 出どころがチェーンの中で走っていないと結果が残らない。
 bool IsLayerMaskSourceKind(NodeKind kind);
-// 道路メッシュの鎖を成す種類か（Road / Lane Marking / Decal）。Mesh Output は含まない。
+// 道路メッシュの鎖を成す種類か（Road / Lane Marking / Decal / Shoulder / Merge）。Mesh Output は含まない。
 // 出力ピンを選ぶと、そのノードまでの鎖がメッシュシーンに出る。
 bool IsMeshNodeKind(NodeKind kind);
 // 選ぶとプレビューの対象になる種類か。レイヤーに加えて、

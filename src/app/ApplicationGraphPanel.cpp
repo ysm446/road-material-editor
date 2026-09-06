@@ -80,6 +80,10 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.78f, 0.66f, 0.50f, 1.0f);
         case graph::NodeKind::Decal:
             return ImVec4(0.72f, 0.60f, 0.76f, 1.0f);
+        case graph::NodeKind::Shoulder:
+            return ImVec4(0.70f, 0.64f, 0.52f, 1.0f);
+        case graph::NodeKind::Merge:
+            return ImVec4(0.62f, 0.70f, 0.66f, 1.0f);
         case graph::NodeKind::MaskPath:
         case graph::NodeKind::MaskArea:
             return ImVec4(0.58f, 0.74f, 0.82f, 1.0f);
@@ -872,6 +876,8 @@ void Application::DrawGraphEditor() {
         addNodeMenuItem(graph::NodeKind::RoadMarking, "Lane Marking — 道路面に白線の帯を生成");
         addNodeMenuItem(graph::NodeKind::RoadMask, "Road Mask — 轍・端・ムラの道路空間マスク");
         addNodeMenuItem(graph::NodeKind::Decal, "Decal — 面上のPathに沿って模様の帯を貼る");
+        addNodeMenuItem(graph::NodeKind::Shoulder, "Shoulder — 道路の境界から外側へ路肩を張る");
+        addNodeMenuItem(graph::NodeKind::Merge, "Merge — 複数のRoadSurfaceを1つにまとめる");
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Heightmap, "Heightmap — 画像を地形として読み込む");
@@ -1175,6 +1181,37 @@ void Application::DrawGraphPanel() {
         ui::HintText("RoadのRoadSurfaceと、Surfaceにその道路を繋いだPathを接続する。Pathは路面の上でCtrl＋クリックして引く。"
                      "Materialの不透明度で模様をくり抜き、出力のRoadSurfaceをLane MarkingかMesh Outputへ。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
+    } else if (auto* shoulder = std::get_if<graph::ShoulderNodeSettings>(&selected->settings)) {
+        bool changed = false;
+        const graph::ShoulderNodeSettings defaults;
+        if (ui::BeginPropertyTable("shoulderRows")) {
+            changed |= ui::PropertyFloat("幅", &shoulder->widthMeters, 0.1f, 50.0f, defaults.widthMeters,
+                                         "境界から外側へ張る幅", "%.2f m");
+            changed |= ui::PropertyFloat("横断勾配", &shoulder->crossSlopePercent, -50.0f, 50.0f, defaults.crossSlopePercent,
+                                         "外側へ向かって下がる割合。1 m 進んで何 cm 下がるか", "%.1f %%");
+            changed |= ui::PropertyFloat("UV反復長", &shoulder->uvRepeatMeters, 0.1f, 100.0f, defaults.uvRepeatMeters,
+                                         "UV が 1 増える実距離", "%.2f m");
+            {
+                static const char* const kUvAxisLabels[] = {"長さ方向 = V（縦）", "長さ方向 = U（横）"};
+                int axis = shoulder->uvAlongU ? 1 : 0;
+                if (ui::PropertyCombo("UVの向き", &axis, kUvAxisLabels, IM_ARRAYSIZE(kUvAxisLabels), 0,
+                                      "テクスチャのどの軸を路肩の長さ方向に沿わせるか")) {
+                    shoulder->uvAlongU = (axis == 1);
+                    changed = true;
+                }
+            }
+            ui::EndPropertyTable();
+        }
+        ui::HintText("PathにRoadのLeft / Right（または別のShoulderのOuter）を接続する。境界の頂点を共有するので道路と水密。"
+                     "出力のRoadSurfaceをMesh Outputへ、Outerは次の路肩や縁石へ。走行側には依存しない。");
+        if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
+    } else if (selected->kind == graph::NodeKind::Merge) {
+        if (ui::BeginPropertyTable("mergeRows")) {
+            ui::PropertyValue("入力", "%zu 本（空き 1）", selected->inputs.size());
+            ui::EndPropertyTable();
+        }
+        ui::HintText("Road・Shoulder・Decal などのRoadSurfaceを繋ぐと、まとめて1つのRoadSurfaceにする。"
+                     "繋ぐたびに入力が1本増える。同じノード由来のメッシュは1回だけ積む。下流の白線・Decalは Mesh 1 の面に乗る。");
     } else if (auto* roadMask = std::get_if<graph::RoadMaskNodeSettings>(&selected->settings)) {
         bool changed = false;
         const graph::RoadMaskNodeSettings defaults;

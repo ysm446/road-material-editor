@@ -1,7 +1,7 @@
 # node-graph — ノードグラフの設計
 
 作成日時: 2026-09-02 12:50
-更新日時: 2026-09-07 06:10
+更新日時: 2026-09-07 07:20
 
 `src/graph/` とグラフパネル（`src/app/ApplicationGraphPanel.cpp`）の設計。
 ノード編集と移行前の評価経路、Road / Mesh Output による道路メッシュの評価を記録する。
@@ -229,7 +229,10 @@ Mask Path / Areaへ渡す際は評価対象のサイズに応じてUVへ変換�
 
 - 鎖は Road を起点に Lane Marking / Decal が部品を積む。**部品の生成が失敗しても道路面までの部品は残し**、失敗したノード名と理由を「 / 」区切りでプロパティ領域に出す（`CompiledMeshGraph::error`）。Road 自体が失敗したときだけ、その枝は空になる。
 - Road / Lane Marking / Decal の出力ピンをクリック（またはノードをダブルクリック）すると、**そのノードまでの鎖だけ**をメッシュシーンに出す（`CompileMeshGraph(graph, previewNodeId)`）。Mesh Output が無くても表示できる。背景のダブルクリックか「Mesh Output へ戻す」で全 Mesh Output の表示に戻る。2D の合成プレビューには影響しない。
-- Merge（複数の枝を 1 つの Mesh Output に集めるノード）は未実装。現状は Mesh Output を複数置いて代用する。
+- **Merge ノード**（2026-09-07）。Mesh 型の入力を可変長に持ち、繋いだ枝を順に 1 つの RoadSurface にまとめる。入力は「繋がっている本数＋空き 1 本」を常に保つ（`NodeGraph::NormalizeVariablePins`。リンクの作成・削除・ノード削除・`Replace` の後に整える）。
+  - **重複除去**。鎖の各メッシュは作ったノードの ID を鍵に持ち（`MeshChain::sources`）、同じノード由来のメッシュは 1 回だけ積む。Road → Merge と Road → Decal → Merge のように同じ Road を 2 つの枝から入れても道路面は 1 枚。押し出し元（`displacementSource`）は写した先の番号へ付け替える。複数の Mesh Output にまたがる重複も同じ仕組みで除く。
+  - 下流の Lane Marking / Decal は **Mesh 1 の枝の面**に乗る（chain.road は最初の枝のもの）。
+  - 途中ノードの表示で Merge を選ぶと、まとめた結果がそのまま出る。
 
 ## 道路の分割・確認表示
 

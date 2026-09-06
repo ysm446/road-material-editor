@@ -1,12 +1,12 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 02:59
+更新日時: 2026-09-07 04:34
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
-Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は11。
-版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンクを追加した（「Road Editor で追加した版」）。
+Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は12。
+版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンク、版12で Road の材質スロットと Road Mask を追加した（「Road Editor で追加した版」）。
 道路専用の拡張子は後続で設計する。
 
 ## 全体像
@@ -59,6 +59,7 @@ material-mixer 時代の `.mmproj` / `.mmmat` も**読み込みだけ**受け付
 | 9 | Road に Material 入力ピンを追加した |
 | 10 | `roadMarking` ノード（白線）を追加した |
 | 11 | Path に縦断ポイント・バンクポイントを追加した。`graph.roadNetwork` と Lane Marking の矢印はキー追加のみ |
+| 12 | Road に Material 2〜4 / Mask 2〜4 のピンと `roadMask` ノードを追加した |
 
 **版を上げる基準は「キーが増えたか」ではなく「既存のキーの意味が変わったか」。**
 キーが増えただけなら、古いビルドはそれを無視して正しく読める。意味が変わった場合は、
@@ -193,7 +194,7 @@ routedFrom, routedTo, waypoints }`（点の `id` を指す。from → to が向�
 **版は上げない。** キーが消えるだけで既存のキーの意味は変わらず、
 古いビルドが新しいファイルを読んでも既定値 1.0 として従来どおり動く。
 
-## Road Editor で追加した版（5〜11）
+## Road Editor で追加した版（5〜12）
 
 版5以降は Road Editor で追加した。版の並びは上げた順で、それぞれ旧アプリの誤読を防ぐため版を上げている。
 
@@ -260,11 +261,19 @@ inputsはRoadSurface（Mesh）、Materialの順、outputsはRoadSurface（Mesh�
 
 ポイントの id は点・エッジと同じ `nextId` の空間。旧アプリが線形を平坦・水平に読んで黙って違う道路を出すため版を上げた。
 
-同じ版でキーだけ追加したもの（無ければ既定値）:
-
 - `graph.roadNetwork: { "leftHandTraffic": true }` — 走行側。プロジェクトで 1 つ。
 - `roadMarking` の `arrows`（既定 true）、`arrowInterval`（30）、`arrowLength`（5）— 進行方向の矢印。
 - `road.displacement`（既定 0）— Material のハイトで路面を押し出す量（m）。`road.uvAlongU` / `roadMarking.uvAlongU`（既定 false）— 長さ方向を U にする。
+### 版12 — Road の材質スロットと Road Mask
+
+Road の inputs は Path、Material、Material 2〜4、Mask 2〜4 の順（版11 以前のファイルは足りないピンへ新しい ID を振る）。
+`road` に `layerWorldUv`（bool ×4）、`layerUvRepeat`（m ×4。[0] は未使用で `uvRepeat` を使う）、`layerBlendRange` を追加。
+`kind: "roadMask"` は `roadMask: { shape（wheelTracks / edgeFalloff / lengthNoise / constant）, laneOffset, trackSpacing, trackWidth,
+feather, bothLanes, edgeWidth, noiseScale, threshold, softness, seed, breakupAmount, breakupScale, strength, invert }` を持つ。
+旧ビルドはスロット 2〜4 のリンクを捨てて下地だけを出すため版を上げた。
+
+同じ版でキーだけ追加したもの（無ければ既定値）:
+
 - 材質の `opacity`（既定 1）、`blendMode`（`opaque` / `masked` / `translucent`、既定 opaque）、`maskThreshold`（0.5）、`maps.opacity`（テクスチャ + チャンネル）。`.tgmat` も同じ。
 - `preview.tessellationTargetPixels`（既定 10）— 分割する辺の長さ（px）。`tessellationFactor` は 64 まで。
 
@@ -381,7 +390,7 @@ RGB をそのまま使うマップ（ベースカラー / 法線）はテクス�
   並びで、ピンの型やラベルはノードの定義から再生成する（ファイルには書かない）。
 - `kind` は名前で書く（`surface` / `shape` / `liquid` / `heightmap` /
   `heightmapBlur` / `maskImage` / `maskFluvial` / `maskSlope` / `maskLevels` /
-  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking`）。知らない種類のノードは読み飛ばす。
+  `maskBlur` / `maskBlend` / `output` / `path` / `road` / `meshOutput` / `roadMarking` / `roadMask`）。知らない種類のノードは読み飛ばす。
 - レイヤー設定を持つノード（surface / shape / liquid / heightmap /
   heightmapBlur）は `layer` に
   旧 `layers[]` の要素と同じ形を持つ。テクスチャ / マテリアル / ペイントの参照も

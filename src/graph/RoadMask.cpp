@@ -1,0 +1,131 @@
+#include "graph/RoadMask.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace tg::graph {
+namespace {
+
+// 整数格子のハッシュ。値ノイズ用。
+float HashNoise(int x, int y, uint32_t seed) {
+    uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + seed * 2246822519u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    h ^= h >> 16;
+    return static_cast<float>(h & 0xFFFFFFu) / static_cast<float>(0xFFFFFFu);
+}
+
+float Smooth(float t) { return t * t * (3.0f - 2.0f * t); }
+
+// 2 次元の値ノイズ（0〜1）。
+float ValueNoise(float x, float y, uint32_t seed) {
+    const float fx = std::floor(x);
+    const float fy = std::floor(y);
+    const int ix = static_cast<int>(fx);
+    const int iy = static_cast<int>(fy);
+    const float tx = Smooth(x - fx);
+    const float ty = Smooth(y - fy);
+    const float a = HashNoise(ix, iy, seed);
+    const float b = HashNoise(ix + 1, iy, seed);
+    const float c = HashNoise(ix, iy + 1, seed);
+    const float d = HashNoise(ix + 1, iy + 1, seed);
+    return (a * (1.0f - tx) + b * tx) * (1.0f - ty) + (c * (1.0f - tx) + d * tx) * ty;
+}
+
+// 3 オクターブの fbm（0〜1 に正規化）。
+float Fbm(float x, float y, uint32_t seed) {
+    float sum = 0.0f;
+    float amplitude = 0.5f;
+    float total = 0.0f;
+    for (int octave = 0; octave < 3; ++octave) {
+        sum += ValueNoise(x, y, seed + static_cast<uint32_t>(octave) * 101u) * amplitude;
+        total += amplitude;
+        x *= 2.0f;
+        y *= 2.0f;
+        amplitude *= 0.5f;
+    }
+    return sum / total;
+}
+
+// 中心 center、幅 width の帯。縁を feather でなだらかにする。
+float Band(float x, float center, float width, float feather) {
+    const float distance = std::abs(x - center) - width * 0.5f;
+    if (feather <= 1e-5f) return distance <= 0.0f ? 1.0f : 0.0f;
+    return std::clamp(1.0f - distance / feather, 0.0f, 1.0f);
+}
+
+}  // namespace
+
+float EvaluateRoadMask(const RoadMaskNodeSettings& settings, float lateralMeters, float distanceMeters,
+                       float halfWidthMeters, float lengthMeters) {
+    (void)lengthMeters;
+    float value = 0.0f;
+    switch (settings.shape) {
+        case RoadMaskShape::WheelTracks: {
+            // 車線中央から左右へ trackSpacing / 2 の 2 本。両車線なら中心線の左右に置く。
+            const float lanes[2] = {settings.laneOffsetMeters, -settings.laneOffsetMeters};
+            const int laneCount = settings.bothLanes ? 2 : 1;
+            for (int lane = 0; lane < laneCount; ++lane) {
+                for (int side = -1; side <= 1; side += 2) {
+                    const float center = lanes[lane] + static_cast<float>(side) * settings.trackSpacingMeters * 0.5f;
+                    value = std::max(value, Band(lateralMeters, center, settings.trackWidthMeters, settings.featherMeters));
+                }
+            }
+            break;
+        }
+        case RoadMaskShape::EdgeFalloff: {
+            // 道路端からの距離。端で 1、edgeWidth の内側から feather で 0 へ。
+            const float fromEdge = halfWidthMeters - std::abs(lateralMeters);
+            const float inner = fromEdge - settings.edgeWidthMeters;
+            value = settings.featherMeters <= 1e-5f ? (inner <= 0.0f ? 1.0f : 0.0f)
+                                                    : std::clamp(1.0f - inner / settings.featherMeters, 0.0f, 1.0f);
+            break;
+        }
+        case RoadMaskShape::LengthNoise: {
+            const float scale = std::max(settings.noiseScaleMeters, 0.05f);
+            const float noise = Fbm(distanceMeters / scale, lateralMeters / scale, settings.seed);
+            const float softness = std::max(settings.softness, 1e-4f);
+            value = std::clamp((noise - settings.threshold) / softness + 0.5f, 0.0f, 1.0f);
+            break;
+        }
+        case RoadMaskShape::Constant:
+        default:
+            value = 1.0f;
+            break;
+    }
+    // 長さ方向のムラ。0 で一様、1 でノイズそのまま。
+    if (settings.breakupAmount > 1e-4f) {
+        const float scale = std::max(settings.breakupScaleMeters, 0.05f);
+        const float noise = Fbm(distanceMeters / scale, lateralMeters / (scale * 2.0f), settings.seed + 7919u);
+        value *= 1.0f - settings.breakupAmount + settings.breakupAmount * noise;
+    }
+    value = std::clamp(value * settings.strength, 0.0f, 1.0f);
+    return settings.invert ? 1.0f - value : value;
+}
+
+RoadMaskImage BakeRoadMask(const RoadMaskNodeSettings* const channels[3], float widthMeters,
+                           float lengthMeters) {
+    RoadMaskImage image;
+    if (!(widthMeters > 0.0f) || !(lengthMeters > 0.0f) || !std::isfinite(widthMeters) || !std::isfinite(lengthMeters))
+        return image;
+    image.width = 256;
+    image.height = std::clamp(static_cast<uint32_t>(std::ceil(lengthMeters * 16.0f)), 16u, 8192u);
+    image.rgba.assign(size_t(image.width) * image.height * 4, 0);
+    const float halfWidth = widthMeters * 0.5f;
+    for (uint32_t y = 0; y < image.height; ++y) {
+        const float distance = (static_cast<float>(y) + 0.5f) / static_cast<float>(image.height) * lengthMeters;
+        for (uint32_t x = 0; x < image.width; ++x) {
+            // 列 0 が Right 端（横位置 −幅/2）、列末尾が Left 端。
+            const float lateral = ((static_cast<float>(x) + 0.5f) / static_cast<float>(image.width) - 0.5f) * widthMeters;
+            uint8_t* texel = &image.rgba[(size_t(y) * image.width + x) * 4];
+            for (int channel = 0; channel < 3; ++channel) {
+                const float value = channels[channel]
+                    ? EvaluateRoadMask(*channels[channel], lateral, distance, halfWidth, lengthMeters) : 0.0f;
+                texel[channel] = static_cast<uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+            }
+            texel[3] = 255;
+        }
+    }
+    return image;
+}
+
+}  // namespace tg::graph

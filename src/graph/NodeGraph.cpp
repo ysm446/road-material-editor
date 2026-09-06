@@ -138,12 +138,22 @@ constexpr std::array<PinDefinition, 1> kSourceNodePins = {{
     {PinKind::Output, ValueType::Material, "Result"},
 }};
 
-constexpr std::array<PinDefinition, 5> kRoadPins = {{
+// 材質はスロット 1〜4。スロット 2〜4 は道路マスク（Mask 2〜4）で被覆する。
+constexpr std::array<PinDefinition, 11> kRoadPins = {{
     {PinKind::Input, ValueType::Path, "Path"},
     {PinKind::Input, ValueType::Material, "Material"},
+    {PinKind::Input, ValueType::Material, "Material 2"},
+    {PinKind::Input, ValueType::Material, "Material 3"},
+    {PinKind::Input, ValueType::Material, "Material 4"},
+    {PinKind::Input, ValueType::RoadMask, "Mask 2"},
+    {PinKind::Input, ValueType::RoadMask, "Mask 3"},
+    {PinKind::Input, ValueType::RoadMask, "Mask 4"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Path, "Left"},
     {PinKind::Output, ValueType::Path, "Right"},
+}};
+constexpr std::array<PinDefinition, 1> kRoadMaskPins = {{
+    {PinKind::Output, ValueType::RoadMask, "Mask"},
 }};
 constexpr std::array<PinDefinition, 1> kMeshOutputPins = {{
     {PinKind::Input, ValueType::Mesh, "Mesh"},
@@ -154,8 +164,9 @@ constexpr std::array<PinDefinition, 3> kRoadMarkingPins = {{
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 
-constexpr std::array<NodeDefinition, 27> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 28> kNodeDefinitions = {{
     {NodeKind::Road, "road", "Road", kRoadPins},
+    {NodeKind::RoadMask, "roadMask", "Road Mask", kRoadMaskPins},
     {NodeKind::RoadMarking, "roadMarking", "Lane Marking", kRoadMarkingPins},
     {NodeKind::MeshOutput, "meshOutput", "Mesh Output", kMeshOutputPins},
     {NodeKind::Heightmap, "heightmap", "Heightmap", kSourceNodePins},
@@ -440,6 +451,8 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = RoadNodeSettings{};
     } else if (kind == NodeKind::RoadMarking) {
         node.settings = RoadMarkingNodeSettings{};
+    } else if (kind == NodeKind::RoadMask) {
+        node.settings = RoadMaskNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
         std::get<PathNodeSettings>(node.settings).path.worldSpace = true;

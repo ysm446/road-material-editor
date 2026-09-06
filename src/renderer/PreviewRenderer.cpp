@@ -128,7 +128,74 @@ struct MeshConstants {
     // 不透明度の扱い。0 = 不透明、1 = マスク抜き（opacityThreshold 未満を捨てる）、2 = 半透明。
     uint32_t opacityMode;
     float opacityThreshold;
+
+    // 道路のレイヤー（スロット 1〜4）。HLSL 側と同じ並び。docs/design/road-material-layers.md。
+    uint32_t layerBaseColorIndex[4];
+    uint32_t layerNormalIndex[4];
+    uint32_t layerSurfaceIndex[4];
+    uint32_t layerHeightIndex[4];
+    uint32_t layerWorldUv[4];
+    float layerUvRepeat[4];
+    uint32_t roadMaskIndex;    // 道路空間マスクの SRV。無ければ kNoShadowIndex
+    uint32_t layerCount;       // 変位に使うスロット数（0 なら旧経路）
+    float layerBlendRange;
+    uint32_t roadUvAlongU;
+    float roadMaskScale[2];    // (1/幅, 1/長さ)。道路座標（m）→ マスク UV
+    float roadUvMetersPerUv;   // roadUv 1 あたりの実距離（道路のスロット 1 の反復長）
+    uint32_t shadeLayers;      // 1 ならピクセルもレイヤーでブレンドする（道路面）
 };
+
+// 道路空間マスク（RGBA8）を GPU へ上げる。ミップは持たない（低解像度でぼかして読む）。
+bool CreateRoadMaskTexture(rhi::Device& device, const SceneMesh::RoadMaskPixels& pixels, rhi::GpuTexture& outTexture) {
+    rhi::TextureDesc desc;
+    desc.width = pixels.width;
+    desc.height = pixels.height;
+    desc.format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.createSrv = true;
+    desc.initialState = D3D12_RESOURCE_STATE_COPY_DEST;
+    desc.debugName = L"RoadMask";
+    if (!device.Allocator().CreateTexture2D(desc, outTexture)) return false;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+    UINT rowCount = 0;
+    UINT64 rowSizeInBytes = 0;
+    UINT64 totalBytes = 0;
+    const D3D12_RESOURCE_DESC resourceDesc = outTexture.resource->GetDesc();
+    device.GetDevice()->GetCopyableFootprints(&resourceDesc, 0, 1, 0, &footprint, &rowCount, &rowSizeInBytes, &totalBytes);
+    rhi::GpuBuffer staging;
+    if (!device.Allocator().CreateUploadBuffer(totalBytes, L"RoadMaskStaging", staging)) {
+        device.DeferRelease(outTexture);
+        return false;
+    }
+    void* mapped = nullptr;
+    const D3D12_RANGE readRange = {0, 0};
+    if (FAILED(staging.resource->Map(0, &readRange, &mapped))) {
+        device.DeferRelease(staging);
+        device.DeferRelease(outTexture);
+        return false;
+    }
+    auto* destination = static_cast<uint8_t*>(mapped) + footprint.Offset;
+    const size_t sourcePitch = size_t(pixels.width) * 4;
+    for (uint32_t row = 0; row < rowCount; ++row) {
+        std::memcpy(destination + size_t(row) * footprint.Footprint.RowPitch, pixels.rgba.data() + size_t(row) * sourcePitch,
+                    static_cast<size_t>(rowSizeInBytes));
+    }
+    staging.resource->Unmap(0, nullptr);
+    const bool uploaded = device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
+        PIXBeginEvent(commandList, PIX_COLOR(160, 200, 120), "UploadRoadMask");
+        const CD3DX12_TEXTURE_COPY_LOCATION destinationLocation(outTexture.resource.Get(), 0);
+        const CD3DX12_TEXTURE_COPY_LOCATION sourceLocation(staging.resource.Get(), footprint);
+        commandList->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
+        // 読み取り状態への遷移は描画側のコマンドリストで行う（ExecuteImmediate は転送専用）。
+        outTexture.state = D3D12_RESOURCE_STATE_COPY_DEST;
+        PIXEndEvent(commandList);
+    });
+    device.DeferRelease(staging);
+    if (!uploaded) {
+        device.DeferRelease(outTexture);
+        return false;
+    }
+    return true;
+}
 
 // GPU 側の SkyboxConstants と一致させること。
 struct SkyboxConstants {
@@ -311,37 +378,84 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
             return false;
         }
     }
-    // 必要な評価器を先に確保し、失敗時は現在のシーンを保つ。
-    std::vector<std::unique_ptr<compositor::MaterialEvaluator>> created(scene.meshes.size());
+    // 必要な評価器（スロット 1〜4）と道路マスクを先に確保し、失敗時は現在のシーンを保つ。
+    struct Created {
+        std::unique_ptr<compositor::MaterialEvaluator> base;
+        std::array<std::unique_ptr<compositor::MaterialEvaluator>, 3> layers;
+        rhi::GpuTexture roadMask;
+    };
+    std::vector<Created> created(scene.meshes.size());
+    const auto failCleanup = [&]() {
+        for (auto& entry : created) {
+            if (entry.base) entry.base->Destroy(device);
+            for (auto& layer : entry.layers) if (layer) layer->Destroy(device);
+            if (entry.roadMask.IsValid()) device.DeferRelease(entry.roadMask);
+        }
+        for (auto& mesh : uploaded) mesh.Release(device);
+        return false;
+    };
+    const auto ensure = [&](std::unique_ptr<compositor::MaterialEvaluator>& slot) {
+        slot = std::make_unique<compositor::MaterialEvaluator>();
+        return slot->Create(device, m_materialResolution);
+    };
     for (size_t i = 0; i < scene.meshes.size(); ++i) {
-        if (!scene.meshes[i].materialStack ||
-            (i < m_sceneMaterials.size() && m_sceneMaterials[i].evaluator)) continue;
-        created[i] = std::make_unique<compositor::MaterialEvaluator>();
-        if (!created[i]->Create(device, m_materialResolution)) {
-            for (auto& evaluator : created) if (evaluator) evaluator->Destroy(device);
-            for (auto& mesh : uploaded) mesh.Release(device);
-            return false;
+        const bool existing = i < m_sceneMaterials.size();
+        if (scene.meshes[i].materialStack && !(existing && m_sceneMaterials[i].evaluator)) {
+            if (!ensure(created[i].base)) return failCleanup();
+        }
+        for (size_t layer = 0; layer < 3; ++layer) {
+            if (scene.meshes[i].layerStacks[layer] && !(existing && m_sceneMaterials[i].layerEvaluators[layer])) {
+                if (!ensure(created[i].layers[layer])) return failCleanup();
+            }
+        }
+        if (scene.meshes[i].roadMask.IsValid() &&
+            !CreateRoadMaskTexture(device, scene.meshes[i].roadMask, created[i].roadMask)) {
+            return failCleanup();
         }
     }
     // 作成・破棄はフレーム開始前。GPUリソースは遅延解放する。
+    const auto destroyMaterial = [&](SceneMaterial& material) {
+        if (material.evaluator) material.evaluator->Destroy(device);
+        material.evaluator.reset();
+        for (auto& layer : material.layerEvaluators) {
+            if (layer) layer->Destroy(device);
+            layer.reset();
+        }
+        if (material.roadMask.IsValid()) device.DeferRelease(material.roadMask);
+    };
     while (m_sceneMaterials.size() > scene.meshes.size()) {
-        if (m_sceneMaterials.back().evaluator) m_sceneMaterials.back().evaluator->Destroy(device);
+        destroyMaterial(m_sceneMaterials.back());
         m_sceneMaterials.pop_back();
     }
     m_sceneMaterials.resize(scene.meshes.size());
+    const auto assignStack = [](compositor::MaterialStack& target, const compositor::MaterialStack& source) {
+        target.Layers() = source.Layers();
+        target.MaskOps() = source.MaskOps();
+        target.SetTerrainScale(source.SizeMeters(), source.HeightMeters());
+        target.MarkDirty();
+    };
     for (size_t i = 0; i < scene.meshes.size(); ++i) {
         auto& target = m_sceneMaterials[i];
         const auto& source = scene.meshes[i].materialStack;
         if (!source) {
             if (target.evaluator) target.evaluator->Destroy(device);
             target.evaluator.reset();
-            continue;
+        } else {
+            if (created[i].base) target.evaluator = std::move(created[i].base);
+            assignStack(target.stack, *source);
         }
-        if (created[i]) target.evaluator = std::move(created[i]);
-        target.stack.Layers() = source->Layers();
-        target.stack.MaskOps() = source->MaskOps();
-        target.stack.SetTerrainScale(source->SizeMeters(), source->HeightMeters());
-        target.stack.MarkDirty();
+        for (size_t layer = 0; layer < 3; ++layer) {
+            const auto& layerSource = scene.meshes[i].layerStacks[layer];
+            if (!layerSource) {
+                if (target.layerEvaluators[layer]) target.layerEvaluators[layer]->Destroy(device);
+                target.layerEvaluators[layer].reset();
+            } else {
+                if (created[i].layers[layer]) target.layerEvaluators[layer] = std::move(created[i].layers[layer]);
+                assignStack(target.layerStacks[layer], *layerSource);
+            }
+        }
+        if (target.roadMask.IsValid()) device.DeferRelease(target.roadMask);
+        target.roadMask = std::move(created[i].roadMask);
     }
     for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes = std::move(uploaded);
@@ -358,6 +472,8 @@ void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
     m_sceneMeshes.clear();
     for (auto& material : m_sceneMaterials) {
         if (material.evaluator) material.evaluator->Destroy(device);
+        for (auto& layer : material.layerEvaluators) if (layer) layer->Destroy(device);
+        if (material.roadMask.IsValid()) device.DeferRelease(material.roadMask);
     }
     m_sceneMaterials.clear();
     m_meshScene.meshes.clear();
@@ -397,6 +513,10 @@ void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
             for (auto& material : m_sceneMaterials) {
                 if (material.evaluator && !material.evaluator->Resize(device, m_materialResolution))
                     TG_LOG_WARN("道路マテリアルの解像度を変更できませんでした");
+                for (auto& layer : material.layerEvaluators) {
+                    if (layer && !layer->Resize(device, m_materialResolution))
+                        TG_LOG_WARN("道路レイヤーの解像度を変更できませんでした");
+                }
             }
         } else {
             m_requestedMaterialResolution = m_materialResolution;
@@ -719,11 +839,25 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     if (m_meshSceneEnabled) {
         for (auto& material : m_sceneMaterials) {
+            // 道路マスクは転送直後は COPY_DEST。頂点 / ドメイン / ピクセルで読むので両方の読み取り状態へ。
+            if (material.roadMask.IsValid()) {
+                TransitionIfNeeded(commandList, material.roadMask,
+                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             // 素材編集・画像の再読込はグラフ構造を変えず、共通スタックの版を進める。
-            if (m_sceneMaterialSourceRevision != stack.Revision()) material.stack.MarkDirty();
+            if (m_sceneMaterialSourceRevision != stack.Revision()) {
+                material.stack.MarkDirty();
+                for (auto& layerStack : material.layerStacks) layerStack.MarkDirty();
+            }
             if (material.evaluator)
                 material.evaluator->Update(device, pipelineCache, commandList, material.stack,
                                            textures, materials, paintMasks);
+            for (size_t layer = 0; layer < 3; ++layer) {
+                if (material.layerEvaluators[layer])
+                    material.layerEvaluators[layer]->Update(device, pipelineCache, commandList,
+                                                            material.layerStacks[layer], textures, materials, paintMasks);
+            }
         }
         m_sceneMaterialSourceRevision = stack.Revision();
     }
@@ -854,17 +988,45 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 XMStoreFloat4x4(&drawConstants.normalMatrix, XMMatrixIdentity());
                 drawConstants.roadMetersPerUv = m_meshScene.meshes[i].roadMetersPerUv;
                 drawConstants.displacementScale = m_meshScene.meshes[i].displacementMeters;
-                // 白線など、別のメッシュ（道路面）の材質ハイトで押し出す。
+                // レイヤー（スロット 1〜4）と道路マスク。白線は押し出し元の道路面のものを写す。
                 const int source = m_meshScene.meshes[i].displacementSource;
-                if (source >= 0 && static_cast<size_t>(source) < m_sceneMaterials.size()) {
-                    const auto& sourceEvaluator = m_sceneMaterials[static_cast<size_t>(source)].evaluator;
-                    if (sourceEvaluator && sourceEvaluator->EvaluatedRevision() != 0 &&
-                        sourceEvaluator->Textures().IsValid()) {
-                        drawConstants.displacementHeightIndex = sourceEvaluator->Textures().height.SrvIndex();
-                        drawConstants.displacementUseRoadUv = 1u;
-                    } else {
-                        drawConstants.displacementScale = 0.0f;
+                const size_t layerSource = (source >= 0 && static_cast<size_t>(source) < m_sceneMaterials.size())
+                                               ? static_cast<size_t>(source) : i;
+                {
+                    const auto& lm = m_meshScene.meshes[layerSource];
+                    const auto& lsm = m_sceneMaterials[layerSource];
+                    const auto valid = [](const std::unique_ptr<compositor::MaterialEvaluator>& e) {
+                        return e && e->EvaluatedRevision() != 0 && e->Textures().IsValid();
+                    };
+                    for (int slot = 0; slot < 4; ++slot) {
+                        drawConstants.layerBaseColorIndex[slot] = kNoShadowIndex;
+                        drawConstants.layerNormalIndex[slot] = kNoShadowIndex;
+                        drawConstants.layerSurfaceIndex[slot] = kNoShadowIndex;
+                        drawConstants.layerHeightIndex[slot] = kNoShadowIndex;
+                        drawConstants.layerWorldUv[slot] = lm.layerWorldUv[static_cast<size_t>(slot)] ? 1u : 0u;
+                        drawConstants.layerUvRepeat[slot] = slot == 0 ? lm.roadMetersPerUv : lm.layerUvRepeat[static_cast<size_t>(slot)];
+                        const compositor::MaterialEvaluator* evaluator =
+                            slot == 0 ? lsm.evaluator.get() : lsm.layerEvaluators[static_cast<size_t>(slot - 1)].get();
+                        if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {
+                            const auto& maps = evaluator->Textures();
+                            drawConstants.layerBaseColorIndex[slot] = maps.baseColor.SrvIndex();
+                            drawConstants.layerNormalIndex[slot] = maps.normal.SrvIndex();
+                            drawConstants.layerSurfaceIndex[slot] = maps.surface.SrvIndex();
+                            drawConstants.layerHeightIndex[slot] = maps.height.SrvIndex();
+                        }
                     }
+                    (void)valid;
+                    const bool baseReady = drawConstants.layerHeightIndex[0] != kNoShadowIndex;
+                    drawConstants.layerCount = baseReady ? 4u : 0u;
+                    drawConstants.roadMaskIndex = lsm.roadMask.IsValid() ? lsm.roadMask.SrvIndex() : kNoShadowIndex;
+                    drawConstants.layerBlendRange = lm.layerBlendRange;
+                    drawConstants.roadUvAlongU = lm.roadUvAlongU ? 1u : 0u;
+                    drawConstants.roadMaskScale[0] = lm.roadWidthMeters > 0.0f ? 1.0f / lm.roadWidthMeters : 0.0f;
+                    drawConstants.roadMaskScale[1] = lm.roadLengthMeters > 0.0f ? 1.0f / lm.roadLengthMeters : 0.0f;
+                    drawConstants.roadUvMetersPerUv = lm.roadMetersPerUv;
+                    // 道路面自身はレイヤーで陰影を付ける。白線は自分の材質で描き、押し出しだけ道路に合わせる。
+                    drawConstants.shadeLayers = (layerSource == i && baseReady && drawConstants.roadMaskIndex != kNoShadowIndex) ? 1u : 0u;
+                    if (!baseReady) drawConstants.displacementScale = 0.0f;
                 }
                 if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;
                 const auto& material = m_meshScene.meshes[i].material;

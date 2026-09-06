@@ -39,6 +39,8 @@ enum class ValueType : uint32_t {
     // パス（地形の上に引いた向き付きの線）。Path ノードが出し、Mask Path が読む。
     Path = 2,
     Mesh = 3,
+    // 道路空間マスク（横位置 × 実距離）。Road Mask ノードが出し、Road のマスク入力が読む。
+    RoadMask = 4,
 };
 
 enum class NodeKind : uint32_t {
@@ -46,6 +48,8 @@ enum class NodeKind : uint32_t {
     MeshOutput = 25,
     // 道路面の上に白線の帯ポリゴンを生成する。RoadSurfaceを受け、道路と白線をまとめて出す。
     RoadMarking = 26,
+    // 道路空間マスク。轍・端の減衰・長さ方向ノイズを Road のスロット 2〜4 の被覆率にする。
+    RoadMask = 27,
     Surface = 0,
     Shape = 1,
     Liquid = 2,
@@ -172,6 +176,9 @@ struct PathNodeSettings {
     PathSettings path;
 };
 
+// 道路の材質スロット数。スロット 1 が下地、2〜4 は道路マスクの R / G / B で被覆する。
+inline constexpr int kRoadMaterialSlots = 4;
+
 struct RoadNodeSettings {
     float widthMeters = 6.0f;
     float uvRepeatMeters = 1.0f;
@@ -179,6 +186,42 @@ struct RoadNodeSettings {
     float displacementMeters = 0.0f;
     // 真なら道路の長さ方向を U にする（既定は V）。横長のテクスチャを道路に沿わせるとき。
     bool uvAlongU = false;
+    // スロットごとのテクスチャ座標。真ならワールド XZ 平面、偽なら道路 UV。
+    bool layerWorldUv[kRoadMaterialSlots] = {false, false, false, false};
+    // スロット 2〜4 の UV 反復長（m）。スロット 1 は uvRepeatMeters。
+    float layerUvRepeatMeters[kRoadMaterialSlots] = {1.0f, 1.0f, 1.0f, 1.0f};
+    // ハイトで競合させるときの境界の柔らかさ（ハイト 0〜1 の単位）。
+    float layerBlendRange = 0.2f;
+};
+
+// 道路空間マスクの形。
+enum class RoadMaskShape : uint32_t {
+    WheelTracks = 0,  // 轍。車線中央 ± タイヤ間隔/2 の帯
+    EdgeFalloff = 1,  // 道路端からの距離で減衰
+    LengthNoise = 2,  // 長さ方向のノイズをしきい値で切る
+    Constant = 3,     // 一様
+};
+
+struct RoadMaskNodeSettings {
+    RoadMaskShape shape = RoadMaskShape::WheelTracks;
+    // 轍。車線中央の中心線からの距離、タイヤ間隔、帯の幅、縁のぼかし。
+    float laneOffsetMeters = 1.5f;
+    float trackSpacingMeters = 1.5f;
+    float trackWidthMeters = 0.35f;
+    float featherMeters = 0.25f;
+    bool bothLanes = true;
+    // 端の減衰。端で 1 になる幅と、その内側のぼかし幅。
+    float edgeWidthMeters = 0.3f;
+    // 長さ方向ノイズ。
+    float noiseScaleMeters = 4.0f;
+    float threshold = 0.5f;
+    float softness = 0.2f;
+    uint32_t seed = 1u;
+    // 長さ方向のムラ（どの形にも掛かる）。0 で一様。
+    float breakupAmount = 0.3f;
+    float breakupScaleMeters = 3.0f;
+    float strength = 1.0f;
+    bool invert = false;
 };
 
 // 道路網に共通の設定。走行側は道路ごとではなくプロジェクトで 1 つ。
@@ -226,7 +269,7 @@ struct OutputNodeSettings {};
 
 using NodeSettings =
     std::variant<LayerNodeSettings, MaskNodeSettings, OutputNodeSettings, PathNodeSettings, RoadNodeSettings,
-                 RoadMarkingNodeSettings>;
+                 RoadMarkingNodeSettings, RoadMaskNodeSettings>;
 
 struct Node {
     GraphId id = 0;

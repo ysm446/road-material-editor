@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compositor/MaterialStack.h"
+#include <array>
 #include <optional>
 #include <DirectXMath.h>
 #include <cstdint>
@@ -47,6 +48,23 @@ struct SceneMesh {
     int displacementSource = -1;
     // 接続から導出した材質。GPU参照や保存対象ではない。
     std::optional<compositor::MaterialStack> materialStack;
+    // 道路のレイヤー。スロット 2〜4 の材質と、それらの被覆率を持つ道路空間マスク（RGBA8）。
+    // 描画時にハイトでブレンドし、変位もブレンド後のハイトで行う。設計は docs/design/road-material-layers.md。
+    std::array<std::optional<compositor::MaterialStack>, 3> layerStacks;
+    struct RoadMaskPixels {
+        uint32_t width = 0;
+        uint32_t height = 0;
+        std::vector<uint8_t> rgba;
+        bool IsValid() const { return width > 0 && height > 0 && rgba.size() == size_t(width) * height * 4; }
+    } roadMask;
+    // スロットごとのテクスチャ座標（真ならワールド XZ）と UV 反復長（m）。[0] は roadMetersPerUv と同じ。
+    std::array<bool, 4> layerWorldUv{false, false, false, false};
+    std::array<float, 4> layerUvRepeat{1.0f, 1.0f, 1.0f, 1.0f};
+    float layerBlendRange = 0.2f;
+    // 道路の幅・長さ（m）と、道路 UV の向き。マスクの座標と変位の共有に使う。
+    float roadWidthMeters = 0.0f;
+    float roadLengthMeters = 0.0f;
+    bool roadUvAlongU = false;
     // 合成モードを決める材質（一番上のレイヤーの材質）。道路面では使わない。
     compositor::MaterialAssetId blendMaterial = compositor::kNoMaterialAsset;
     // 材質の合成モード（マスク抜き / 半透明）を使うか。白線などの帯だけ真。

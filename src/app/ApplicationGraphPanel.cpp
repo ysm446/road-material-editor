@@ -76,6 +76,8 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.52f, 0.74f, 0.84f, 1.0f);
         case graph::NodeKind::RoadMarking:
             return ImVec4(0.80f, 0.80f, 0.76f, 1.0f);
+        case graph::NodeKind::RoadMask:
+            return ImVec4(0.78f, 0.66f, 0.50f, 1.0f);
         case graph::NodeKind::MaskPath:
         case graph::NodeKind::MaskArea:
             return ImVec4(0.58f, 0.74f, 0.82f, 1.0f);
@@ -101,6 +103,9 @@ ImVec4 PinTypeColor(graph::ValueType valueType) {
         // マテリアルは緑。4 チャンネル一式（ハイトを含む）。
         case graph::ValueType::Mesh:
             return ImGui::GetStyleColorVec4(ImGuiCol_PlotLines);
+        // 道路空間マスクは茶色寄りのオレンジ。タイル空間のマスク（オレンジ）と区別する。
+        case graph::ValueType::RoadMask:
+            return ImVec4(0.80f, 0.56f, 0.34f, 1.0f);
         case graph::ValueType::Material:
         default:
             return ImVec4(0.70f, 0.93f, 0.78f, 1.0f);
@@ -847,6 +852,7 @@ void Application::DrawGraphEditor() {
         };
         addNodeMenuItem(graph::NodeKind::Road, "Road — Pathから道路面と左右境界を生成");
         addNodeMenuItem(graph::NodeKind::RoadMarking, "Lane Marking — 道路面に白線の帯を生成");
+        addNodeMenuItem(graph::NodeKind::RoadMask, "Road Mask — 轍・端・ムラの道路空間マスク");
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Heightmap, "Heightmap — 画像を地形として読み込む");
@@ -1076,7 +1082,103 @@ void Application::DrawGraphPanel() {
             ui::PropertyValue("走行側", "%s", m_graph.RoadNetwork().leftHandTraffic ? "左側通行" : "右側通行");
             ui::EndPropertyTable();
         }
-        ui::HintText("MaterialにSurfaceなどのResultを接続して材質を適用。RoadSurfaceはMesh Outputへ、Left / Rightは進行方向に向かって左右の境界Path。走行側はプレビュー設定の「道路」で切り替える。");
+        // 材質スロット。1 は下地、2〜4 は Mask 2〜4 で被覆する。座標と反復長はスロットごと。
+        ui::SectionHeader("材質スロット");
+        if (ui::BeginPropertyTable("roadLayerRows")) {
+            static const char* const kUvSpaceLabels[] = {"道路に沿う", "ワールド XZ"};
+            std::vector<const graph::Pin*> materialPins;
+            std::vector<const graph::Pin*> maskPins;
+            for (const auto& pin : selected->inputs) {
+                if (pin.valueType == graph::ValueType::Material) materialPins.push_back(&pin);
+                if (pin.valueType == graph::ValueType::RoadMask) maskPins.push_back(&pin);
+            }
+            for (int slot = 0; slot < graph::kRoadMaterialSlots; ++slot) {
+                char label[32];
+                std::snprintf(label, sizeof(label), "スロット %d", slot + 1);
+                const bool hasMaterial = slot < static_cast<int>(materialPins.size()) &&
+                                         m_graph.FindUpstreamNodeForPin(materialPins[slot]->id) != nullptr;
+                const bool hasMask = slot == 0 || (slot - 1 < static_cast<int>(maskPins.size()) &&
+                                                  m_graph.FindUpstreamNodeForPin(maskPins[slot - 1]->id) != nullptr);
+                ui::PropertyValue(label, "%s", !hasMaterial ? "材質なし" : (hasMask ? "有効" : "マスクなし（無効）"));
+                if (!hasMaterial) continue;
+                char spaceId[32];
+                std::snprintf(spaceId, sizeof(spaceId), "  座標##slot%d", slot);
+                int space = road->layerWorldUv[slot] ? 1 : 0;
+                if (ui::PropertyCombo(spaceId, &space, kUvSpaceLabels, IM_ARRAYSIZE(kUvSpaceLabels), 0,
+                                      "道路に沿う: 道路 UV。ワールド XZ: 位置の XZ 平面。路肩や地面と地続きにする層は XZ")) {
+                    road->layerWorldUv[slot] = (space == 1);
+                    changed = true;
+                }
+                if (slot > 0) {
+                    char repeatId[32];
+                    std::snprintf(repeatId, sizeof(repeatId), "  UV反復長##slot%d", slot);
+                    changed |= ui::PropertyFloat(repeatId, &road->layerUvRepeatMeters[slot], 0.1f, 100.0f, 1.0f,
+                                                 "このスロットの材質で UV が 1 増える実距離", "%.2f m");
+                }
+            }
+            changed |= ui::PropertyFloat("ブレンド幅", &road->layerBlendRange, 0.0f, 1.0f, defaults.layerBlendRange,
+                                         "スロット同士をハイトで競合させるときの境界の柔らかさ。小さいほど凹凸なりにぎざぎざ", "%.2f");
+            ui::EndPropertyTable();
+        }
+        ui::HintText("Material にSurfaceなどのResultを接続して材質を適用。Material 2〜4 は Road Mask を Mask 2〜4 へ繋いだ所に出る。"
+                     "RoadSurfaceはMesh Outputへ、Left / Rightは進行方向に向かって左右の境界Path。走行側はプレビュー設定の「道路」で切り替える。");
+        if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
+    } else if (auto* roadMask = std::get_if<graph::RoadMaskNodeSettings>(&selected->settings)) {
+        bool changed = false;
+        const graph::RoadMaskNodeSettings defaults;
+        if (ui::BeginPropertyTable("roadMaskRows")) {
+            static const char* const kShapeLabels[] = {"轍", "端の減衰", "長さ方向ノイズ", "一様"};
+            int shape = static_cast<int>(roadMask->shape);
+            if (ui::PropertyCombo("形", &shape, kShapeLabels, IM_ARRAYSIZE(kShapeLabels), 0,
+                                  "轍: 車線中央 ± タイヤ間隔/2 の帯。端の減衰: 道路端で 1。長さ方向ノイズ: しきい値で切る")) {
+                roadMask->shape = static_cast<graph::RoadMaskShape>(shape);
+                changed = true;
+            }
+            switch (roadMask->shape) {
+                case graph::RoadMaskShape::WheelTracks:
+                    changed |= ui::PropertyFloat("車線中央", &roadMask->laneOffsetMeters, 0.0f, 10.0f, defaults.laneOffsetMeters,
+                                                 "中心線から車線中央までの距離", "%.2f m");
+                    changed |= ui::PropertyFloat("タイヤ間隔", &roadMask->trackSpacingMeters, 0.5f, 3.0f, defaults.trackSpacingMeters,
+                                                 "左右のタイヤの間隔", "%.2f m");
+                    changed |= ui::PropertyFloat("帯の幅", &roadMask->trackWidthMeters, 0.05f, 2.0f, defaults.trackWidthMeters,
+                                                 "轍 1 本の幅", "%.2f m");
+                    changed |= ui::PropertyFloat("ぼかし", &roadMask->featherMeters, 0.0f, 2.0f, defaults.featherMeters,
+                                                 "帯の縁を 0 へ落とす幅", "%.2f m");
+                    changed |= ui::PropertyBool("両車線", &roadMask->bothLanes, defaults.bothLanes, "中心線の左右両方に置く");
+                    break;
+                case graph::RoadMaskShape::EdgeFalloff:
+                    changed |= ui::PropertyFloat("端の幅", &roadMask->edgeWidthMeters, 0.0f, 5.0f, defaults.edgeWidthMeters,
+                                                 "道路端から内側へ 1 のまま続く幅", "%.2f m");
+                    changed |= ui::PropertyFloat("ぼかし", &roadMask->featherMeters, 0.0f, 5.0f, defaults.featherMeters,
+                                                 "その内側で 0 へ落とす幅", "%.2f m");
+                    break;
+                case graph::RoadMaskShape::LengthNoise:
+                    changed |= ui::PropertyFloat("ノイズの大きさ", &roadMask->noiseScaleMeters, 0.1f, 50.0f, defaults.noiseScaleMeters,
+                                                 "ノイズ 1 周期の実距離", "%.1f m", ImGuiSliderFlags_Logarithmic);
+                    changed |= ui::PropertyFloat("しきい値", &roadMask->threshold, 0.0f, 1.0f, defaults.threshold,
+                                                 "これより大きい所が 1", "%.2f");
+                    changed |= ui::PropertyFloat("柔らかさ", &roadMask->softness, 0.01f, 1.0f, defaults.softness,
+                                                 "しきい値まわりの遷移幅", "%.2f");
+                    break;
+                default:
+                    break;
+            }
+            changed |= ui::PropertyFloat("ムラ", &roadMask->breakupAmount, 0.0f, 1.0f, defaults.breakupAmount,
+                                         "長さ方向のノイズを掛ける量。0 で一様", "%.2f");
+            if (roadMask->breakupAmount > 0.0f) {
+                changed |= ui::PropertyFloat("ムラの大きさ", &roadMask->breakupScaleMeters, 0.1f, 50.0f, defaults.breakupScaleMeters,
+                                             "ムラ 1 周期の実距離", "%.1f m", ImGuiSliderFlags_Logarithmic);
+            }
+            int seed = static_cast<int>(roadMask->seed);
+            if (ui::PropertyInt("シード", &seed, 0, 9999, static_cast<int>(defaults.seed), "ノイズの並びを変える")) {
+                roadMask->seed = static_cast<uint32_t>(std::max(0, seed));
+                changed = true;
+            }
+            changed |= ui::PropertyFloat("強さ", &roadMask->strength, 0.0f, 1.0f, defaults.strength, "全体に掛ける倍率", "%.2f");
+            changed |= ui::PropertyBool("反転", &roadMask->invert, defaults.invert, "1 − 値にする");
+            ui::EndPropertyTable();
+        }
+        ui::HintText("Mask を Road の Mask 2〜4 へ繋ぐと、対応する Material 2〜4 の被覆率になる。横位置と実距離で決まり、タイルは繰り返さない。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&selected->settings)) {
         bool changed = false;

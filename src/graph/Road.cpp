@@ -1,5 +1,6 @@
 #include "graph/Road.h"
 #include "graph/RoadProfile.h"
+#include "graph/RoadMask.h"
 
 #include <algorithm>
 #include <cmath>
@@ -411,22 +412,78 @@ bool EvaluateRoad(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result, 
 }
 
 namespace {
-// Material入力に繋いだResultを、そのメッシュの材質として合成する。
+// Material 入力に繋いだ Result を合成用のスタックにする。
+bool BuildStack(const NodeGraph& graph, const Pin& pin, float metersPerUv, compositor::MaterialStack& out,
+                compositor::MaterialAssetId* outTopMaterial) {
+    const Node* source = graph.FindUpstreamNodeForPin(pin.id);
+    if (source == nullptr) return false;
+    auto material = graph.CompileLayersTo(source->id);
+    out.Layers() = std::move(material.layers);
+    out.MaskOps() = std::move(material.maskOps);
+    // 1 UVタイルの実寸でハイト由来の法線を評価する。
+    out.SetTerrainScale(metersPerUv, 1.0f);
+    if (outTopMaterial) {
+        for (auto it = out.Layers().rbegin(); it != out.Layers().rend(); ++it) {
+            if (it->material != compositor::kNoMaterialAsset) { *outTopMaterial = it->material; break; }
+        }
+    }
+    return true;
+}
+
+// 最初の Material 入力（スロット 1）だけを繋ぐ。白線など、レイヤーを持たないメッシュ用。
 void AttachMaterial(const NodeGraph& graph, const Node& node, renderer::SceneMesh& mesh) {
     for (const auto& pin : node.inputs) {
         if (pin.valueType != ValueType::Material) continue;
-        if (const Node* source = graph.FindUpstreamNodeForPin(pin.id)) {
-            auto material = graph.CompileLayersTo(source->id);
-            mesh.materialStack.emplace();
-            mesh.materialStack->Layers() = std::move(material.layers);
-            mesh.materialStack->MaskOps() = std::move(material.maskOps);
-            // 1 UVタイルの実寸でハイト由来の法線を評価する。
-            mesh.materialStack->SetTerrainScale(mesh.roadMetersPerUv, 1.0f);
-            // 合成モードは一番上のレイヤーの材質から決める。
-            for (auto it = mesh.materialStack->Layers().rbegin(); it != mesh.materialStack->Layers().rend(); ++it) {
-                if (it->material != compositor::kNoMaterialAsset) { mesh.blendMaterial = it->material; break; }
-            }
+        compositor::MaterialStack stack;
+        if (BuildStack(graph, pin, mesh.roadMetersPerUv, stack, &mesh.blendMaterial)) {
+            mesh.materialStack = std::move(stack);
         }
+        break;
+    }
+}
+
+// Road のスロット 1〜4 と道路マスク。スロット 2〜4 は材質とマスクの両方が繋がったときだけ有効。
+void AttachRoadLayers(const NodeGraph& graph, const Node& node, const RoadNodeSettings& settings,
+                      float lengthMeters, renderer::SceneMesh& mesh) {
+    std::vector<const Pin*> materialPins;
+    std::vector<const Pin*> maskPins;
+    for (const auto& pin : node.inputs) {
+        if (pin.valueType == ValueType::Material) materialPins.push_back(&pin);
+        if (pin.valueType == ValueType::RoadMask) maskPins.push_back(&pin);
+    }
+    mesh.roadWidthMeters = settings.widthMeters;
+    mesh.roadLengthMeters = lengthMeters;
+    mesh.roadUvAlongU = settings.uvAlongU;
+    mesh.layerBlendRange = settings.layerBlendRange;
+    for (int slot = 0; slot < kRoadMaterialSlots; ++slot) {
+        mesh.layerWorldUv[slot] = settings.layerWorldUv[slot];
+        mesh.layerUvRepeat[slot] = slot == 0 ? settings.uvRepeatMeters : std::max(0.01f, settings.layerUvRepeatMeters[slot]);
+    }
+    if (!materialPins.empty()) {
+        compositor::MaterialStack stack;
+        if (BuildStack(graph, *materialPins[0], settings.uvRepeatMeters, stack, &mesh.blendMaterial)) {
+            mesh.materialStack = std::move(stack);
+        }
+    }
+    const RoadMaskNodeSettings* channels[3] = {nullptr, nullptr, nullptr};
+    bool anyLayer = false;
+    for (int layer = 0; layer < 3; ++layer) {
+        if (layer + 1 >= static_cast<int>(materialPins.size()) || layer >= static_cast<int>(maskPins.size())) continue;
+        const Node* maskNode = graph.FindUpstreamNodeForPin(maskPins[layer]->id);
+        const auto* maskSettings = maskNode ? std::get_if<RoadMaskNodeSettings>(&maskNode->settings) : nullptr;
+        compositor::MaterialStack stack;
+        if (maskSettings == nullptr ||
+            !BuildStack(graph, *materialPins[layer + 1], mesh.layerUvRepeat[layer + 1], stack, nullptr))
+            continue;
+        mesh.layerStacks[layer] = std::move(stack);
+        channels[layer] = maskSettings;
+        anyLayer = true;
+    }
+    if (anyLayer) {
+        const RoadMaskImage image = BakeRoadMask(channels, settings.widthMeters, lengthMeters);
+        mesh.roadMask.width = image.width;
+        mesh.roadMask.height = image.height;
+        mesh.roadMask.rgba = image.rgba;
     }
 }
 
@@ -451,7 +508,13 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             mesh.material.roughness = 0.85f;
             mesh.roadMetersPerUv = chain.road.settings.uvRepeatMeters;
             mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
-            AttachMaterial(graph, *node, mesh);
+            {
+                const auto& v = chain.road.surface.vertices;
+                const float length = v.empty() ? 0.0f : v.back().uv.y * chain.road.settings.uvRepeatMeters;
+                AttachRoadLayers(graph, *node, chain.road.settings,
+                                 chain.road.settings.uvAlongU ? (v.empty() ? 0.0f : v.back().uv.x * chain.road.settings.uvRepeatMeters) : length,
+                                 mesh);
+            }
             chain.roadIndex = static_cast<int>(chain.meshes.size());
             chain.meshes.push_back(std::move(mesh));
             success = true;

@@ -82,7 +82,23 @@ struct MeshConstants
     // 不透明度の扱い。0 = 不透明、1 = マスク抜き、2 = 半透明。
     uint opacityMode;
     float opacityThreshold;
+
+    // 道路のレイヤー（スロット 1〜4）。C++ の MeshConstants と同じ並び。
+    uint4 layerBaseColorIndex;
+    uint4 layerNormalIndex;
+    uint4 layerSurfaceIndex;
+    uint4 layerHeightIndex;
+    uint4 layerWorldUv;
+    float4 layerUvRepeat;
+    uint roadMaskIndex;
+    uint layerCount;
+    float layerBlendRange;
+    uint roadUvAlongU;
+    float2 roadMaskScale;
+    float roadUvMetersPerUv;
+    uint shadeLayers;
 };
+
 
 // 「ハイト（ローカル）」で周りの平均を取る半径（合成テクセル）と、
 // 引いた差を 0〜1 へ伸ばす倍率。素材の凹凸が見える強さとして選んである。
@@ -103,6 +119,82 @@ static const float kLocalHeightGain = 16.0f;
 #define TG_VIEW_CLAY            10
 
 ConstantBuffer<MeshConstants> g_mesh : register(b1);
+
+static const uint kNoTextureIndex = 0xFFFFFFFFu;
+
+// --- 道路のレイヤー -------------------------------------------------------
+// docs/design/road-material-layers.md。道路 UV から道路座標（横位置, 実距離）を作り、
+// スロットごとに道路 UV かワールド XZ でタイルを引き、道路空間マスクの重みとハイトで競合させる。
+
+// 道路座標（m）。x = 列 0（Right 端）からの横距離、y = 始点からの実距離。
+float2 RoadMetersFromUv(float2 roadUv)
+{
+    const float2 meters = roadUv * g_mesh.roadUvMetersPerUv;
+    return (g_mesh.roadUvAlongU != 0u) ? meters.yx : meters;
+}
+
+float2 LayerUv(uint slot, float2 meters, float3 worldPosition)
+{
+    const float repeat = max(g_mesh.layerUvRepeat[slot], 1e-3f);
+    if (g_mesh.layerWorldUv[slot] != 0u)
+    {
+        return worldPosition.xz / repeat;
+    }
+    const float2 uv = meters / repeat;
+    return (g_mesh.roadUvAlongU != 0u) ? uv.yx : uv;
+}
+
+// スロット 1〜4 の被覆率。マスクが無ければスロット 1 だけ。
+float4 LayerCoverage(float2 meters)
+{
+    float4 weights = float4(1.0f, 0.0f, 0.0f, 0.0f);
+    if (g_mesh.roadMaskIndex == kNoTextureIndex)
+    {
+        return weights;
+    }
+    Texture2D<float4> mask = ResourceDescriptorHeap[g_mesh.roadMaskIndex];
+    const float3 coverage = mask.SampleLevel(g_samplerLinearClamp, meters * g_mesh.roadMaskScale, 0.0f).rgb;
+    weights.y = (g_mesh.layerHeightIndex.y != kNoTextureIndex) ? coverage.x : 0.0f;
+    weights.z = (g_mesh.layerHeightIndex.z != kNoTextureIndex) ? coverage.y : 0.0f;
+    weights.w = (g_mesh.layerHeightIndex.w != kNoTextureIndex) ? coverage.z : 0.0f;
+    weights.x = saturate(1.0f - (weights.y + weights.z + weights.w));
+    return weights;
+}
+
+// ハイトで競合させた重み。被覆率 0 のスロットは出さない。
+float4 LayerHeightBlend(float4 coverage, float4 heights)
+{
+    const float4 score = heights + coverage;
+    const float peak = max(max(score.x, score.y), max(score.z, score.w));
+    float4 blend = max(score - peak + max(g_mesh.layerBlendRange, 1e-3f), 0.0f);
+    blend *= step(1e-6f, coverage);
+    const float total = blend.x + blend.y + blend.z + blend.w;
+    return (total > 1e-5f) ? blend / total : float4(1.0f, 0.0f, 0.0f, 0.0f);
+}
+
+float LayerHeightLevel(uint slot, float2 uv)
+{
+    Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.layerHeightIndex[slot]];
+    return heightMap.SampleLevel(g_samplerAnisoWrap, uv, 0.0f);
+}
+
+// 頂点 / ドメインシェーダ用。ブレンド後のハイト。
+float BlendedHeightLevel(float2 roadUv, float3 worldPosition)
+{
+    const float2 meters = RoadMetersFromUv(roadUv);
+    const float4 coverage = LayerCoverage(meters);
+    float4 heights = 0.5f;
+    [unroll]
+    for (uint slot = 0; slot < 4; ++slot)
+    {
+        if (coverage[slot] > 0.0f && g_mesh.layerHeightIndex[slot] != kNoTextureIndex)
+        {
+            heights[slot] = LayerHeightLevel(slot, LayerUv(slot, meters, worldPosition));
+        }
+    }
+    const float4 blend = LayerHeightBlend(coverage, heights);
+    return dot(blend, heights);
+}
 
 // --- 合成結果のサンプリング ------------------------------------------------
 // 道路は実距離UVを反復し、旧平面プレビューは端をクランプする。
@@ -149,6 +241,7 @@ struct VsOutput
     float3 worldTangent  : TANGENT;
     float tangentSign    : TANGENTSIGN;
     float2 uv            : TEXCOORD0;
+    float2 roadUv : TEXCOORD1;
 };
 
 // ライトから見た深度と比べて、この画素が影の中かを返す（1 = 当たっている）。
@@ -207,10 +300,10 @@ float3 ApplyDisplacement(float3 worldPosition, float3 worldNormal, float2 uv, fl
         return worldPosition;
     }
     float height = 0.5f;
-    if (g_mesh.displacementUseRoadUv != 0u)
+    if (g_mesh.layerCount > 0u)
     {
-        Texture2D<float> roadHeight = ResourceDescriptorHeap[g_mesh.displacementHeightIndex];
-        height = roadHeight.SampleLevel(g_samplerAnisoWrap, roadUv, 0.0f);
+        // 道路面と、その上の帯（白線）。同じ道路座標からブレンド後のハイトを読む。
+        height = BlendedHeightLevel(roadUv, worldPosition);
     }
     else if (g_mesh.useMaterialTextures != 0u)
     {
@@ -239,6 +332,7 @@ VsOutput VsMain(VsInput input)
     output.worldTangent = mul((float3x3)g_mesh.model, input.tangent.xyz);
     output.tangentSign = input.tangent.w;
     output.uv = input.uv;
+    output.roadUv = input.roadUv;
 
     return output;
 }
@@ -349,6 +443,7 @@ VsOutput DsMain(HsPatchConstants patchConstants, float3 barycentric : SV_DomainL
     output.worldTangent = worldTangent;
     output.tangentSign = patch[0].tangentSign;
     output.uv = uv;
+    output.roadUv = roadUv;
     return output;
 }
 
@@ -427,7 +522,54 @@ PsOutput PsMain(VsOutput input)
         normal = (dot(faceNormal, viewDirection) < 0.0f) ? -faceNormal : faceNormal;
     }
 
-    if (useMaterialShading)
+    if (useMaterialShading && g_mesh.shadeLayers != 0u)
+    {
+        // 道路面。スロット 1〜4 を道路空間マスクの被覆率とハイトで競合させて混ぜる。
+        const float2 meters = RoadMetersFromUv(input.roadUv);
+        const float4 coverage = LayerCoverage(meters);
+        float2 uvs[4];
+        float4 heights = 0.5f;
+        [unroll]
+        for (uint slot = 0; slot < 4; ++slot)
+        {
+            uvs[slot] = LayerUv(slot, meters, input.worldPosition);
+            if (coverage[slot] > 0.0f && g_mesh.layerHeightIndex[slot] != kNoTextureIndex)
+            {
+                Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.layerHeightIndex[slot]];
+                heights[slot] = heightMap.Sample(g_samplerAnisoWrap, uvs[slot]);
+            }
+        }
+        const float4 blend = LayerHeightBlend(coverage, heights);
+        float3 blendedColor = 0.0f;
+        float2 blendedNormal = 0.0f;
+        float4 blendedSurface = 0.0f;
+        [unroll]
+        for (uint slot2 = 0; slot2 < 4; ++slot2)
+        {
+            if (blend[slot2] <= 0.0f || g_mesh.layerBaseColorIndex[slot2] == kNoTextureIndex)
+            {
+                continue;
+            }
+            Texture2D<float4> baseColorMap = ResourceDescriptorHeap[g_mesh.layerBaseColorIndex[slot2]];
+            Texture2D<float2> normalMap    = ResourceDescriptorHeap[g_mesh.layerNormalIndex[slot2]];
+            Texture2D<float4> surfaceMap   = ResourceDescriptorHeap[g_mesh.layerSurfaceIndex[slot2]];
+            blendedColor += baseColorMap.Sample(g_samplerAnisoWrap, uvs[slot2]).rgb * blend[slot2];
+            blendedNormal += normalMap.Sample(g_samplerAnisoWrap, uvs[slot2]) * blend[slot2];
+            blendedSurface += surfaceMap.Sample(g_samplerAnisoWrap, uvs[slot2]) * blend[slot2];
+        }
+        baseColor = blendedColor;
+        roughnessValue = blendedSurface.r;
+        metallicValue = blendedSurface.g;
+        ambientOcclusion = blendedSurface.b;
+        opacity = 1.0f;
+        const float3 tangentNormal = DecodeTangentNormal(blendedNormal);
+        const float3 tangent =
+            normalize(input.worldTangent - geometricNormal * dot(geometricNormal, input.worldTangent));
+        const float3 bitangent = cross(geometricNormal, tangent) * input.tangentSign;
+        normal = normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y +
+                           geometricNormal * tangentNormal.z);
+    }
+    else if (useMaterialShading)
     {
         Texture2D<float4> baseColorMap = ResourceDescriptorHeap[g_mesh.materialBaseColorIndex];
         Texture2D<float2> normalMap    = ResourceDescriptorHeap[g_mesh.materialNormalIndex];

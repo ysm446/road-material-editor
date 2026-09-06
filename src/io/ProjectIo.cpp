@@ -39,7 +39,8 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 5: 任意のメッシュシーン。旧ビルドが scene を無視して地形を表示することを防ぐ。
 // 8: road / meshOutput ノード。9: Road の Material 入力。10: roadMarking ノード。
 // 11: Path の縦断ポイント・バンクポイント。旧ビルドが線形を平坦・水平に読むことを防ぐ。
-constexpr int kProjectFormatVersion = 11;
+// 12: Road の材質スロット 2〜4 と roadMask ノード。旧ビルドがスロット 2〜4 のリンクを捨てて下地だけを出すことを防ぐ。
+constexpr int kProjectFormatVersion = 12;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -1210,7 +1211,29 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
             item["maskArea"] = WriteAreaMask(mask->areaMask);
         } else if (const auto* road = std::get_if<graph::RoadNodeSettings>(&node.settings)) {
             item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters},
-                            {"displacement", road->displacementMeters}, {"uvAlongU", road->uvAlongU}};
+                            {"displacement", road->displacementMeters}, {"uvAlongU", road->uvAlongU},
+                            {"layerWorldUv", json::array({road->layerWorldUv[0], road->layerWorldUv[1],
+                                                          road->layerWorldUv[2], road->layerWorldUv[3]})},
+                            {"layerUvRepeat", json::array({road->layerUvRepeatMeters[0], road->layerUvRepeatMeters[1],
+                                                           road->layerUvRepeatMeters[2], road->layerUvRepeatMeters[3]})},
+                            {"layerBlendRange", road->layerBlendRange}};
+        } else if (const auto* roadMaskSettings = std::get_if<graph::RoadMaskNodeSettings>(&node.settings)) {
+            static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant"};
+            item["roadMask"] = {{"shape", EnumName(kRoadMaskShapeNames, static_cast<uint32_t>(roadMaskSettings->shape))},
+                                {"laneOffset", roadMaskSettings->laneOffsetMeters},
+                                {"trackSpacing", roadMaskSettings->trackSpacingMeters},
+                                {"trackWidth", roadMaskSettings->trackWidthMeters},
+                                {"feather", roadMaskSettings->featherMeters},
+                                {"bothLanes", roadMaskSettings->bothLanes},
+                                {"edgeWidth", roadMaskSettings->edgeWidthMeters},
+                                {"noiseScale", roadMaskSettings->noiseScaleMeters},
+                                {"threshold", roadMaskSettings->threshold},
+                                {"softness", roadMaskSettings->softness},
+                                {"seed", roadMaskSettings->seed},
+                                {"breakupAmount", roadMaskSettings->breakupAmount},
+                                {"breakupScale", roadMaskSettings->breakupScaleMeters},
+                                {"strength", roadMaskSettings->strength},
+                                {"invert", roadMaskSettings->invert}};
         } else if (const auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&node.settings)) {
             item["roadMarking"] = {{"lineWidth", marking->lineWidthMeters},
                                    {"centerLine", marking->centerLine},
@@ -1364,6 +1387,37 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     settings.uvRepeatMeters = ReadFloat(*road, "uvRepeat", settings.uvRepeatMeters);
                     settings.displacementMeters = std::clamp(ReadFloat(*road, "displacement", 0.0f), 0.0f, 5.0f);
                     settings.uvAlongU = ReadBool(*road, "uvAlongU", settings.uvAlongU);
+                    if (const json* worldUv = FindMember(*road, "layerWorldUv"); worldUv && worldUv->is_array()) {
+                        for (size_t i = 0; i < worldUv->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*worldUv)[i].is_boolean()) settings.layerWorldUv[i] = (*worldUv)[i].get<bool>();
+                    }
+                    if (const json* repeat = FindMember(*road, "layerUvRepeat"); repeat && repeat->is_array()) {
+                        for (size_t i = 0; i < repeat->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*repeat)[i].is_number()) settings.layerUvRepeatMeters[i] = std::clamp((*repeat)[i].get<float>(), 0.1f, 100.0f);
+                    }
+                    settings.layerBlendRange = std::clamp(ReadFloat(*road, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
+                }
+                created.settings = settings;
+            } else if (created.kind == graph::NodeKind::RoadMask) {
+                graph::RoadMaskNodeSettings settings;
+                if (const json* mask = FindMember(item, "roadMask"); mask && mask->is_object()) {
+                    static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant"};
+                    settings.shape = static_cast<graph::RoadMaskShape>(
+                        EnumValue(kRoadMaskShapeNames, *mask, "shape", static_cast<uint32_t>(settings.shape)));
+                    settings.laneOffsetMeters = ReadFloat(*mask, "laneOffset", settings.laneOffsetMeters);
+                    settings.trackSpacingMeters = ReadFloat(*mask, "trackSpacing", settings.trackSpacingMeters);
+                    settings.trackWidthMeters = ReadFloat(*mask, "trackWidth", settings.trackWidthMeters);
+                    settings.featherMeters = ReadFloat(*mask, "feather", settings.featherMeters);
+                    settings.bothLanes = ReadBool(*mask, "bothLanes", settings.bothLanes);
+                    settings.edgeWidthMeters = ReadFloat(*mask, "edgeWidth", settings.edgeWidthMeters);
+                    settings.noiseScaleMeters = ReadFloat(*mask, "noiseScale", settings.noiseScaleMeters);
+                    settings.threshold = ReadFloat(*mask, "threshold", settings.threshold);
+                    settings.softness = ReadFloat(*mask, "softness", settings.softness);
+                    settings.seed = static_cast<uint32_t>(std::max(0, ReadInt(*mask, "seed", static_cast<int>(settings.seed))));
+                    settings.breakupAmount = ReadFloat(*mask, "breakupAmount", settings.breakupAmount);
+                    settings.breakupScaleMeters = ReadFloat(*mask, "breakupScale", settings.breakupScaleMeters);
+                    settings.strength = ReadFloat(*mask, "strength", settings.strength);
+                    settings.invert = ReadBool(*mask, "invert", settings.invert);
                 }
                 created.settings = settings;
             } else if (created.kind == graph::NodeKind::RoadMarking) {

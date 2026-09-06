@@ -1,6 +1,7 @@
 #include "TestSupport.h"
 #include "graph/Road.h"
 #include "graph/RoadProfile.h"
+#include "graph/RoadMask.h"
 #include "app/UndoHistory.h"
 #include <cmath>
 
@@ -415,5 +416,84 @@ void RunRoadTests() {
         DocumentSnapshot trafficAfter;
         trafficAfter.roadNetwork = rhs;
         Check(trafficHistory.Undo(trafficAfter).roadNetwork.leftHandTraffic, "undo restores the traffic side");
+    }
+
+    tests::Section("Road mask and material slots");
+    {
+        graph::RoadMaskNodeSettings tracks;
+        tracks.breakupAmount = 0.0f;
+        const float half = 3.0f;
+        Check(std::abs(graph::EvaluateRoadMask(tracks, 1.5f + 0.75f, 10.0f, half, 100.0f) - 1.0f) < 1e-5f &&
+              std::abs(graph::EvaluateRoadMask(tracks, -1.5f - 0.75f, 10.0f, half, 100.0f) - 1.0f) < 1e-5f,
+              "wheel tracks are 1 at lane centre +- half the track spacing");
+        Check(graph::EvaluateRoadMask(tracks, 0.0f, 10.0f, half, 100.0f) == 0.0f, "wheel tracks are 0 on the centre line");
+        graph::RoadMaskNodeSettings edge;
+        edge.shape = graph::RoadMaskShape::EdgeFalloff;
+        edge.breakupAmount = 0.0f;
+        edge.edgeWidthMeters = 0.3f;
+        edge.featherMeters = 0.5f;
+        Check(graph::EvaluateRoadMask(edge, 3.0f, 0.0f, half, 100.0f) == 1.0f &&
+              graph::EvaluateRoadMask(edge, -2.8f, 0.0f, half, 100.0f) == 1.0f &&
+              graph::EvaluateRoadMask(edge, 0.0f, 0.0f, half, 100.0f) == 0.0f,
+              "edge falloff is 1 at both edges and 0 at the centre");
+        const float edgeMid = graph::EvaluateRoadMask(edge, 2.45f, 0.0f, half, 100.0f);
+        Check(edgeMid > 0.4f && edgeMid < 0.6f, "edge falloff feathers inward");
+        graph::RoadMaskNodeSettings constant;
+        constant.shape = graph::RoadMaskShape::Constant;
+        constant.breakupAmount = 0.0f;
+        Check(graph::EvaluateRoadMask(constant, 0.0f, 0.0f, half, 100.0f) == 1.0f, "constant is 1");
+        constant.invert = true;
+        Check(graph::EvaluateRoadMask(constant, 0.0f, 0.0f, half, 100.0f) == 0.0f, "invert flips the value");
+        constant.invert = false;
+        constant.breakupAmount = 1.0f;
+        float lo = 1.0f, hi = 0.0f;
+        for (int i = 0; i < 50; ++i) {
+            const float v = graph::EvaluateRoadMask(constant, 0.0f, static_cast<float>(i) * 0.7f, half, 100.0f);
+            lo = std::min(lo, v); hi = std::max(hi, v);
+        }
+        Check(hi - lo > 0.2f && lo >= 0.0f && hi <= 1.0f, "breakup varies along the length within 0..1");
+        const graph::RoadMaskNodeSettings* channels[3] = {&edge, nullptr, &tracks};
+        const auto image = graph::BakeRoadMask(channels, 6.0f, 20.0f);
+        Check(image.IsValid() && image.width == 256 && image.height == 320, "mask image is 256 wide and 16 px per metre");
+        if (image.IsValid()) {
+            const uint8_t* rightEdge = &image.rgba[0];
+            const uint8_t* centre = &image.rgba[(size_t(10) * image.width + 128) * 4];
+            Check(rightEdge[0] == 255 && centre[0] == 0 && centre[1] == 0 && rightEdge[3] == 255,
+                  "R holds the edge mask, unconnected G is 0, A is 255");
+            const uint8_t* track = &image.rgba[(size_t(10) * image.width + static_cast<size_t>((0.5f + 2.25f / 6.0f) * 256.0f)) * 4];
+            Check(track[2] == 255, "B holds the wheel track mask at +2.25 m");
+        }
+        // グラフ: Road のスロット 2 に材質とマスクを繋ぐ。
+        graph::NodeGraph layered;
+        const auto lPath = layered.CreateNode(graph::NodeKind::Path);
+        const auto lRoad = layered.CreateNode(graph::NodeKind::Road);
+        const auto lOut = layered.CreateNode(graph::NodeKind::MeshOutput);
+        const auto lBase = layered.CreateNode(graph::NodeKind::Surface);
+        const auto lGravel = layered.CreateNode(graph::NodeKind::Surface);
+        const auto lMask = layered.CreateNode(graph::NodeKind::RoadMask);
+        std::get<graph::PathNodeSettings>(layered.FindMutableNode(lPath)->settings).path = path;
+        const graph::Node* roadNode = layered.FindNode(lRoad);
+        Check(roadNode->inputs.size() == 8 && roadNode->inputs[4].label == "Material 4" &&
+              roadNode->inputs[5].valueType == graph::ValueType::RoadMask, "road has four material slots and three mask inputs");
+        layered.CreateLink(layered.FindNode(lPath)->outputs[0].id, roadNode->inputs[0].id);
+        layered.CreateLink(roadNode->outputs[0].id, layered.FindNode(lOut)->inputs[0].id);
+        layered.CreateLink(layered.FindNode(lBase)->outputs[0].id, roadNode->inputs[1].id);
+        layered.CreateLink(layered.FindNode(lGravel)->outputs[0].id, roadNode->inputs[2].id);
+        auto layeredCompiled = graph::CompileMeshGraph(layered);
+        Check(layeredCompiled.scene.meshes.size() == 1 && layeredCompiled.scene.meshes[0].materialStack &&
+              !layeredCompiled.scene.meshes[0].layerStacks[0] && !layeredCompiled.scene.meshes[0].roadMask.IsValid(),
+              "slot 2 without a mask stays inactive");
+        Check(!layered.CanCreateLink(layered.FindNode(lBase)->outputs[0].id, roadNode->inputs[5].id),
+              "material output cannot connect to a road mask input");
+        Check(layered.CreateLink(layered.FindNode(lMask)->outputs[0].id, roadNode->inputs[5].id), "road mask connects to Mask 2");
+        std::get<graph::RoadNodeSettings>(layered.FindMutableNode(lRoad)->settings).layerWorldUv[1] = true;
+        std::get<graph::RoadNodeSettings>(layered.FindMutableNode(lRoad)->settings).layerUvRepeatMeters[1] = 2.5f;
+        layeredCompiled = graph::CompileMeshGraph(layered);
+        const auto& layeredMesh = layeredCompiled.scene.meshes[0];
+        Check(layeredMesh.layerStacks[0] && !layeredMesh.layerStacks[1] && layeredMesh.roadMask.IsValid() &&
+              layeredMesh.roadMask.width == 256, "slot 2 with material and mask bakes the road mask");
+        Check(layeredMesh.layerWorldUv[1] && layeredMesh.layerUvRepeat[1] == 2.5f && layeredMesh.layerUvRepeat[0] == 1.0f &&
+              std::abs(layeredMesh.roadWidthMeters - 6.0f) < 1e-5f && std::abs(layeredMesh.roadLengthMeters - std::sqrt(104.0f)) < 1e-3f,
+              "slot settings and road dimensions reach the scene mesh");
     }
 }

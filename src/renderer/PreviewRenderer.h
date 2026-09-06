@@ -303,6 +303,10 @@ private:
     struct SceneMaterial {
         compositor::MaterialStack stack;
         std::unique_ptr<compositor::MaterialEvaluator> evaluator;
+        // 道路のスロット 2〜4。道路空間マスク（RGBA8）で被覆する。
+        std::array<compositor::MaterialStack, 3> layerStacks;
+        std::array<std::unique_ptr<compositor::MaterialEvaluator>, 3> layerEvaluators;
+        rhi::GpuTexture roadMask;
     };
     std::vector<SceneMaterial> m_sceneMaterials;
     uint64_t m_sceneMaterialSourceRevision = 0;

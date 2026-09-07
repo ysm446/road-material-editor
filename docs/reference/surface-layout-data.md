@@ -1,11 +1,11 @@
 # プリセットと配置記述の保存基盤（P1 第一段）
 
 作成日時: 2026-09-07 16:13
-更新日時: 2026-09-08 00:41
+更新日時: 2026-09-08 01:44
 
 ## 現行形式
 
-現在はプロジェクト版21・配置節版4。材質は独立した `layerMaterials` に置き、形状プリセットは `layerMaterial` IDで参照する。[現行の契約と移行](layer-material-assets.md) を参照。以下は導入時の記録で、埋込材質の説明は旧版1〜3に対応する。
+現在はプロジェクト版22・配置節版5。境界アセットは `boundaryMaterials`、沿道の割当は `boundaryMaterial` で保持する。[境界仕様](boundary-materials.md) を参照。材質は独立した `layerMaterials` に置き、形状プリセットは `layerMaterial` IDで参照する。[現行の契約と移行](layer-material-assets.md) を参照。以下は導入時の記録で、埋込材質の説明は旧版1〜3に対応する。
 
 ## 今回の範囲
 

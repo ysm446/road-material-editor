@@ -202,6 +202,7 @@ void Application::ResetProject() {
     m_layerThumbnailsDirty = true; ++m_layerThumbnailTextureRevision;
     m_previewSurfaceBands = m_connectSurfaceBands = m_displaceConnectedBands = false;
     m_editSurfacePreset = 0;
+    m_selectedBoundaryMaterial = m_editBoundaryMaterial = 0;
     m_surfacePresetError.clear();
     m_selectedGraphNode = 0;
     m_previewGraphNode = 0;
@@ -276,6 +277,8 @@ void Application::ProcessPendingFileWork() {
             m_editSurfacePreset = graph::PresetLayerMaterial(m_surfaceLayouts, m_options.editPreset);
             if (!m_editSurfacePreset) m_editSurfacePreset = m_options.editPreset;
             m_options.editPreset = 0;
+            m_selectedBoundaryMaterial = m_editBoundaryMaterial = m_options.editBoundary;
+            m_options.editBoundary = 0;
             m_surfacePresetError.clear();
             m_pathEdit = PathEditState{};
             m_pathEdit.nodeId = m_selectedGraphNode;
@@ -379,6 +382,11 @@ void Application::ProcessPendingFileWork() {
             }
         }
         clearSlot(m_ordTexture);
+        bool boundaryChanged = false;
+        for (auto& boundary : m_surfaceLayouts.boundaryMaterials) {
+            boundaryChanged |= clearSlot(boundary.mask); boundaryChanged |= clearSlot(boundary.height);
+        }
+        if (boundaryChanged) m_graph.MarkDirty();
 
         // 解放は DeferRelease でフレーム同期後に行われるため、GPU 待機は不要。
         m_textureLibrary.Remove(m_device, removed);

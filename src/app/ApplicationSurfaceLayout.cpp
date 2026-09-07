@@ -121,6 +121,17 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 ui::SectionHeader("沿道の材質と形状");
                 if (ui::BeginPropertyTable("roadsideMaterialRows")) {
                     auto& span = candidate.spans[m_surfaceBandSpan];
+                    std::vector<const char*> boundaryNames{"なし"};
+                    std::vector<graph::SurfaceId> boundaryIds{0};
+                    int boundaryIndex = 0;
+                    for (const auto& material : roadsideEdit.boundaryMaterials) {
+                        if (material.id == candidate.boundaryMaterial) boundaryIndex = static_cast<int>(boundaryIds.size());
+                        boundaryIds.push_back(material.id); boundaryNames.push_back(material.name.c_str());
+                    }
+                    if (ui::PropertyCombo("境界マテリアル", &boundaryIndex, boundaryNames.data(), static_cast<int>(boundaryNames.size()), 0,
+                        "選択した側の沿道全体へ適用。材質をなじませる設定をオンにする")) {
+                        candidate.boundaryMaterial = boundaryIds[boundaryIndex]; changed = true;
+                    }
                     std::vector<graph::SurfaceId> presetIds;
                     std::vector<const char*> presetNames;
                     std::vector<ImTextureID> presetThumbnails;

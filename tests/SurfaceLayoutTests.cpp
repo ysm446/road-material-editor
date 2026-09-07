@@ -615,6 +615,54 @@ void RunSurfaceLayoutTests() {
               "共有材質の編集を参照関係とともにUndo・Redoする");
     }
     tests::Section("横接続 — 共通境界と段差の保持");
+    {
+        auto boundaryDoc = roadside;
+        compositor::BoundaryMaterial boundary;
+        boundary.id = boundaryDoc.AllocateId(); boundary.name = "舗装端";
+        boundary.mask = 12; boundary.height = 13; boundary.widthMeters = 0.7f;
+        boundaryDoc.boundaryMaterials.push_back(boundary);
+        boundaryDoc.layouts[0].bands[1].boundaryMaterial = boundary.id;
+        Check(graph::ValidateSurfaceLayouts(boundaryDoc, error), "境界マテリアルを沿道へ割り当てられる");
+        const auto saved = io::WriteSurfaceLayouts(boundaryDoc);
+        graph::SurfaceLayoutDocument restored;
+        Check(saved["version"] == 5 && io::ReadSurfaceLayouts(saved, restored, error) && io::WriteSurfaceLayouts(restored) == saved,
+              "境界画像・寸法・参照が保存往復する");
+        auto connected = graph::CompileMeshGraph(sceneGraph);
+        Check(graph::ConnectSurfaceBandMaterials(connected, sceneGraph, boundaryDoc, roadId,
+              boundaryDoc.layouts[0].bands[1].id, error, true), "境界マテリアルを両面の描画へ渡せる");
+        const auto& control = connected.scene.meshes[0].boundaryControl;
+        Check(control.IsValid() && control.rgba == connected.scene.meshes.back().boundaryControl.rgba &&
+              control.rgba.front() == 255 && control.rgba[control.rgba.size() - 4] == 0 &&
+              connected.scene.meshes[0].boundaries[0].material.mask == boundary.mask &&
+              connected.scene.meshes[0].boundaries[0].center == connected.scene.meshes.back().boundaries[0].center,
+              "路肩は境界画像を共有し、段差保持の歩道区間では無効にする");
+        Check(graph::CreateRoadsideExample(boundaryDoc, sceneGraph, roadId, graph::SurfaceSide::Right, error), "境界の左右検証用に右沿道を追加する");
+        boundaryDoc.layouts[0].bands.back().boundaryMaterial = boundary.id;
+        auto both = graph::CompileMeshGraph(sceneGraph);
+        Check(graph::ConnectBothSurfaceBands(both, sceneGraph, boundaryDoc, roadId,
+              boundaryDoc.layouts[0].bands[1].id, boundaryDoc.layouts[0].bands.back().id, error, true) &&
+              renderer::ValidateMeshScene(both.scene), "左右で同じ境界アセットを共有できる");
+        Check(both.scene.meshes[0].boundaries[1].acrossSign == -1 &&
+              both.scene.meshes[0].boundaryControl.rgba == both.scene.meshes.back().boundaryControl.rgba,
+              "右沿道の境界方向を反転し、両側とも同じ高さ制御を使う");
+        for (int failure = 0; failure < 4; ++failure) {
+            auto bad = saved;
+            if (failure == 0) bad["boundaryMaterials"][0]["width"] = 0;
+            if (failure == 1) bad["boundaryMaterials"][0].erase("mask");
+            if (failure == 2) bad["layouts"][0]["bands"][1]["boundaryMaterial"] = 999999;
+            if (failure == 3) bad["boundaryMaterials"][0]["id"] = bad["presets"][0]["id"];
+            Check(!io::ReadSurfaceLayouts(bad, restored, error) && io::WriteSurfaceLayouts(restored) == saved,
+                  "不正な境界寸法・欠落・参照・ID重複を非破壊で拒否する");
+        }
+        DocumentSnapshot beforeBoundary, afterBoundary;
+        beforeBoundary.surfaceLayouts = restored; afterBoundary = beforeBoundary;
+        afterBoundary.surfaceLayouts.boundaryMaterials[0].depthMeters = 0.08f;
+        history.Clear(); history.Push(beforeBoundary, 0);
+        const auto undo = history.Undo(afterBoundary);
+        Check(io::WriteSurfaceLayouts(undo.surfaceLayouts) == saved &&
+              io::WriteSurfaceLayouts(history.Redo(undo).surfaceLayouts) == io::WriteSurfaceLayouts(afterBoundary.surfaceLayouts),
+              "共有する境界の深さ変更をUndo・Redoする");
+    }
     auto lateralScene = graph::CompileMeshGraph(sceneGraph);
     const size_t originalMeshes = lateralScene.scene.meshes.size();
     const auto lateralBandId = roadside.layouts[0].bands[1].id;
@@ -808,7 +856,7 @@ void RunSurfaceLayoutTests() {
               "旧材質・マスク・ハイト合成条件を変えずにグラフから復元する");
         const auto graphJson = io::WriteSurfaceLayouts(graphDocument);
         graph::SurfaceLayoutDocument restored;
-        Check(graphJson["version"] == 4 && io::ReadSurfaceLayouts(graphJson, restored, error) &&
+        Check(graphJson["version"] == 5 && io::ReadSurfaceLayouts(graphJson, restored, error) &&
               io::WriteSurfaceLayouts(restored) == graphJson, "ノードID・結線・配置・設定が保存往復する");
         const auto graphPreview = graph::CompileSurfaceLayoutPreview(sceneGraph, graphDocument, linked.layouts[0].roadNode);
         Check(graphPreview.error.empty() && graphPreview.scene.meshes.size() == layeredPreview.scene.meshes.size() &&

@@ -570,6 +570,7 @@ void Application::DrawUi() {
     if (m_settings.Display().showAssetBand) {
         DrawMaterialLibraryPanel();
         DrawLayerMaterialLibrary();
+        DrawBoundaryMaterialLibrary();
         DrawSkyLibraryPanel();
         DrawTextureLibraryPanel();
     }
@@ -661,6 +662,7 @@ void Application::BuildDefaultLayout(ImGuiID dockspaceId) {
     // ドックしたものが選ばれる。タブの並びは submit した順（マテリアル → 天球）。
     ImGui::DockBuilderDockWindow("天球", bottomRight);
     ImGui::DockBuilderDockWindow("レイヤーマテリアル", bottomRight);
+    ImGui::DockBuilderDockWindow("境界マテリアル", bottomRight);
     ImGui::DockBuilderDockWindow("マテリアル", bottomRight);
     // 右カラムへタブで重ねる。縦に積むと 1 枚あたりが短くなり、
     // どれもスクロールしないと全体が見えなくなる。

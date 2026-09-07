@@ -279,6 +279,7 @@ private:
         std::array<compositor::MaterialStack, 3> layerStacks;
         std::array<std::unique_ptr<compositor::MaterialEvaluator>, 3> layerEvaluators;
         rhi::GpuTexture roadMask;
+        rhi::GpuTexture boundaryControl;
     };
     std::vector<SceneMaterial> m_sceneMaterials;
     bool m_meshSceneEnabled = false;

@@ -6,6 +6,7 @@
 #include <vector>
 #include <optional>
 #include "graph/NodeGraph.h"
+#include "compositor/BoundaryMaterial.h"
 
 namespace tg::graph {
 
@@ -96,6 +97,7 @@ struct SurfaceBand {
     SurfaceSide side = SurfaceSide::Road;
     // 同じ側はRoadに近い帯から順に格納。区間の切れ目は帯ごとに独立。
     std::vector<SurfaceSpan> spans;
+    SurfaceId boundaryMaterial = 0;
 };
 struct RoadLayout {
     SurfaceId id = 0;
@@ -107,6 +109,7 @@ struct SurfaceLayoutDocument {
     std::vector<SurfacePreset> presets;
     std::vector<RoadLayout> layouts;
     std::vector<LayerMaterial> layerMaterials;
+    std::vector<compositor::BoundaryMaterial> boundaryMaterials;
     SurfaceId AllocateId();
 };
 // 旧埋込材質は移行時に空にする。評価用の写しだけに参照先の材質を展開する。

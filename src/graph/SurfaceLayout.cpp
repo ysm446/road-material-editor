@@ -116,6 +116,11 @@ bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& sourceDocument, std::st
     std::unordered_set<SurfaceId> ids;
     const auto idValid = [&](SurfaceId id) { return id > 0 && id < document.nextId && ids.insert(id).second; };
     if (document.nextId == 0) return fail("配置データの次IDが不正です");
+    for (const auto& material : document.boundaryMaterials) {
+        if (!idValid(material.id) || material.name.empty() || !range(material.widthMeters, 0.02f, 2) ||
+            !range(material.repeatMeters, 0.05f, 50) || !range(material.depthMeters, 0, 0.5f) ||
+            !range(material.heightCenter, 0, 1)) return fail("境界マテリアルのID・名前・寸法が不正です");
+    }
     for (const auto& material : document.layerMaterials) {
         if (!idValid(material.id) || material.name.empty() || !range(material.displacementMeters, 0, 10) ||
             !range(material.layerBlendRange, 0, 1) || material.materials.empty() || material.materials.size() > 4)
@@ -158,6 +163,10 @@ bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& sourceDocument, std::st
         if (!idValid(layout.id) || layout.roadNode <= 0 || !roads.insert(layout.roadNode).second) return fail("道路配置のID・接続先が不正または重複しています");
         size_t roadBands = 0;
         for (const auto& band : layout.bands) {
+            if (band.boundaryMaterial && (band.side == SurfaceSide::Road ||
+                std::none_of(document.boundaryMaterials.begin(), document.boundaryMaterials.end(),
+                    [&](const auto& m) { return m.id == band.boundaryMaterial; })))
+                return fail("沿道の境界マテリアル参照が不正です");
             if (!idValid(band.id) || static_cast<uint32_t>(band.side) > 2) return fail("帯のID・側が不正です");
             roadBands += band.side == SurfaceSide::Road ? 1 : 0;
             float previousEnd = 0;

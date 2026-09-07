@@ -133,6 +133,9 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
     m_surfaceLayouts = snapshot.surfaceLayouts;
     std::string materialError;
     if (!graph::ExtractLayerMaterials(m_surfaceLayouts, materialError)) TG_LOG_ERROR("%s", materialError.c_str());
+    for (auto& boundary : m_surfaceLayouts.boundaryMaterials) {
+        boundary.mask = ValidTexture(boundary.mask); boundary.height = ValidTexture(boundary.height);
+    }
     m_layerThumbnailsDirty = true;
     m_layerPreviewDirty = true;
     for (auto& preset : m_surfaceLayouts.layerMaterials) {

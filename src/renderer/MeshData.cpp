@@ -9,6 +9,13 @@ namespace tg::renderer {
 bool ValidateMeshScene(const MeshScene& scene) {
     for (const auto& mesh : scene.meshes) {
         const auto& data = mesh.geometry;
+        if (!mesh.boundaryControl.rgba.empty() && (!mesh.boundaryControl.IsValid() || mesh.boundaryControl.width != 1)) return false;
+        for (const auto& boundary : mesh.boundaries) {
+            const auto& m = boundary.material;
+            if (!std::isfinite(boundary.center) || (boundary.acrossSign != 1 && boundary.acrossSign != -1) ||
+                !std::isfinite(m.widthMeters) || m.widthMeters <= 0 || !std::isfinite(m.repeatMeters) || m.repeatMeters <= 0 ||
+                !std::isfinite(m.depthMeters) || m.depthMeters < 0 || !std::isfinite(m.heightCenter)) return false;
+        }
         if (mesh.connectionFrameSign != 1 && mesh.connectionFrameSign != -1) return false;
         for (float sign : mesh.connectionAcrossSigns) if (sign != 1 && sign != -1) return false;
         if (!std::isfinite(mesh.connectionHeightFade.x) || !std::isfinite(mesh.connectionHeightFade.y) ||

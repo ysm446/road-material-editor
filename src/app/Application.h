@@ -64,6 +64,7 @@ struct StartupOptions {
     // プロジェクト読込後に選択するノード。スクリーンショット検証用。
     graph::GraphId selectNode = 0;
     graph::SurfaceId editPreset = 0;
+    graph::SurfaceId editBoundary = 0;
     graph::PathElementId selectPathPoint = 0;
     // 線形の編集モード（0 = 制御点、1 = 縦断、2 = バンク）と選択するポイント。スクリーンショット検証用。
     int profileMode = 0;
@@ -304,6 +305,9 @@ private:
     int m_layerPreviewView = 0;
     void ProcessLayerPreview();
     void DrawLayerMaterialLibrary();
+    void DrawBoundaryMaterialLibrary();
+    graph::SurfaceId m_selectedBoundaryMaterial = 0;
+    graph::SurfaceId m_editBoundaryMaterial = 0;
     void ProcessLayerThumbnails();
     void RenderLayerThumbnails(ID3D12GraphicsCommandList* commandList);
     struct LayerThumbnail {

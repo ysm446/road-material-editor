@@ -45,7 +45,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 15: merge ノード（入力数が可変）。旧ビルドが Merge を読み飛ばして Mesh Output との接続を失うことを防ぐ。
 // 16: crack ノード。
 // 17: 埋込プリセットと道路・沿道の配置記述。旧ビルドによる消失を防ぐ。
-constexpr int kProjectFormatVersion = 21;
+constexpr int kProjectFormatVersion = 22;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -1448,6 +1448,10 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs) {
             material["material"] = reference.is_null() ? json(0) : reference;
         }
     }
+    for (auto& boundary : layouts["boundaryMaterials"]) for (const auto* key : {"mask", "height"}) {
+        const auto reference = writeTexture(boundary[key].get<uint32_t>());
+        boundary[key] = reference.is_null() ? json(0) : reference;
+    }
     document["surfaceLayouts"] = std::move(layouts);
 
     // 天球はマテリアルと同じく、構造ごと埋め込む（画像だけ相対パスの参照）。
@@ -1594,6 +1598,9 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
         for (auto& material : preset.materials) material.material = readMaterial(json(material.material));
         if (preset.materialGraph) for (auto& node : preset.materialGraph->nodes)
             node.settings.material = readMaterial(json(node.settings.material));
+    }
+    for (auto& boundary : pendingLayouts.boundaryMaterials) {
+        boundary.mask = readTexture(json(boundary.mask)); boundary.height = readTexture(json(boundary.height));
     }
     refs.surfaceLayouts = std::move(pendingLayouts);
     // 旧形式の layers[]（版 3 以前）。移行用に一旦読み込んでおく。

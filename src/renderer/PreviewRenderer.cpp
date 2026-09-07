@@ -152,6 +152,14 @@ struct MeshConstants {
     float connectionSecondHeightFade[2];
     uint32_t connectionRoadMixIndex;
     uint32_t connectionEndPad;
+    struct BoundaryConstants {
+        uint32_t mask, height, alongU, invertMask;
+        float center, acrossSign, width, repeat;
+        float depth, heightCenter, pad0, pad1;
+    } boundaries[2];
+    uint32_t boundaryControlIndex;
+    float boundaryFrameSign;
+    float boundaryPad[2];
 };
 
 // 道路空間マスク（RGBA8）を GPU へ上げる。ミップは持たない（低解像度でぼかして読む）。
@@ -380,6 +388,7 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
         std::unique_ptr<compositor::MaterialEvaluator> base;
         std::array<std::unique_ptr<compositor::MaterialEvaluator>, 3> layers;
         rhi::GpuTexture roadMask;
+        rhi::GpuTexture boundaryControl;
     };
     std::vector<Created> created(scene.meshes.size());
     const auto failCleanup = [&]() {
@@ -387,6 +396,7 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
             if (entry.base) entry.base->Destroy(device);
             for (auto& layer : entry.layers) if (layer) layer->Destroy(device);
             if (entry.roadMask.IsValid()) device.DeferRelease(entry.roadMask);
+            if (entry.boundaryControl.IsValid()) device.DeferRelease(entry.boundaryControl);
         }
         for (auto& mesh : uploaded) mesh.Release(device);
         return false;
@@ -405,6 +415,8 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
                 if (!ensure(created[i].layers[layer])) return failCleanup();
             }
         }
+        if (scene.meshes[i].boundaryControl.IsValid() &&
+            !CreateRoadMaskTexture(device, scene.meshes[i].boundaryControl, created[i].boundaryControl)) return failCleanup();
         if (scene.meshes[i].roadMask.IsValid() &&
             !CreateRoadMaskTexture(device, scene.meshes[i].roadMask, created[i].roadMask)) {
             return failCleanup();
@@ -419,6 +431,7 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
             layer.reset();
         }
         if (material.roadMask.IsValid()) device.DeferRelease(material.roadMask);
+        if (material.boundaryControl.IsValid()) device.DeferRelease(material.boundaryControl);
     };
     while (m_sceneMaterials.size() > scene.meshes.size()) {
         destroyMaterial(m_sceneMaterials.back());
@@ -452,6 +465,8 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
         }
         if (target.roadMask.IsValid()) device.DeferRelease(target.roadMask);
         target.roadMask = std::move(created[i].roadMask);
+        if (target.boundaryControl.IsValid()) device.DeferRelease(target.boundaryControl);
+        target.boundaryControl = std::move(created[i].boundaryControl);
     }
     for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes = std::move(uploaded);
@@ -470,6 +485,7 @@ void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
         if (material.evaluator) material.evaluator->Destroy(device);
         for (auto& layer : material.layerEvaluators) if (layer) layer->Destroy(device);
         if (material.roadMask.IsValid()) device.DeferRelease(material.roadMask);
+        if (material.boundaryControl.IsValid()) device.DeferRelease(material.boundaryControl);
     }
     m_sceneMaterials.clear();
     m_meshScene.meshes.clear();
@@ -777,6 +793,10 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     if (m_meshSceneEnabled) {
         for (auto& material : m_sceneMaterials) {
             // 道路マスクは転送直後は COPY_DEST。頂点 / ドメイン / ピクセルで読むので両方の読み取り状態へ。
+            if (material.boundaryControl.IsValid()) {
+                TransitionIfNeeded(commandList, material.boundaryControl,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             if (material.roadMask.IsValid()) {
                 TransitionIfNeeded(commandList, material.roadMask,
                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
@@ -936,6 +956,20 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 if (!baseReady) drawConstants.displacementScale = 0.0f;
             }
             const auto& connection = m_meshScene.meshes[layerSource];
+            const auto& control = m_sceneMaterials[layerSource].boundaryControl;
+            drawConstants.boundaryControlIndex = control.IsValid() ? control.SrvIndex() : kNoShadowIndex;
+            drawConstants.boundaryFrameSign = connection.connectionFrameSign;
+            for (size_t boundary = 0; boundary < 2; ++boundary) {
+                const auto& input = connection.boundaries[boundary];
+                const auto& settings = input.material;
+                auto& output = drawConstants.boundaries[boundary];
+                output.mask = textures.SrvIndex(settings.mask, false);
+                output.height = textures.SrvIndex(settings.height, false);
+                output.alongU = settings.alongU; output.invertMask = settings.invertMask;
+                output.center = input.center; output.acrossSign = input.acrossSign;
+                output.width = settings.widthMeters; output.repeat = settings.repeatMeters;
+                output.depth = settings.depthMeters; output.heightCenter = settings.heightCenter;
+            }
             drawConstants.connectionHeightFade[0] = connection.connectionHeightFade.x;
             drawConstants.connectionHeightFade[1] = connection.connectionHeightFade.y;
             if (connection.connectionSources[0] >= 0) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compositor/MaterialStack.h"
+#include "compositor/BoundaryMaterial.h"
 #include <array>
 #include <optional>
 #include <DirectXMath.h>
@@ -35,6 +36,10 @@ struct MaterialSettings {
 };
 
 struct SceneMesh {
+    struct Boundary {
+        compositor::BoundaryMaterial material;
+        float center = 0, acrossSign = 1;
+    };
     MeshData geometry;
     // P0 の材質評価専用エントリ。形状を持たず、既存の評価器とGPU寿命管理を共有する。
     bool materialOnly = false;
@@ -78,7 +83,7 @@ struct SceneMesh {
         uint32_t height = 0;
         std::vector<uint8_t> rgba;
         bool IsValid() const { return width > 0 && height > 0 && rgba.size() == size_t(width) * height * 4; }
-    } roadMask;
+    } roadMask, boundaryControl;
     // スロットごとのテクスチャ座標（真ならワールド XZ）と UV 反復長（m）。[0] は roadMetersPerUv と同じ。
     std::array<bool, 4> layerWorldUv{false, false, false, false};
     std::array<float, 4> layerUvRepeat{1.0f, 1.0f, 1.0f, 1.0f};
@@ -97,6 +102,7 @@ struct SceneMesh {
     compositor::MaterialAssetId blendMaterial = compositor::kNoMaterialAsset;
     // 材質の合成モード（マスク抜き / 半透明）を使うか。白線などの帯だけ真。
     bool useBlendMode = false;
+    std::array<Boundary, 2> boundaries;
 };
 
 struct MeshScene {

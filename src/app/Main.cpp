@@ -72,6 +72,8 @@ tg::StartupOptions ParseCommandLine() {
             options.selectNode = ::_wtoi(argv[++i]);
         } else if (argument == L"--edit-preset" && (i + 1) < argc) {
             options.editPreset = static_cast<tg::graph::SurfaceId>(::_wtoi(argv[++i]));
+        } else if (argument == L"--edit-boundary" && (i + 1) < argc) {
+            options.editBoundary = static_cast<tg::graph::SurfaceId>(::_wtoi(argv[++i]));
         } else if (argument == L"--save-project" && (i + 1) < argc) {
             options.saveProjectPath = argv[i + 1];
             ++i;

@@ -29,6 +29,11 @@ struct LayerContext
     float2 origin;
 };
 
+struct BoundaryConstants {
+    uint mask; uint height; uint alongU; uint invertMask;
+    float center; float acrossSign; float width; float repeat;
+    float depth; float heightCenter; float pad0; float pad1;
+};
 struct MeshConstants
 {
     float4x4 viewProjection;
@@ -126,6 +131,10 @@ struct MeshConstants
     float2 connectionSecondHeightFade;
     uint connectionRoadMixIndex;
     uint connectionEndPad;
+    BoundaryConstants boundaries[2];
+    uint boundaryControlIndex;
+    float boundaryFrameSign;
+    float2 boundaryPad;
 };
 
 
@@ -278,12 +287,50 @@ float LayerHeightLevel(LayerContext c, uint slot, float2 uv)
 }
 
 // プリセット内の合成と、プリセット間の被覆を別々に評価する。
+// 両面で同じ境界座標を使う。Uは道路側から沿道側、Vは道路沿いの実距離。
+float4 BoundaryControl(float2 meters) {
+    if (g_mesh.boundaryControlIndex == kNoTextureIndex) return 0;
+    Texture2D<float4> control = ResourceDescriptorHeap[g_mesh.boundaryControlIndex];
+    return control.SampleLevel(g_samplerLinearClamp, float2(0.5f, meters.y * g_mesh.roadMaskScale.y), 0);
+}
+float2 BoundaryUv(BoundaryConstants b, float2 meters) {
+    float2 uv = float2((meters.x - b.center) * b.acrossSign / max(b.width, 0.02f) + 0.5f,
+                      frac(meters.y / max(b.repeat, 0.05f)));
+    return b.alongU != 0 ? uv.yx : uv;
+}
+float BoundaryEnvelope(BoundaryConstants b, float2 meters) {
+    return 1 - smoothstep(0.4f, 0.5f, abs(meters.x - b.center) / max(b.width, 0.02f));
+}
+float BoundaryHeight(float2 meters) {
+    const float4 control = BoundaryControl(meters);
+    float result = 0;
+    [unroll] for (uint i = 0; i < 2; ++i) {
+        const BoundaryConstants b = g_mesh.boundaries[i];
+        const float weight = control[i * 2] * BoundaryEnvelope(b, meters);
+        if (weight <= 0 || b.height == kNoTextureIndex || b.depth <= 0) continue;
+        Texture2D<float4> map = ResourceDescriptorHeap[b.height];
+        result += (map.SampleLevel(g_samplerLinearClamp, BoundaryUv(b, meters), 0).r - b.heightCenter) * 2 * b.depth * weight;
+    }
+    return result;
+}
 struct ConnectionMix { float values[7]; };
 ConnectionMix ConnectionWeights(float2 meters)
 {
     Texture2D<float4> mask = ResourceDescriptorHeap[g_mesh.roadMaskIndex];
     float4 coverage = saturate(mask.SampleLevel(g_samplerLinearClamp, meters * g_mesh.roadMaskScale, 0));
     if (g_mesh.connectionContextCount < 5) coverage.ba = 0;
+    const float4 boundaryControl = BoundaryControl(meters);
+    [unroll] for (uint boundary = 0; boundary < 2; ++boundary) {
+        const BoundaryConstants b = g_mesh.boundaries[boundary];
+        const float weight = boundaryControl[boundary * 2] * BoundaryEnvelope(b, meters);
+        if (weight <= 0 || b.mask == kNoTextureIndex) continue;
+        Texture2D<float4> map = ResourceDescriptorHeap[b.mask];
+        float maskValue = saturate(map.SampleLevel(g_samplerLinearClamp, BoundaryUv(b, meters), 0).r);
+        if (b.invertMask != 0) maskValue = 1 - maskValue;
+        const float second = boundaryControl[boundary * 2 + 1];
+        coverage[boundary * 2] = lerp(coverage[boundary * 2], (1 - maskValue) * (1 - second), weight);
+        coverage[boundary * 2 + 1] = lerp(coverage[boundary * 2 + 1], (1 - maskValue) * second, weight);
+    }
     const float base = saturate(1 - dot(coverage, 1.0f));
     const float total = max(base + dot(coverage, 1.0f), 1e-6f);
     ConnectionMix result = (ConnectionMix)0;
@@ -347,7 +394,7 @@ float ConnectionHeight(float2 meters, float3 worldPosition)
         const float t = saturate(abs(meters.x - g_mesh.connectionSecondHeightFade.x) / g_mesh.connectionSecondHeightFade.y);
         height *= t * t * (3.0f - 2.0f * t);
     }
-    return 0.5f + height;
+    return 0.5f + height + BoundaryHeight(meters);
 }
 
 float3 WeightedDetailNormal(float3 detail, float weight)
@@ -398,6 +445,10 @@ void ConnectionShading(float2 meters, float3 worldPosition,
         }
         normal = ReorientNormal(normal, WeightedDetailNormal(contextNormal, weights.values[context]));
     }
+    const float stepMeters = 0.002f;
+    const float dxHeight = (BoundaryHeight(meters + float2(stepMeters, 0)) - BoundaryHeight(meters - float2(stepMeters, 0))) / (2 * stepMeters);
+    const float dyHeight = (BoundaryHeight(meters + float2(0, stepMeters)) - BoundaryHeight(meters - float2(0, stepMeters))) / (2 * stepMeters);
+    normal = ReorientNormal(normal, normalize(float3(-dxHeight * g_mesh.boundaryFrameSign, -dyHeight, 1)));
 }
 
 // 頂点 / ドメインシェーダ用。ブレンド後のハイト。

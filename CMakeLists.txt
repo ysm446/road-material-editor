@@ -88,6 +88,7 @@ set(tg_sources
     src/app/ApplicationGraphPanel.cpp
     src/app/ApplicationSurfaceLayout.cpp
     src/app/ApplicationSurfacePreset.cpp
+    src/app/ApplicationBoundaryMaterial.cpp
     src/app/ApplicationLayerPanel.cpp
     src/app/ApplicationMaterialPanel.cpp
     src/app/ApplicationPathEdit.cpp

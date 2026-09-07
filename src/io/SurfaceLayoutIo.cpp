@@ -142,7 +142,15 @@ json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& source) {
     std::string error;
     if (!graph::ExtractLayerMaterials(document, error)) return json();
     auto result = WriteSurfaceLayoutsLegacy(graph::ResolveLayerMaterials(document));
-    result["version"] = 4;
+    result["version"] = 5;
+    result["boundaryMaterials"] = json::array();
+    for (const auto& m : document.boundaryMaterials)
+        result["boundaryMaterials"].push_back({{"id", m.id}, {"name", m.name}, {"mask", m.mask}, {"height", m.height},
+            {"width", m.widthMeters}, {"repeat", m.repeatMeters}, {"depth", m.depthMeters},
+            {"heightCenter", m.heightCenter}, {"alongU", m.alongU}, {"invertMask", m.invertMask}});
+    for (size_t l = 0; l < document.layouts.size(); ++l)
+        for (size_t b = 0; b < document.layouts[l].bands.size(); ++b)
+            result["layouts"][l]["bands"][b]["boundaryMaterial"] = document.layouts[l].bands[b].boundaryMaterial;
     result["layerMaterials"] = json::array();
     for (const auto& material : document.layerMaterials) {
         graph::SurfaceLayoutDocument single;
@@ -160,7 +168,7 @@ json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& source) {
 }
 
 bool ReadSurfaceLayouts(const json& value, graph::SurfaceLayoutDocument& document, std::string& error) {
-    if (value.is_object() && value.contains("version") && value["version"].is_number_integer() && value["version"] == 4) {
+    if (value.is_object() && value.contains("version") && value["version"].is_number_integer() && (value["version"] == 4 || value["version"] == 5)) {
         if (!value.contains("layerMaterials") || !value["layerMaterials"].is_array() ||
             !value.contains("presets") || !value["presets"].is_array()) {
             error = "レイヤーマテリアルまたは形状の配列がありません"; return false;
@@ -203,6 +211,22 @@ bool ReadSurfaceLayouts(const json& value, graph::SurfaceLayoutDocument& documen
             auto& p = shapes.presets[i];
             p.layerMaterial = value["presets"][i]["layerMaterial"].get<graph::SurfaceId>();
             p.materials.clear(); p.materialGraph.reset(); p.displacementMeters = 0; p.layerBlendRange = 0.2f;
+        }
+        if (value["version"] == 5) {
+            Reader reader;
+            for (const auto& m : reader.Array(value, "boundaryMaterials")) {
+                compositor::BoundaryMaterial material;
+                material.id = reader.UInt(m, "id"); material.name = reader.String(m, "name");
+                material.mask = reader.UInt(m, "mask"); material.height = reader.UInt(m, "height");
+                material.widthMeters = reader.Float(m, "width"); material.repeatMeters = reader.Float(m, "repeat");
+                material.depthMeters = reader.Float(m, "depth"); material.heightCenter = reader.Float(m, "heightCenter");
+                material.alongU = reader.Bool(m, "alongU"); material.invertMask = reader.Bool(m, "invertMask");
+                shapes.boundaryMaterials.push_back(material);
+            }
+            for (size_t l = 0; l < shapes.layouts.size(); ++l)
+                for (size_t b = 0; b < shapes.layouts[l].bands.size(); ++b)
+                    shapes.layouts[l].bands[b].boundaryMaterial = reader.UInt(value["layouts"][l]["bands"][b], "boundaryMaterial");
+            if (!reader.valid) { error = "境界マテリアルの保存データが不正です"; return false; }
         }
         if (!graph::ValidateSurfaceLayouts(shapes, error)) return false;
         document = std::move(shapes); return true;

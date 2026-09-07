@@ -275,6 +275,27 @@ void RunSurfaceLayoutTests() {
     Check(graph::CreateRoadsideExample(roadside, sceneGraph, roadId, graph::SurfaceSide::Left, error),
           "左側に路肩から歩道へ移る記述を作れる");
     const auto roadsideJson = io::WriteSurfaceLayouts(roadside);
+    auto resizedSide = roadside;
+    auto& resizedPreset = resizedSide.presets[1];
+    const auto originalSection = resizedPreset.section;
+    Check(graph::SetSimpleRoadsideDimensions(resizedPreset, 3.5f, 0.3f), "歩道の幅と段差を編集する");
+    Check(resizedPreset.section[0].across == 0 && resizedPreset.section[0].height == 0 &&
+          resizedPreset.section[1].across == 0 && resizedPreset.section[1].height == 0.3f &&
+          resizedPreset.section[2].across == 3.5f && resizedPreset.section[2].height == 0.3f &&
+          resizedPreset.section[1].id == originalSection[1].id, "道路端と垂直段差・水平面・点IDを保持する");
+    const auto validResized = io::WriteSurfaceLayouts(resizedSide);
+    Check(!graph::SetSimpleRoadsideDimensions(resizedPreset, 3, 0) &&
+          !graph::SetSimpleRoadsideDimensions(resizedPreset, std::numeric_limits<float>::quiet_NaN(), 0.2f) &&
+          io::WriteSurfaceLayouts(resizedSide) == validResized, "潰れる段差や非有限寸法は変更せず拒否する");
+    auto complexPreset = resizedPreset; complexPreset.section[1].across = 0.1f;
+    Check(!graph::SetSimpleRoadsideDimensions(complexPreset, 2, 0.15f), "複雑な断面を単純形状で上書きしない");
+    Check(graph::SetSimpleRoadsideDimensions(resizedSide.presets[0], 1.2f, -0.2f), "路肩の幅と外端の落差を編集する");
+    const auto sharedPresetId = resizedSide.layouts[0].bands[1].spans[0].preset;
+    Check(graph::DuplicateSurfacePreset(resizedSide, resizedSide.layouts[0].bands[1], 0) &&
+          resizedSide.layouts[0].bands[1].spans[0].preset != sharedPresetId, "沿道プリセットを複製して区間へ割り当てる");
+    graph::SurfaceLayoutDocument resizedReload;
+    Check(io::ReadSurfaceLayouts(io::WriteSurfaceLayouts(resizedSide), resizedReload, error) &&
+          io::WriteSurfaceLayouts(resizedReload) == io::WriteSurfaceLayouts(resizedSide), "沿道の寸法・複製・割当が保存往復する");
     Check(!graph::CreateRoadsideExample(roadside, sceneGraph, roadId, graph::SurfaceSide::Left, error) &&
           io::WriteSurfaceLayouts(roadside) == roadsideJson, "既存の沿道は上書きしない");
     graph::RoadGeometry bandRoad;

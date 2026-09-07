@@ -135,4 +135,21 @@ bool DuplicateSurfacePreset(SurfaceLayoutDocument& document, SurfaceBand& band, 
     document.presets.push_back(std::move(preset));
     return true;
 }
+bool GetSimpleRoadsideDimensions(const SurfacePreset& preset, float& width, float& height) {
+    const auto& points = preset.section;
+    if (preset.role == SurfaceRole::Road || (points.size() != 2 && points.size() != 3) ||
+        points.front().across != 0 || points.front().height != 0 || points.back().across <= 0) return false;
+    if (points.size() == 3 && (points[1].across != 0 || points[1].height <= 0 || points[1].height != points[2].height)) return false;
+    width = points.back().across; height = points.back().height;
+    return std::isfinite(width) && std::isfinite(height);
+}
+bool SetSimpleRoadsideDimensions(SurfacePreset& preset, float width, float height) {
+    float oldWidth, oldHeight;
+    if (!GetSimpleRoadsideDimensions(preset, oldWidth, oldHeight) || !std::isfinite(width) || !std::isfinite(height) ||
+        width < 0.1f || width > 10 || height < -2 || height > 2 || (preset.section.size() == 3 && height < 0.01f)) return false;
+    if (width == oldWidth && height == oldHeight) return false;
+    preset.section.back().across = width; preset.section.back().height = height;
+    if (preset.section.size() == 3) preset.section[1].height = height;
+    return true;
+}
 }  // namespace tg::graph

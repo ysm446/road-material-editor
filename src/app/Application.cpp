@@ -430,7 +430,8 @@ int Application::Run() {
         ++m_frameCounter;
 
         // 開発用のスクリーンショット。書き出したら終了する。
-        if (captureUi) {
+        // 保存も指定した場合は次フレーム先頭の保存処理まで進める。
+        if (captureUi && m_options.saveProjectPath.empty()) {
             break;
         }
         if (!m_options.screenshotPath.empty() && m_frameCounter >= m_options.screenshotFrame &&

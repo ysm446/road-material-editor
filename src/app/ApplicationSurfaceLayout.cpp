@@ -89,13 +89,36 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 std::vector<const char*> items;
                 for (const auto& label : labels) items.push_back(label.c_str());
                 bool changed = false;
-                ui::SectionHeader("沿道の下地材質");
+                ui::SectionHeader("沿道プリセット");
                 if (ui::BeginPropertyTable("roadsideMaterialRows")) {
-                    ui::PropertyCombo("編集する区間", &m_surfaceBandSpan, items.data(), static_cast<int>(items.size()), 0, "材質を編集する沿道の区間");
+                    ui::PropertyCombo("編集する区間", &m_surfaceBandSpan, items.data(), static_cast<int>(items.size()), 0, "形状と材質を編集する沿道の区間");
                     auto& span = candidate.spans[m_surfaceBandSpan];
+                    std::vector<graph::SurfaceId> presetIds;
+                    std::vector<const char*> presetNames;
+                    int presetIndex = 0;
+                    for (const auto& p : roadsideEdit.presets) if (p.role != graph::SurfaceRole::Road) {
+                        if (p.id == span.preset) presetIndex = static_cast<int>(presetIds.size());
+                        presetIds.push_back(p.id); presetNames.push_back(p.name.c_str());
+                    }
+                    if (!presetIds.empty() && ui::PropertyCombo("プリセット", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
+                        "この区間に割り当てる沿道プリセット。切替時は公開値の上書きを解除する")) {
+                        span.preset = presetIds[presetIndex]; span.parameters.clear(); changed = true;
+                    }
                     auto preset = std::find_if(roadsideEdit.presets.begin(), roadsideEdit.presets.end(), [&](const auto& p) { return p.id == span.preset; });
                     if (preset != roadsideEdit.presets.end()) {
-                        ui::PropertyValue("プリセット", "%s", preset->name.c_str());
+                        char name[128]; std::snprintf(name, sizeof(name), "%s", preset->name.c_str());
+                        if (ui::PropertyTextInput("名前", name, sizeof(name), "一覧に表示する沿道プリセットの名前") && name[0]) { preset->name = name; changed = true; }
+                        float width, height;
+                        if (graph::GetSimpleRoadsideDimensions(*preset, width, height)) {
+                            const graph::SimpleRoadsideDefaults shapeDefaults;
+                            const bool step = preset->section.size() == 3;
+                            bool dimensionsChanged = ui::PropertyFloat("幅", &width, 0.1f, 10, shapeDefaults.width,
+                                "道路端を固定して外側へ広げる。同じプリセットの全区間へ反映", "%.2f m");
+                            dimensionsChanged |= ui::PropertyFloat(step ? "段差の高さ" : "外端の高さ", &height, step ? 0.01f : -2.0f, 2,
+                                step ? shapeDefaults.sidewalkHeight : shapeDefaults.groundHeight,
+                                "道路端を基準とする高さ。路肩は外端まで傾斜し、歩道は垂直段差と水平面を保つ", "%.2f m");
+                            if (dimensionsChanged) changed |= graph::SetSimpleRoadsideDimensions(*preset, width, height);
+                        } else ui::PropertyValue("断面", "%s", "この断面の寸法編集は未対応");
                         auto& material = preset->materials.front();
                         const graph::PresetMaterial defaults;
                         const graph::SurfacePreset presetDefaults;
@@ -116,11 +139,25 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                     }
                     ui::EndPropertyTable();
                 }
-                ui::HintText("同じプリセットを使う沿道区間すべてに反映します");
+                ui::HintText("寸法・材質は同じプリセットの全区間へ反映。個別に変える場合は複製");
+                if (ui::Button("沿道プリセットを複製", ui::kWideButtonWidth))
+                    changed |= graph::DuplicateSurfacePreset(roadsideEdit, candidate, static_cast<size_t>(m_surfaceBandSpan));
                 if (changed) {
-                    const auto preview = graph::CompileSurfaceBandPreview(m_graph, roadsideEdit, roadId, candidate.id);
-                    if (preview.error.empty()) { m_surfaceLayouts = std::move(roadsideEdit); return true; }
-                    TG_LOG_ERROR("沿道材質: %s", preview.error.c_str());
+                    // 共有プリセットの変更が別の道路・沿道を壊さないことも確認する。
+                    std::string error;
+                    for (const auto& checkLayout : roadsideEdit.layouts) for (const auto& checkBand : checkLayout.bands) {
+                        if (checkBand.side == graph::SurfaceSide::Road || checkBand.spans.empty() || !error.empty()) continue;
+                        if (std::none_of(checkBand.spans.begin(), checkBand.spans.end(), [&](const auto& checkSpan) {
+                            return checkSpan.preset == candidate.spans[m_surfaceBandSpan].preset;
+                        })) continue;
+                        const auto preview = graph::CompileSurfaceBandPreview(m_graph, roadsideEdit, checkLayout.roadNode, checkBand.id);
+                        error = preview.error;
+                        std::unordered_set<graph::SurfaceId> unique;
+                        for (const auto& checkSpan : checkBand.spans) unique.insert(checkSpan.preset);
+                        if (error.empty() && m_connectSurfaceBands && unique.size() > 2) error = "横接続中は沿道各2種類までです";
+                    }
+                    if (error.empty()) { m_surfaceLayouts = std::move(roadsideEdit); m_previewSurfaceBands = true; return true; }
+                    TG_LOG_ERROR("沿道プリセット: %s", error.c_str());
                 }
                 break;
             }

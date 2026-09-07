@@ -759,6 +759,15 @@ bool BuildStack(const NodeGraph& graph, const Pin& pin, float metersPerUv, compo
     const Node* source = graph.FindUpstreamNodeForPin(pin.id);
     if (source == nullptr) return false;
     auto material = graph.CompileLayersTo(source->id);
+    // 道路の材質はハイトを材質のハイトマップから読む。Surface ノードの旧地形向け設定
+    // （ノイズ / 定数、持ち上げ、起伏の強さ、UV スケール）は使わない。
+    for (auto& layer : material.layers) {
+        if (layer.kind != compositor::LayerKind::Surface) continue;
+        layer.heightSource = compositor::ValueSource::Texture;
+        layer.heightBase = 0.5f;
+        layer.heightGain = 1.0f;
+        layer.uvScale = 1.0f;
+    }
     out.Layers() = std::move(material.layers);
     out.MaskOps() = std::move(material.maskOps);
     // 1 UVタイルの実寸でハイト由来の法線を評価する。

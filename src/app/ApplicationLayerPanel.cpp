@@ -601,11 +601,7 @@ bool Application::DrawLayerSettings(compositor::MaterialLayer& layer, bool isBas
             changed |= ui::PropertyFloat("AO", &layer.ambientOcclusion, 0.0f, 1.0f,
                                          defaults.ambientOcclusion, nullptr, "%.2f");
         }
-        if (!isShape && !isLiquid) {
-            changed |= ui::PropertyFloat("UV スケール", &layer.uvScale, 0.25f, 16.0f,
-                                         defaults.uvScale,
-                                         "このレイヤーの模様を何回並べるか", "%.2f", 0, 0.25f);
-        }
+        // UV スケール（タイル内の反復）は旧地形の合成用。道路ではスロットの UV 反復長が決めるので出さない。
         ui::EndPropertyTable();
     }
     if (!isShape && layer.material != compositor::kNoMaterialAsset) {
@@ -625,7 +621,8 @@ bool Application::DrawLayerSettings(compositor::MaterialLayer& layer, bool isBas
                                          "汀線の柔らかさ。0 に近いほど硬い水際になる", "%.3f");
             ui::EndPropertyTable();
         }
-    } else {
+    } else if (isShape || isSource) {
+        // Surface のハイトは材質のハイトマップから来る（Road のスロットで固定）。ソースの選択は旧地形用なので出さない。
         ui::SectionHeader("ハイト");
         if (ui::BeginPropertyTable("layerHeightRows")) {
             int heightSource = static_cast<int>(layer.heightSource);

@@ -599,8 +599,10 @@ void Application::DrawGraphNode(const graph::Node& node) {
     // 意味を持たない。繋がっていないときは出さない（道路の Road Mask と二重に見えるのを避ける）。
     std::vector<const graph::Pin*> visibleInputs;
     for (const graph::Pin& input : node.inputs) {
-        const bool legacyMask = graph::IsLayerNodeKind(node.kind) && input.valueType == graph::ValueType::Mask;
-        if (legacyMask && m_graph.FindUpstreamNodeForPin(input.id) == nullptr) continue;
+        // Base（Material 型）も旧地形の積み重ね用。道路の材質としては単独で使うので、繋がっていなければ隠す。
+        const bool legacyInput = graph::IsLayerNodeKind(node.kind) &&
+                                 (input.valueType == graph::ValueType::Mask || input.valueType == graph::ValueType::Material);
+        if (legacyInput && m_graph.FindUpstreamNodeForPin(input.id) == nullptr) continue;
         visibleInputs.push_back(&input);
     }
     for (size_t row = 0; row < std::max(visibleInputs.size(), node.outputs.size()); ++row) {
@@ -971,53 +973,10 @@ void Application::DrawGraphEditor() {
         addNodeMenuItem(graph::NodeKind::Crack, "Crack — ひび割れの塊を乱数で配置する");
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
         ImGui::Separator();
-        addNodeMenuItem(graph::NodeKind::Heightmap, "Heightmap — 画像を地形として読み込む");
-        ImGui::Separator();
-        addNodeMenuItem(graph::NodeKind::Surface, "Surface — 素材を高さで張り合わせる");
-        addNodeMenuItem(graph::NodeKind::Shape, "Shape — 高さへ起伏を加算する");
-        addNodeMenuItem(graph::NodeKind::Liquid, "Liquid — 水位より低い所に水を張る");
-        ImGui::Separator();
-        addNodeMenuItem(graph::NodeKind::Blur, "Heightmap Blur — ハイトをぼかしてならす");
-        addNodeMenuItem(graph::NodeKind::Sediment,
-                        "Sediment — 土砂を重力で再分配して谷に積もらせる");
-        addNodeMenuItem(graph::NodeKind::Crumbling,
-                        "Crumbling — 崩れた岩屑を斜面下へ流して積む");
-        addNodeMenuItem(graph::NodeKind::Snow,
-                        "Snow — 雪を降らせ、急な雪面から落として積もらせる");
-        addNodeMenuItem(graph::NodeKind::River,
-                        "River — 川筋から河床を掘り、下流へ下がる水面を張る");
-        addNodeMenuItem(graph::NodeKind::Droplet,
-                        "Droplet Erosion — 水滴を流して谷を刻み、土砂を運んで積む");
-        addNodeMenuItem(graph::NodeKind::Scatter,
-                        "Scatter — 単純な形をばら撒き、分布のマスクを出す");
-        ImGui::Separator();
-        addNodeMenuItem(graph::NodeKind::MaskImage,
-                        "Mask Image — 画像をマスクにする（白い所だけ乗る）");
-        addNodeMenuItem(graph::NodeKind::MaskNoise,
-                        "Mask Noise — ノイズをマスクにする（下地に依らない）");
-        addNodeMenuItem(graph::NodeKind::MaskFluvial,
-                        "Mask Fluvial — 下地の川筋をマスクにする");
-        addNodeMenuItem(graph::NodeKind::MaskHeight,
-                        "Mask Height — 下地の標高帯（m）をマスクにする");
-        addNodeMenuItem(graph::NodeKind::MaskSlope,
-                        "Mask Slope — 下地の傾斜（角度）をマスクにする");
-        addNodeMenuItem(graph::NodeKind::MaskCurvature,
-                        "Mask Curvature — 下地の凹凸（尾根 / 谷）をマスクにする");
-        addNodeMenuItem(graph::NodeKind::MaskLevels,
-                        "Mask Levels — マスクの黒点 / 白点 / ガンマを調整する");
-        addNodeMenuItem(graph::NodeKind::MaskBlur,
-                        "Mask Blur — マスクをぼかして境界をなだらかにする");
-        addNodeMenuItem(graph::NodeKind::MaskBlend,
-                        "Mask Blend — マスク 2 枚を合成する");
-        ImGui::Separator();
-        addNodeMenuItem(graph::NodeKind::Path,
-                        "Path — 実寸の3次元カーブを編集");
-        addNodeMenuItem(graph::NodeKind::MaskPath,
-                        "Mask Path — パスの足跡をマスクにする");
-        addNodeMenuItem(graph::NodeKind::MaskArea,
-                        "Mask Area — パスの閉じた鎖の内側をマスクにする（エリア選択）");
-        ImGui::Separator();
-        addNodeMenuItem(graph::NodeKind::Output, "Output — ここに繋いだ結果をプレビューする");
+        addNodeMenuItem(graph::NodeKind::Path, "Path — 実寸の3次元カーブを編集");
+        addNodeMenuItem(graph::NodeKind::Surface, "Surface — 材質を Road / Shoulder のスロットへ渡す");
+        // 旧地形ノード（Heightmap / Shape / Liquid / 侵食系 / Mask 系 / Output）はメニューから外した。
+        // 旧ファイルの読込のためにノードの種類は残っている。
         ImGui::EndPopup();
     }
     ed::Resume();

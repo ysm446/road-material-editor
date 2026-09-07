@@ -295,7 +295,7 @@ float4 BoundaryControl(float2 meters, uint slot) {
     return control.SampleLevel(g_samplerLinearClamp, float2((slot + 0.5f) / 8.0f, meters.y * g_mesh.roadMaskScale.y), 0);
 }
 float2 BoundaryUv(BoundaryConstants b, float2 meters) {
-    float2 uv = float2((meters.x - b.center) * b.acrossSign / max(b.width, 0.02f) + 0.5f,
+    float2 uv = float2(saturate((meters.x - b.center) * b.acrossSign / max(b.width, 0.02f) + 0.5f),
                       frac(meters.y / max(b.repeat, 0.05f)));
     return b.alongU != 0 ? uv.yx : uv;
 }
@@ -327,7 +327,9 @@ ConnectionMix ConnectionWeights(float2 meters)
         const uint side = boundary % 2;
         const float4 boundaryControl = BoundaryControl(meters, boundary / 2);
         const BoundaryConstants b = g_mesh.boundaries[boundary];
-        const float weight = boundaryControl[side * 2] * BoundaryEnvelope(b, meters);
+        // マスクは幅の外でも端の色を維持する。ここで減衰すると従来の混合が再び現れる。
+        // 溝のハイトだけはBoundaryHeightで幅の外へ減衰させる。
+        const float weight = boundaryControl[side * 2];
         if (weight <= 0 || b.mask == kNoTextureIndex) continue;
         Texture2D<float4> map = ResourceDescriptorHeap[b.mask];
         float maskValue = saturate(map.SampleLevel(g_samplerLinearClamp, BoundaryUv(b, meters), 0).r);

@@ -41,11 +41,62 @@ struct Reader {
         return value.get<std::string>();
     }
 };
+json WritePresetMaterial(const graph::PresetMaterial& material) {
+    json m = {{"material", material.material}, {"uvRepeat", material.uvRepeatMeters},
+        {"worldUv", material.worldUv}, {"baseColor", material.baseColor}, {"roughness", material.roughness},
+        {"metallic", material.metallic}, {"ambientOcclusion", material.ambientOcclusion},
+        {"blendMode", material.blendMode}, {"heightGate", material.heightGate},
+        {"heightGateThreshold", material.heightGateThreshold}, {"heightGateSoftness", material.heightGateSoftness}, {"mask", nullptr}};
+    if (material.mask) {
+        const auto& mask = *material.mask;
+        m["mask"] = {{"shape", static_cast<uint32_t>(mask.shape)}, {"edgeSide", static_cast<uint32_t>(mask.edgeSide)},
+            {"laneOffset", mask.laneOffsetMeters}, {"trackSpacing", mask.trackSpacingMeters}, {"trackWidth", mask.trackWidthMeters},
+            {"feather", mask.featherMeters}, {"tracksFromLanes", mask.tracksFromLanes}, {"bothLanes", mask.bothLanes},
+            {"edgeWidth", mask.edgeWidthMeters}, {"noiseScale", mask.noiseScaleMeters}, {"threshold", mask.threshold},
+            {"softness", mask.softness}, {"seed", mask.seed}, {"breakupAmount", mask.breakupAmount},
+            {"breakupScale", mask.breakupScaleMeters}, {"strength", mask.strength}, {"invert", mask.invert}};
+    }
+    return m;
+}
+
+graph::PresetMaterial ReadPresetMaterial(Reader& r, const json& m, uint32_t version) {
+    graph::PresetMaterial material;
+    material.material = r.UInt(m, "material"); material.uvRepeatMeters = r.Float(m, "uvRepeat"); material.worldUv = r.Bool(m, "worldUv");
+    material.roughness = r.Float(m, "roughness");
+    const auto& color = r.Array(m, "baseColor");
+    if (color.size() != 3) r.valid = false;
+    for (size_t i = 0; i < color.size() && i < 3; ++i) {
+        if (!color[i].is_number()) r.valid = false;
+        else material.baseColor[i] = color[i].get<float>();
+    }
+    if (version >= 2) {
+        material.metallic = r.Float(m, "metallic"); material.ambientOcclusion = r.Float(m, "ambientOcclusion");
+        material.blendMode = r.UInt(m, "blendMode"); material.heightGate = r.UInt(m, "heightGate");
+        material.heightGateThreshold = r.Float(m, "heightGateThreshold"); material.heightGateSoftness = r.Float(m, "heightGateSoftness");
+        const auto& mask = r.Field(m, "mask");
+        if (!mask.is_null()) {
+            graph::RoadMaskNodeSettings settings;
+            settings.shape = static_cast<graph::RoadMaskShape>(r.UInt(mask, "shape"));
+            settings.edgeSide = static_cast<graph::RoadMaskSide>(r.UInt(mask, "edgeSide"));
+            settings.laneOffsetMeters = r.Float(mask, "laneOffset"); settings.trackSpacingMeters = r.Float(mask, "trackSpacing");
+            settings.trackWidthMeters = r.Float(mask, "trackWidth"); settings.featherMeters = r.Float(mask, "feather");
+            settings.tracksFromLanes = r.Bool(mask, "tracksFromLanes"); settings.bothLanes = r.Bool(mask, "bothLanes");
+            settings.edgeWidthMeters = r.Float(mask, "edgeWidth"); settings.noiseScaleMeters = r.Float(mask, "noiseScale");
+            settings.threshold = r.Float(mask, "threshold"); settings.softness = r.Float(mask, "softness"); settings.seed = r.UInt(mask, "seed");
+            settings.breakupAmount = r.Float(mask, "breakupAmount"); settings.breakupScaleMeters = r.Float(mask, "breakupScale");
+            settings.strength = r.Float(mask, "strength"); settings.invert = r.Bool(mask, "invert");
+            material.mask = settings;
+        }
+    }
+    return material;
+}
+
 }
 
 json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& document) {
     json result = {{"version", 2}, {"nextId", document.nextId}, {"presets", json::array()}, {"layouts", json::array()}};
     for (const auto& preset : document.presets) {
+        if (preset.materialGraph) result["version"] = 3;
         json p = {{"id", preset.id}, {"version", preset.version}, {"name", preset.name}, {"role", static_cast<uint32_t>(preset.role)},
                   {"displacement", preset.displacementMeters}, {"layerBlendRange", preset.layerBlendRange}, {"section", json::array()}, {"boundaries", json::array()},
                   {"materials", json::array()}, {"parameters", json::array()}};
@@ -53,21 +104,14 @@ json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& document) {
         for (const auto& boundary : preset.boundaries) p["boundaries"].push_back({{"mode", static_cast<uint32_t>(boundary.mode)},
             {"transition", boundary.transitionMeters}, {"maxHeightAdjustment", boundary.maxHeightAdjustment}, {"preserveOutline", boundary.preserveOutline}});
         for (const auto& material : preset.materials) {
-            json m = {{"material", material.material}, {"uvRepeat", material.uvRepeatMeters},
-                {"worldUv", material.worldUv}, {"baseColor", material.baseColor}, {"roughness", material.roughness},
-                {"metallic", material.metallic}, {"ambientOcclusion", material.ambientOcclusion},
-                {"blendMode", material.blendMode}, {"heightGate", material.heightGate},
-                {"heightGateThreshold", material.heightGateThreshold}, {"heightGateSoftness", material.heightGateSoftness}, {"mask", nullptr}};
-            if (material.mask) {
-                const auto& mask = *material.mask;
-                m["mask"] = {{"shape", static_cast<uint32_t>(mask.shape)}, {"edgeSide", static_cast<uint32_t>(mask.edgeSide)},
-                    {"laneOffset", mask.laneOffsetMeters}, {"trackSpacing", mask.trackSpacingMeters}, {"trackWidth", mask.trackWidthMeters},
-                    {"feather", mask.featherMeters}, {"tracksFromLanes", mask.tracksFromLanes}, {"bothLanes", mask.bothLanes},
-                    {"edgeWidth", mask.edgeWidthMeters}, {"noiseScale", mask.noiseScaleMeters}, {"threshold", mask.threshold},
-                    {"softness", mask.softness}, {"seed", mask.seed}, {"breakupAmount", mask.breakupAmount},
-                    {"breakupScale", mask.breakupScaleMeters}, {"strength", mask.strength}, {"invert", mask.invert}};
-            }
-            p["materials"].push_back(std::move(m));
+            p["materials"].push_back(WritePresetMaterial(material));
+        }
+        if (preset.materialGraph) {
+            json g = {{"nextId", preset.materialGraph->nextId}, {"nodes", json::array()}};
+            for (const auto& node : preset.materialGraph->nodes)
+                g["nodes"].push_back({{"id", node.id}, {"kind", static_cast<uint32_t>(node.kind)},
+                    {"inputs", node.inputs}, {"position", node.position}, {"settings", WritePresetMaterial(node.settings)}});
+            p["materialGraph"] = std::move(g);
         }
         for (const auto& parameter : preset.parameters) p["parameters"].push_back({{"id", parameter.id}, {"name", parameter.name},
             {"minimum", parameter.minimum}, {"maximum", parameter.maximum}, {"default", parameter.defaultValue}});
@@ -94,7 +138,7 @@ bool ReadSurfaceLayouts(const json& value, graph::SurfaceLayoutDocument& documen
     Reader r;
     graph::SurfaceLayoutDocument parsed;
     const auto version = r.UInt(value, "version");
-    if (version != 1 && version != 2) { error = "未対応の配置データ版です"; return false; }
+    if (version != 1 && version != 2 && version != 3) { error = "未対応の配置データ版です"; return false; }
     parsed.nextId = r.UInt(value, "nextId");
     for (const auto& p : r.Array(value, "presets")) {
         graph::SurfacePreset preset;
@@ -111,35 +155,30 @@ bool ReadSurfaceLayouts(const json& value, graph::SurfaceLayoutDocument& documen
                                    r.Float(b, "maxHeightAdjustment"), r.Bool(b, "preserveOutline")};
         }
         for (const auto& m : r.Array(p, "materials")) {
-            graph::PresetMaterial material;
-            material.material = r.UInt(m, "material"); material.uvRepeatMeters = r.Float(m, "uvRepeat"); material.worldUv = r.Bool(m, "worldUv");
-            material.roughness = r.Float(m, "roughness");
-            const auto& color = r.Array(m, "baseColor");
-            if (color.size() != 3) r.valid = false;
-            for (size_t i = 0; i < color.size() && i < 3; ++i) {
-                if (!color[i].is_number()) r.valid = false;
-                else material.baseColor[i] = color[i].get<float>();
-            }
-            if (version >= 2) {
-                material.metallic = r.Float(m, "metallic"); material.ambientOcclusion = r.Float(m, "ambientOcclusion");
-                material.blendMode = r.UInt(m, "blendMode"); material.heightGate = r.UInt(m, "heightGate");
-                material.heightGateThreshold = r.Float(m, "heightGateThreshold"); material.heightGateSoftness = r.Float(m, "heightGateSoftness");
-                const auto& mask = r.Field(m, "mask");
-                if (!mask.is_null()) {
-                    graph::RoadMaskNodeSettings settings;
-                    settings.shape = static_cast<graph::RoadMaskShape>(r.UInt(mask, "shape"));
-                    settings.edgeSide = static_cast<graph::RoadMaskSide>(r.UInt(mask, "edgeSide"));
-                    settings.laneOffsetMeters = r.Float(mask, "laneOffset"); settings.trackSpacingMeters = r.Float(mask, "trackSpacing");
-                    settings.trackWidthMeters = r.Float(mask, "trackWidth"); settings.featherMeters = r.Float(mask, "feather");
-                    settings.tracksFromLanes = r.Bool(mask, "tracksFromLanes"); settings.bothLanes = r.Bool(mask, "bothLanes");
-                    settings.edgeWidthMeters = r.Float(mask, "edgeWidth"); settings.noiseScaleMeters = r.Float(mask, "noiseScale");
-                    settings.threshold = r.Float(mask, "threshold"); settings.softness = r.Float(mask, "softness"); settings.seed = r.UInt(mask, "seed");
-                    settings.breakupAmount = r.Float(mask, "breakupAmount"); settings.breakupScaleMeters = r.Float(mask, "breakupScale");
-                    settings.strength = r.Float(mask, "strength"); settings.invert = r.Bool(mask, "invert");
-                    material.mask = settings;
+            preset.materials.push_back(ReadPresetMaterial(r, m, version));
+        }
+        if (p.contains("materialGraph")) {
+            if (version < 3) { error = "グラフ付きプリセットには配置データ版3が必要です"; return false; }
+            const auto& g = r.Field(p, "materialGraph");
+            preset.materialGraph.emplace();
+            preset.materialGraph->nextId = r.UInt(g, "nextId");
+            for (const auto& n : r.Array(g, "nodes")) {
+                graph::PresetNode node; node.id = r.UInt(n, "id");
+                node.kind = static_cast<graph::PresetNodeKind>(r.UInt(n, "kind"));
+                const auto& inputs = r.Array(n, "inputs");
+                const auto& position = r.Array(n, "position");
+                if (inputs.size() != 3 || position.size() != 2) r.valid = false;
+                for (size_t i = 0; i < inputs.size() && i < 3; ++i) {
+                    const json item = {{"input", inputs[i]}};
+                    node.inputs[i] = r.UInt(item, "input");
                 }
+                for (size_t i = 0; i < position.size() && i < 2; ++i) {
+                    if (!position[i].is_number()) r.valid = false;
+                    else node.position[i] = position[i].get<float>();
+                }
+                node.settings = ReadPresetMaterial(r, r.Field(n, "settings"), 2);
+                preset.materialGraph->nodes.push_back(node);
             }
-            preset.materials.push_back(material);
         }
         for (const auto& parameter : r.Array(p, "parameters")) preset.parameters.push_back({r.UInt(parameter, "id"), r.String(parameter, "name"),
             r.Float(parameter, "minimum"), r.Float(parameter, "maximum"), r.Float(parameter, "default")});

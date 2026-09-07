@@ -42,6 +42,19 @@ struct PresetMaterial {
     uint32_t blendMode = 0, heightGate = 0;
     float heightGateThreshold = 0.5f, heightGateSoftness = 0.2f;
 };
+enum class PresetNodeKind : uint32_t { Material, Mask, Blend, Output };
+struct PresetNode {
+    uint32_t id = 0;
+    PresetNodeKind kind = PresetNodeKind::Material;
+    // 合成: 下地・上層素材・マスク。出力: 入力0。0は未接続。
+    std::array<uint32_t, 3> inputs{};
+    std::array<float, 2> position{};
+    PresetMaterial settings;
+};
+struct PresetGraph {
+    uint32_t nextId = 1;
+    std::vector<PresetNode> nodes;
+};
 struct SurfacePreset {
     SurfaceId id = 0;
     uint32_t version = 1;
@@ -54,6 +67,7 @@ struct SurfacePreset {
     std::vector<PresetMaterial> materials;
     std::vector<PresetParameter> parameters;
     float layerBlendRange = 0.2f;
+    std::optional<PresetGraph> materialGraph;
 };
 struct SpanParameter {
     SurfaceId parameter = 0;

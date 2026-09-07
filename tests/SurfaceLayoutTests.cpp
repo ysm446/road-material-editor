@@ -1,3 +1,4 @@
+#include "graph/SurfacePresetGraph.h"
 #include "TestSupport.h"
 #include "graph/SurfaceBandGeometry.h"
 #include "graph/SurfaceLayout.h"
@@ -370,8 +371,20 @@ void RunSurfaceLayoutTests() {
           graph::BuildSurfaceBandGeometry(bandRoad, splitReload, splitReload.layouts[0].bands[1], editedSideMesh, error),
           "編集した沿道を保存往復して再生成する");
     renderer::MeshData bandMesh;
+    const auto checkBandGrid = [&](const renderer::MeshData& mesh) {
+        bool bounded = !mesh.vertices.empty();
+        for (size_t i = 0; i + 3 < mesh.vertices.size(); i += 4) {
+            for (const auto edge : {std::pair{0, 1}, std::pair{0, 2}, std::pair{1, 3}, std::pair{2, 3}}) {
+                const auto& a = mesh.vertices[i + edge.first].position;
+                const auto& b = mesh.vertices[i + edge.second].position;
+                bounded &= std::sqrt((a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y) + (a.z-b.z)*(a.z-b.z)) <= 1.0001f;
+            }
+        }
+        Check(bounded, "沿道格子の進行方向・断面方向の辺が1m以下である");
+    };
     Check(graph::BuildSurfaceBandGeometry(bandRoad, roadside, roadside.layouts[0].bands[1], bandMesh, error),
           "路肩から歩道の連続した断面を生成する");
+    checkBandGrid(bandMesh);
     renderer::SceneMesh bandSceneMesh; bandSceneMesh.geometry = bandMesh;
     renderer::MeshScene bandScene; bandScene.meshes.push_back(bandSceneMesh);
     Check(renderer::ValidateMeshScene(bandScene), "沿道の頂点・法線・接線・インデックスが有効");
@@ -388,6 +401,7 @@ void RunSurfaceLayoutTests() {
     renderer::MeshData rightMesh;
     Check(graph::BuildSurfaceBandGeometry(bandRoad, rightSide, rightSide.layouts[0].bands[1], rightMesh, error),
           "右側にも同じ断面を生成できる");
+    checkBandGrid(rightMesh);
     if (!rightMesh.vertices.empty() && rightMesh.vertices.size() == bandMesh.vertices.size()) {
         bool mirrored = true;
         for (size_t i = 0; i < rightMesh.vertices.size(); ++i)
@@ -407,6 +421,20 @@ void RunSurfaceLayoutTests() {
     }
     Check(graph::BuildSurfaceBandGeometry(bentRoad, roadside, roadside.layouts[0].bands[1], rightMesh, error),
           "曲がりと縦断高さを持つ道路格子に沿道が追従する");
+    checkBandGrid(rightMesh);
+    {
+        auto wideBands = roadside;
+        for (auto& p : wideBands.presets) if (p.role != graph::SurfaceRole::Road) {
+            float width, height;
+            if (graph::GetSimpleRoadsideDimensions(p, width, height))
+                graph::SetSimpleRoadsideDimensions(p, 9.5f, height);
+        }
+        renderer::MeshData wideMesh;
+        Check(graph::BuildSurfaceBandGeometry(bentRoad, wideBands, wideBands.layouts[0].bands[1], wideMesh, error),
+              "幅の広い路肩・歩道も断面の角を残して格子化する");
+        checkBandGrid(wideMesh);
+        Check(wideMesh.vertices.size() > bandMesh.vertices.size(), "幅を広げると横方向の列も増える");
+    }
     if (!rightMesh.vertices.empty()) Check(std::abs(rightMesh.vertices.back().position.y - 1.15f) < 1e-5f,
           "沿道の高さは道路の縦断高さを基準にする");
     auto roundedRoad = bentRoad;
@@ -686,6 +714,65 @@ void RunSurfaceLayoutTests() {
         auto invalidScene = displacedScene.scene;
         invalidScene.meshes[0].connectionHeightFade.y = std::numeric_limits<float>::quiet_NaN();
         Check(!renderer::ValidateMeshScene(invalidScene), "不正な変位抑制幅をGPUへ渡さない");
+    }
+
+    tests::Section("プリセットグラフ — 移行・結線・保存・Undo");
+    {
+        auto graphDocument = layered;
+        auto& graphPreset = graphDocument.presets.front();
+        graphPreset.materialGraph = graph::MakePresetGraph(graphPreset.materials);
+        std::vector<graph::PresetMaterial> flattened;
+        Check(graph::CompilePresetMaterials(graphPreset, flattened, error), "旧4層をグラフへ変換できる");
+        auto flatDocument = graphDocument;
+        flatDocument.presets.front().materialGraph.reset();
+        flatDocument.presets.front().materials = flattened;
+        Check(io::WriteSurfaceLayouts(flatDocument) == io::WriteSurfaceLayouts(layered),
+              "旧材質・マスク・ハイト合成条件を変えずにグラフから復元する");
+        const auto graphJson = io::WriteSurfaceLayouts(graphDocument);
+        graph::SurfaceLayoutDocument restored;
+        Check(graphJson["version"] == 3 && io::ReadSurfaceLayouts(graphJson, restored, error) &&
+              io::WriteSurfaceLayouts(restored) == graphJson, "ノードID・結線・配置・設定が保存往復する");
+        const auto graphPreview = graph::CompileSurfaceLayoutPreview(sceneGraph, graphDocument, linked.layouts[0].roadNode);
+        Check(graphPreview.error.empty() && graphPreview.scene.meshes.size() == layeredPreview.scene.meshes.size() &&
+              graphPreview.scene.meshes[1].roadMask.rgba == layeredPreview.scene.meshes[1].roadMask.rgba,
+              "グラフの道路評価が旧レイヤーと同じマスクを生成する");
+        auto& nodes = *graphPreset.materialGraph;
+        const auto output = nodes.nodes.back().id;
+        const auto lastBlend = nodes.nodes.back().inputs[0];
+        Check(!graph::ConnectPresetNodes(nodes, lastBlend, lastBlend, 0, error), "自己循環を拒否する");
+        uint32_t mask = 0;
+        for (const auto& n : nodes.nodes) if (n.kind == graph::PresetNodeKind::Mask) mask = n.id;
+        Check(!graph::ConnectPresetNodes(nodes, mask, output, 0, error), "マスクを面出力へ接続できない");
+        const auto extra = graph::AddPresetNode(nodes, graph::PresetNodeKind::Blend, {40, 50});
+        Check(graph::ConnectPresetNodes(nodes, lastBlend, extra, 0, error) &&
+              graph::ConnectPresetNodes(nodes, nodes.nodes.front().id, extra, 1, error) &&
+              !graph::ConnectPresetNodes(nodes, mask, extra, 2, error), "5層目となる接続を拒否する");
+        Check(graph::DeletePresetNode(nodes, extra) && !graph::DeletePresetNode(nodes, output),
+              "追加ノードは削除でき、出力ノードは保持する");
+        Check(graph::ConnectPresetNodes(nodes, nodes.nodes.front().id, output, 0, error) &&
+              graph::CompilePresetMaterials(graphPreset, flattened, error) && flattened.size() == 1,
+              "出力を下地素材へ結び替えると合成を迂回する");
+        auto brokenGraph = graphJson; brokenGraph["presets"][0]["materialGraph"]["nodes"][0]["id"] = 0;
+        Check(!io::ReadSurfaceLayouts(brokenGraph, restored, error) && io::WriteSurfaceLayouts(restored) == graphJson,
+              "破損グラフの読込は文書を変更しない");
+        DocumentSnapshot graphBefore, graphAfter;
+        graphBefore.surfaceLayouts = restored; graphAfter.surfaceLayouts = graphDocument;
+        UndoHistory graphHistory; graphHistory.Push(graphBefore, 0);
+        const auto undoGraph = graphHistory.Undo(graphAfter);
+        Check(io::WriteSurfaceLayouts(undoGraph.surfaceLayouts) == graphJson, "結線変更をUndoする");
+        Check(io::WriteSurfaceLayouts(graphHistory.Redo(undoGraph).surfaceLayouts) == io::WriteSurfaceLayouts(graphDocument),
+              "結線変更をRedoする");
+        auto graphRoadside = multilayerBand;
+        for (auto& p : graphRoadside.presets) p.materialGraph = graph::MakePresetGraph(p.materials);
+        Check(graph::ValidateSurfaceLayouts(graphRoadside, error), "沿道も同じグラフへ移行できる");
+        const auto graphBand = graph::CompileSurfaceBandPreview(sceneGraph, graphRoadside, roadId, graphRoadside.layouts[0].bands[1].id);
+        Check(graphBand.error.empty() && graphBand.scene.meshes.size() == worldBandPreview.scene.meshes.size() &&
+              graphBand.scene.meshes[1].roadMask.rgba == worldBandPreview.scene.meshes[1].roadMask.rgba,
+              "グラフの沿道評価がワールド座標のマスクを維持する");
+        auto simple = graph::MakePresetGraph({graph::PresetMaterial{}});
+        Check(graph::AppendPresetLayer(simple, error) && graph::AppendPresetLayer(simple, error) &&
+              graph::AppendPresetLayer(simple, error) && !graph::AppendPresetLayer(simple, error),
+              "層の追加が素材・マスク・合成を結線し、4層で止まる");
     }
 
 }

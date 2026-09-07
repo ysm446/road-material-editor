@@ -15,18 +15,18 @@ namespace tg {
 bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
     ui::SectionHeader("沿道の配置");
     if (!m_surfacePresetError.empty()) ui::HintText(m_surfacePresetError.c_str());
-    if (ui::BeginPropertyTable("surfaceBandPreviewRows")) {
+    if (ui::BeginPropertyTable("surfaceBandPreviewRows", 150)) {
         if (ui::PropertyBool("形状を表示", &m_previewSurfaceBands, false,
-            "沿道の形状と下地材質を確認する。ハイト変位は横接続の「変位もつなぐ」で確認する")) m_graph.MarkDirty();
+            "道路に沿って路肩や歩道を表示する。素材のハイトによる凹凸は「凹凸をなじませる」で有効にする")) m_graph.MarkDirty();
         const char* sides[] = {"左沿道", "右沿道"};
         if (ui::PropertyCombo("編集する沿道", &m_surfaceBandSide, sides, 2, 0, "編集する沿道の左右。横接続は左右両方へ適用する")) m_graph.MarkDirty();
-        if (ui::PropertyBool("横接続を試す", &m_connectSurfaceBands, false,
-            "道路最大3種類と左右それぞれ最大2種類の沿道を境界で混ぜる。形状表示もオンにする。凹凸は「変位もつなぐ」で有効にする")) {
+        if (ui::PropertyBool("材質をなじませる", &m_connectSurfaceBands, false,
+            "道路と左右の沿道の境界で材質を滑らかに混ぜる。形状表示もオンにする。道路は最大3種類、沿道は左右それぞれ最大2種類のプリセットに対応")) {
             if (m_connectSurfaceBands) m_previewSurfaceBands = true;
             m_graph.MarkDirty();
         }
-        if (ui::PropertyBool("変位もつなぐ", &m_displaceConnectedBands, false,
-            "境界付近の変位を共通の基準高さへ戻し、離れた所では素材の凹凸を残す。変位方向は世界Y")) {
+        if (ui::PropertyBool("凹凸をなじませる", &m_displaceConnectedBands, false,
+            "素材のハイトによる凹凸を有効にし、境界付近で滑らかに抑える。歩道の段差は保つ。形状表示と材質のなじませもオンにする")) {
             if (m_displaceConnectedBands) { m_connectSurfaceBands = true; m_previewSurfaceBands = true; }
             m_graph.MarkDirty();
         }
@@ -35,7 +35,7 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
     const auto side = m_surfaceBandSide == 0 ? graph::SurfaceSide::Left : graph::SurfaceSide::Right;
     if (m_previewSurfaceBands && m_connectSurfaceBands) ui::HintText(m_displaceConnectedBands
         ? "境界付近の凹凸を滑らかに抑え、段差の基準高さへ接続します"
-        : "左右の横接続を試作中。接続した道路と沿道の変位は停止します");
+        : "材質の境界をなじませています。素材の凹凸も使う場合は「凹凸をなじませる」をオンにします");
     bool exists = false;
     for (const auto& layout : m_surfaceLayouts.layouts) if (layout.roadNode == roadId)
         for (const auto& candidate : layout.bands) if (candidate.side == side) exists = true;

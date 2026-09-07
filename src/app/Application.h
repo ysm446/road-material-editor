@@ -122,6 +122,8 @@ private:
     // グラフノードのレイヤー設定のプロパティ行。変更があれば true。
     bool DrawSurfaceLayoutSettings(graph::GraphId roadId);
     void DrawSurfacePresetEditor();
+    bool DrawSurfacePresetGraph(graph::SurfacePreset& preset);
+    void DrawGraphBackground(const ImVec2& min, const ImVec2& max);
     bool DrawLayerSettings(compositor::MaterialLayer& layer);
     // グラフの変更をメッシュシーンへ反映する。フレームの頭（フレームの外）で呼ぶ。
     void SyncMeshGraph();
@@ -338,6 +340,9 @@ private:
     graph::GraphId m_graphPressedPin = 0;
     ImVec2 m_graphPressedPinPos{};
     ax::NodeEditor::EditorContext* m_nodeEditor = nullptr;
+    ax::NodeEditor::EditorContext* m_presetNodeEditor = nullptr;
+    graph::SurfaceId m_presetEditorId = 0;
+    uint32_t m_selectedPresetNode = 0;
     // グラフパネル内の「エディタ / プロパティ」境界の高さ（96 DPI 基準）。
     float m_graphEditorHeight = 380.0f;
     // 位置をエディタへ流し込むべきノード。作成・読み込みのときに積む。
@@ -569,5 +574,3 @@ private:
 };
 
 }  // namespace tg
-
-

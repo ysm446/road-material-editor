@@ -45,7 +45,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 15: merge ノード（入力数が可変）。旧ビルドが Merge を読み飛ばして Mesh Output との接続を失うことを防ぐ。
 // 16: crack ノード。
 // 17: 埋込プリセットと道路・沿道の配置記述。旧ビルドによる消失を防ぐ。
-constexpr int kProjectFormatVersion = 18;
+constexpr int kProjectFormatVersion = 19;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -1437,6 +1437,11 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs) {
     document["graph"] = WriteGraph(refs.graph, writeMaterial);
     auto layouts = WriteSurfaceLayouts(refs.surfaceLayouts);
     for (auto& preset : layouts["presets"]) {
+        if (preset.contains("materialGraph")) for (auto& node : preset["materialGraph"]["nodes"]) {
+            auto& material = node["settings"]["material"];
+            const auto reference = writeMaterial(material.get<uint32_t>());
+            material = reference.is_null() ? json(0) : reference;
+        }
         for (auto& material : preset["materials"]) {
             const auto reference = writeMaterial(material["material"].get<uint32_t>());
             material["material"] = reference.is_null() ? json(0) : reference;
@@ -1457,6 +1462,9 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs) {
     document["activeSky"] = activeSkyIndex;
 
     document["preview"] = WritePreview(refs.renderer);
+    document["preview"]["surfaceBands"] = refs.previewSurfaceBands;
+    document["preview"]["connectSurfaceBands"] = refs.connectSurfaceBands;
+    document["preview"]["displaceConnectedBands"] = refs.displaceConnectedBands;
 
     if (!WriteJsonFile(savePath, document)) {
         return false;
@@ -1581,8 +1589,11 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
             const auto it = materialIds.find(value.get<int>());
             return (it != materialIds.end()) ? it->second : compositor::kNoMaterialAsset;
         };
-    for (auto& preset : pendingLayouts.presets)
+    for (auto& preset : pendingLayouts.presets) {
         for (auto& material : preset.materials) material.material = readMaterial(json(material.material));
+        if (preset.materialGraph) for (auto& node : preset.materialGraph->nodes)
+            node.settings.material = readMaterial(json(node.settings.material));
+    }
     refs.surfaceLayouts = std::move(pendingLayouts);
     // 旧形式の layers[]（版 3 以前）。移行用に一旦読み込んでおく。
     std::vector<compositor::MaterialLayer> legacyLayers;
@@ -1627,6 +1638,9 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
     const json& previewNode =
         (preview != nullptr && preview->is_object()) ? *preview : emptyPreview;
     ReadPreview(previewNode, refs.renderer);
+    refs.previewSurfaceBands = ReadBool(previewNode, "surfaceBands", false);
+    refs.connectSurfaceBands = ReadBool(previewNode, "connectSurfaceBands", false);
+    refs.displaceConnectedBands = ReadBool(previewNode, "displaceConnectedBands", false);
 
     // 天球。無ければ preview 節から 1 つ作る（天球を入れる前のプロジェクト）。
     if (const json* skies = FindMember(document, "skies");

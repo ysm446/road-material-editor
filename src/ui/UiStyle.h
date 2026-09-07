@@ -65,7 +65,7 @@ float FontScale();
 // すべての設定値は「ラベル：ウィジェット」の 2 列テーブルの 1 行として描く。
 // 左列にラベル（末尾に全角コロン）、右列にウィジェットを置く。
 
-bool BeginPropertyTable(const char* id);
+bool BeginPropertyTable(const char* id, float labelWidth = kLabelColumnWidth);
 void EndPropertyTable();
 
 // セクション見出し。プロパティテーブルの外で呼ぶ。

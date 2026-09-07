@@ -1,4 +1,5 @@
 #include "graph/SurfaceLayout.h"
+#include "graph/SurfacePresetGraph.h"
 #include "graph/NodeGraph.h"
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,27 @@ bool ValidateSurfaceLayoutRoads(const SurfaceLayoutDocument& document, const Nod
 SurfaceId SurfaceLayoutDocument::AllocateId() {
     if (nextId == 0 || nextId == std::numeric_limits<SurfaceId>::max()) return 0;
     return nextId++;
+}
+
+bool ValidatePresetMaterial(const PresetMaterial& material, std::string& error) {
+    const auto fail = [&](const char* message) { error = message; return false; };
+    const auto range = [](float x, float lo, float hi) { return std::isfinite(x) && x >= lo && x <= hi; };
+    if (!range(material.uvRepeatMeters, 0.01f, 100) || !range(material.roughness, 0, 1) ||
+        !range(material.metallic, 0, 1) || !range(material.ambientOcclusion, 0, 1) ||
+        material.blendMode > 1 || material.heightGate > 2 || !range(material.heightGateThreshold, 0, 1) ||
+        !range(material.heightGateSoftness, 0.001f, 1)) return fail("材質の寸法・PBR値・合成条件が不正です");
+    for (float channel : material.baseColor) if (!range(channel, 0, 1)) return fail("材質色が不正です");
+    if (material.mask) {
+        const auto& mask = *material.mask;
+        if (static_cast<uint32_t>(mask.shape) > 4 || static_cast<uint32_t>(mask.edgeSide) > 2 ||
+            !range(mask.laneOffsetMeters, -100, 100) || !range(mask.trackSpacingMeters, 0, 100) ||
+            !range(mask.trackWidthMeters, 0, 100) || !range(mask.featherMeters, 0, 100) ||
+            !range(mask.edgeWidthMeters, 0, 100) || !range(mask.noiseScaleMeters, 0.05f, 100) ||
+            !range(mask.threshold, 0, 1) || !range(mask.softness, 0.0001f, 1) ||
+            !range(mask.breakupAmount, 0, 1) || !range(mask.breakupScaleMeters, 0.05f, 100) ||
+            !range(mask.strength, 0, 1)) return fail("プリセットの道路マスクが不正です");
+    }
+    return true;
 }
 
 bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& document, std::string& error) {
@@ -47,23 +69,9 @@ bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& document, std::string& 
             if (static_cast<uint32_t>(boundary.mode) > 2 || !range(boundary.transitionMeters, 0, 50) ||
                 !range(boundary.maxHeightAdjustment, 0, 100)) return fail("境界条件が不正です");
         if (!range(preset.layerBlendRange, 0, 1)) return fail("材質のハイト合成幅が不正です");
-        for (const auto& material : preset.materials) {
-            if (!range(material.uvRepeatMeters, 0.01f, 100) || !range(material.roughness, 0, 1) ||
-                !range(material.metallic, 0, 1) || !range(material.ambientOcclusion, 0, 1) ||
-                material.blendMode > 1 || material.heightGate > 2 || !range(material.heightGateThreshold, 0, 1) ||
-                !range(material.heightGateSoftness, 0.001f, 1)) return fail("材質の寸法・PBR値・合成条件が不正です");
-            for (float channel : material.baseColor) if (!range(channel, 0, 1)) return fail("材質色が不正です");
-            if (material.mask) {
-                const auto& mask = *material.mask;
-                if (static_cast<uint32_t>(mask.shape) > 4 || static_cast<uint32_t>(mask.edgeSide) > 2 ||
-                    !range(mask.laneOffsetMeters, -100, 100) || !range(mask.trackSpacingMeters, 0, 100) ||
-                    !range(mask.trackWidthMeters, 0, 100) || !range(mask.featherMeters, 0, 100) ||
-                    !range(mask.edgeWidthMeters, 0, 100) || !range(mask.noiseScaleMeters, 0.05f, 100) ||
-                    !range(mask.threshold, 0, 1) || !range(mask.softness, 0.0001f, 1) ||
-                    !range(mask.breakupAmount, 0, 1) || !range(mask.breakupScaleMeters, 0.05f, 100) ||
-                    !range(mask.strength, 0, 1)) return fail("プリセットの道路マスクが不正です");
-            }
-        }
+        for (const auto& material : preset.materials)
+            if (!ValidatePresetMaterial(material, error)) return false;
+        if (preset.materialGraph && !ValidatePresetGraph(*preset.materialGraph, error)) return false;
         if (preset.materials.front().mask || preset.materials.front().heightGate || preset.materials.front().blendMode)
             return fail("下地スロットにはマスク・高さ条件・混ぜ方を指定できません");
         for (const auto& parameter : preset.parameters)

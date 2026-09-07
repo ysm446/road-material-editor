@@ -1,11 +1,11 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 21:33
+更新日時: 2026-09-07 22:17
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
-Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は18。
+Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は19。
 版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンク、版12で Road の材質スロットと Road Mask、版13で面上の Path と Decal を追加した（「Road Editor で追加した版」）。
 版14でShoulder、版15でMerge、版16でCrack、版17で埋込プリセットと配置記述、版18でプリセット内部の多層材質を追加した。
 道路専用の拡張子は後続で設計する。
@@ -20,6 +20,14 @@ Road Editor への移行初期は、この既存形式を継続利用する。�
 詳細と制約は [配置記述の保存基盤](surface-layout-data.md)。実装は `SurfaceLayout.h` と `SurfaceLayoutIo.cpp`。開発用道路プレビューで区間と多層材質を評価する。
 
 版18ではプリセットに `layerBlendRange`、各素材スロットに `mask`（Road Mask全設定またはnull）、`blendMode`、`heightGate`、`heightGateThreshold`、`heightGateSoftness`、`metallic`、`ambientOcclusion` を追加。節版1は既定値で移行し、節版2では必須キーとして検査する。
+
+## 版19: プリセット材質グラフ
+
+グラフ付き文書の `surfaceLayouts.version` は3。プリセットの省略可能な `materialGraph` に `{nextId, nodes}` を保存する。ノードは `{id, kind, inputs[3], position[2], settings}`。kindは素材0／マスク1／合成2／出力3。IDは各プリセットグラフ内で一意。`settings` は版18の素材スロットと同じスキーマを使い、種類に応じた項目だけ評価する。素材参照は通常の素材と同じ保存IDへ変換する。
+
+合成の入力は下地・上層素材・マスク、出力は入力0を使用する。未接続は0。循環・不正な型・参照・位置・重複ID・複数出力は拒否する。最大32ノード、評価結果は下地を含めて4層。上層に合成済みの面は接続できない。出力に未接続なら既定の定数材質、上層素材またはマスクが未接続なら下地を通す。
+
+`materialGraph` があれば材質評価の正とし、旧 `materials` は移行前の値として保持する。旧ファイルは読み込める。編集画面を開くだけでは文書を変更せず、最初の編集で旧層をグラフへ変換して同じUndoへ含める。グラフのない文書の節版は2のままだが、アプリからの保存はプロジェクト版19となる。
 
 ## 全体像
 
@@ -517,3 +525,7 @@ RGB をそのまま使うマップ（ベースカラー / 法線）はテクス�
 `preview.shadowResolution` は1024／2048／4096。省略・不正値は2048を使用する。既存の `preview.shadow` は有効・無効として維持する。省略可能なプレビュー設定の追加のため、プロジェクト版18を維持する。
 
 `preview.shadowCascadeCount` は1（1枚）／4（4カスケード）。省略・不正値は4を使用する。`preview.shadowResolution` は1枚あたりの解像度。どちらも省略可能で、プロジェクト版18を維持する。
+
+## 沿道のプレビュー設定
+
+`preview.surfaceBands`（形状を表示）、`preview.connectSurfaceBands`（材質をなじませる）、`preview.displaceConnectedBands`（凹凸をなじませる）はboolで保存する。省略・不正型はfalse。チェック状態を個別に保持し、読込時に他のチェックを強制しない。プロジェクト全体の設定で、Roadごとの値やUndoには含めない。新規作成時はすべてfalseへ戻す。

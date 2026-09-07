@@ -129,7 +129,7 @@ inline int ResolutionIndex(uint32_t resolution) {
 
 // マテリアルを選ぶ行。サムネイル付きの一覧から選ぶ。
 inline bool DrawMaterialSlotRow(const char* label, compositor::MaterialAssetId& slot,
-                         const compositor::MaterialLibrary& library) {
+                         const compositor::MaterialLibrary& library, bool showThumbnail = false) {
     ui::PropertyLabel(label, "「なし」ならレイヤーの定数値だけで塗る");
 
     std::string preview = "なし";
@@ -137,8 +137,14 @@ inline bool DrawMaterialSlotRow(const char* label, compositor::MaterialAssetId& 
         preview = current->name;
     }
 
-    const float thumbnailSize = ImGui::GetFrameHeight();
+    const float thumbnailSize = showThumbnail ? ui::Scaled(kLayerRowThumbnail) : ImGui::GetFrameHeight();
     bool changed = false;
+    if (showThumbnail) {
+        const float rowY = ImGui::GetCursorPosY();
+        ui::ThumbnailImage(static_cast<ImTextureID>(library.ThumbnailHandle(slot).ptr), thumbnailSize);
+        ImGui::SameLine();
+        ImGui::SetCursorPosY(rowY + (thumbnailSize - ImGui::GetFrameHeight()) * 0.5f);
+    }
     ImGui::SetNextItemWidth(
         std::min(ui::Scaled(ui::kComboMaxWidth), ImGui::GetContentRegionAvail().x));
     if (ImGui::BeginCombo("##value", preview.c_str())) {
@@ -148,7 +154,16 @@ inline bool DrawMaterialSlotRow(const char* label, compositor::MaterialAssetId& 
         }
         for (const compositor::MaterialAsset& asset : library.Entries()) {
             ImGui::PushID(static_cast<int>(asset.id));
-            if (asset.thumbnail.IsValid()) {
+            if (showThumbnail) {
+                const auto thumbnail = ui::ThumbnailButton("##materialThumbnail",
+                    static_cast<ImTextureID>(library.ThumbnailHandle(asset.id).ptr), thumbnailSize, slot == asset.id);
+                if (thumbnail.clicked) {
+                    slot = asset.id;
+                    changed = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+            } else if (asset.thumbnail.IsValid()) {
                 ImGui::Image(static_cast<ImTextureID>(asset.thumbnail.srv.gpu.ptr),
                              ImVec2(thumbnailSize, thumbnailSize));
                 ImGui::SameLine();

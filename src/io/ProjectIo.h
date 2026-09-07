@@ -25,6 +25,9 @@ struct ProjectRefs {
     renderer::PreviewRenderer& renderer;
     graph::NodeGraph& graph;
     graph::SurfaceLayoutDocument& surfaceLayouts;
+    bool& previewSurfaceBands;
+    bool& connectSurfaceBands;
+    bool& displaceConnectedBands;
 };
 
 // --- プロジェクト (.tgproj) -----------------------------------------------

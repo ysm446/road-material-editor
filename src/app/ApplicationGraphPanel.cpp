@@ -254,10 +254,18 @@ bool IsValidNodePosition(float x, float y) {
 }  // namespace
 
 void Application::DestroyGraphEditor() {
+    if (m_presetNodeEditor) {
+        ed::DestroyEditor(m_presetNodeEditor);
+        m_presetNodeEditor = nullptr;
+    }
     if (m_nodeEditor != nullptr) {
         ed::DestroyEditor(m_nodeEditor);
         m_nodeEditor = nullptr;
     }
+}
+
+void Application::DrawGraphBackground(const ImVec2& min, const ImVec2& max) {
+    DrawGraphDots(min, max);
 }
 
 void Application::RequestGraphNodePlacement(bool navigate) {
@@ -1337,4 +1345,3 @@ void Application::DrawGraphPanel() {
 }
 
 }  // namespace tg
-

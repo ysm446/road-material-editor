@@ -541,13 +541,13 @@ void ApplyTheme(float dpiScale) {
     style.ScaleAllSizes(g_dpiScale);
 }
 
-bool BeginPropertyTable(const char* id) {
+bool BeginPropertyTable(const char* id, float labelWidth) {
     if (!ImGui::BeginTable(id, 2, ImGuiTableFlags_SizingStretchProp)) {
         return false;
     }
     // ラベル列は文字が入る幅なので、文字サイズにも追従させる（大きくして切れないように）。
     ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed,
-                            TextScaled(kLabelColumnWidth));
+                            TextScaled(labelWidth));
     ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
     return true;
 }

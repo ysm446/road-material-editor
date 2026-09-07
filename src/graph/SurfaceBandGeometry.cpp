@@ -1,10 +1,13 @@
+#include "graph/SurfacePresetGraph.h"
 #include "graph/SurfaceBandGeometry.h"
 #include "graph/RoadMask.h"
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace tg::graph {
 namespace {
+constexpr float kBandCellMeters = 1.0f;
 struct Profile {
     SurfaceId id;
     const SurfacePreset* preset;
@@ -172,8 +175,6 @@ bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocum
         if (a.preset != b.preset && a.blendOutMeters + b.blendInMeters <= 0)
             return fail("異なる沿道プリセットの境界には移行距離が必要です");
     }
-    const uint32_t steps = static_cast<uint32_t>(std::ceil(length / 0.25f));
-    for (uint32_t i = 0; i <= steps; ++i) distances.push_back(length * float(i) / float(steps));
     const auto sortUnique = [](auto& values) {
         std::sort(values.begin(), values.end());
         values.erase(std::unique(values.begin(), values.end()), values.end());
@@ -187,37 +188,77 @@ bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocum
     }), distances.end());
     distances.back() = length;
     sortUnique(knots);
+    // 断面の角を残し、それぞれの区間を実距離1m以下へ分割する。
+    // 全プリセットで共通の列を使い、幅・高さが変化しても格子を揃える。
+    std::vector<float> dividedKnots{knots.front()};
+    for (size_t i = 1; i < knots.size(); ++i) {
+        float segmentLength = 0;
+        for (const auto& profile : profiles) {
+            const auto a = SampleProfile(profile, knots[i - 1]), b = SampleProfile(profile, knots[i]);
+            // バンクで横方向と高さ方向が直交しなくても1mを超えない上限。
+            segmentLength = std::max(segmentLength, std::abs(b.x - a.x) + std::abs(b.y - a.y));
+        }
+        const auto steps = std::max(1u, static_cast<uint32_t>(std::ceil(segmentLength / kBandCellMeters)));
+        if (dividedKnots.size() + steps > 256) return fail("沿道断面の分割数が多すぎます");
+        for (uint32_t step = 1; step <= steps; ++step)
+            dividedKnots.push_back(std::lerp(knots[i - 1], knots[i], float(step) / float(steps)));
+    }
+    knots = std::move(dividedKnots);
     if (knots.size() > 256 || distances.size() > 8192 || knots.size() * distances.size() > 262144)
         return fail("沿道断面または区間の分割数が多すぎます");
     std::vector<XMFLOAT3> positions;
-    for (float distance : distances) {
-        const auto upper = std::upper_bound(road.rowDistances.begin(), road.rowDistances.end(), distance);
-        const size_t row = std::clamp(size_t(upper - road.rowDistances.begin()), size_t(1), road.rowDistances.size() - 1);
-        const float t = std::clamp((distance - road.rowDistances[row - 1]) /
-            (road.rowDistances[row] - road.rowDistances[row - 1]), 0.0f, 1.0f);
-        const auto edge = [&](uint32_t column) {
-            return XMVectorLerp(XMLoadFloat3(&road.surface.vertices[(row - 1) * road.stride + column].position),
-                                XMLoadFloat3(&road.surface.vertices[row * road.stride + column].position), t);
-        };
-        const auto right = edge(0), left = edge(road.stride - 1);
-        const bool isLeft = band.side == SurfaceSide::Left;
-        const auto delta = XMVectorSubtract(left, right);
-        if (XMVectorGetX(XMVector3LengthSq(delta)) < 1e-8f) return fail("道路の幅方向が縮退しています");
-        const auto outward = XMVectorScale(XMVector3Normalize(delta), isLeft ? 1.0f : -1.0f);
-        const auto origin = isLeft ? left : right;
-        const auto samples = SampleSurfaceBand(document, band, distance);
-        if (samples.empty()) return fail("沿道区間を道路全長に合わせてください");
-        for (float knot : knots) {
-            float across = 0, height = 0;
-            for (const auto& sample : samples) {
-                const auto profile = std::find_if(profiles.begin(), profiles.end(), [&](const auto& p) { return p.id == sample.preset; });
-                const auto p = SampleProfile(*profile, knot);
-                across += p.x * sample.weight; height += p.y * sample.weight;
+    // 道路の行と区間の端を保持し、曲線外側や断面の変化が1mを超える箇所だけ行を足す。
+    for (;;) {
+        if (distances.size() > 8192 || knots.size() * distances.size() > 262144)
+            return fail("沿道断面または区間の分割数が多すぎます");
+        positions.clear();
+        positions.reserve(knots.size() * distances.size());
+        for (float distance : distances) {
+            const auto upper = std::upper_bound(road.rowDistances.begin(), road.rowDistances.end(), distance);
+            const size_t row = std::clamp(size_t(upper - road.rowDistances.begin()), size_t(1), road.rowDistances.size() - 1);
+            const float t = std::clamp((distance - road.rowDistances[row - 1]) /
+                (road.rowDistances[row] - road.rowDistances[row - 1]), 0.0f, 1.0f);
+            const auto edge = [&](uint32_t column) {
+                return XMVectorLerp(XMLoadFloat3(&road.surface.vertices[(row - 1) * road.stride + column].position),
+                                    XMLoadFloat3(&road.surface.vertices[row * road.stride + column].position), t);
+            };
+            const auto right = edge(0), left = edge(road.stride - 1);
+            const bool isLeft = band.side == SurfaceSide::Left;
+            const auto delta = XMVectorSubtract(left, right);
+            if (XMVectorGetX(XMVector3LengthSq(delta)) < 1e-8f) return fail("道路の幅方向が縮退しています");
+            const auto outward = XMVectorScale(XMVector3Normalize(delta), isLeft ? 1.0f : -1.0f);
+            const auto origin = isLeft ? left : right;
+            const auto samples = SampleSurfaceBand(document, band, distance);
+            if (samples.empty()) return fail("沿道区間を道路全長に合わせてください");
+            for (float knot : knots) {
+                float across = 0, height = 0;
+                for (const auto& sample : samples) {
+                    const auto profile = std::find_if(profiles.begin(), profiles.end(), [&](const auto& p) { return p.id == sample.preset; });
+                    const auto p = SampleProfile(*profile, knot);
+                    across += p.x * sample.weight; height += p.y * sample.weight;
+                }
+                XMFLOAT3 p;
+                XMStoreFloat3(&p, XMVectorAdd(origin, XMVectorAdd(XMVectorScale(outward, across), XMVectorSet(0, height, 0, 0))));
+                positions.push_back(p);
             }
-            XMFLOAT3 p;
-            XMStoreFloat3(&p, XMVectorAdd(origin, XMVectorAdd(XMVectorScale(outward, across), XMVectorSet(0, height, 0, 0))));
-            positions.push_back(p);
         }
+        std::vector<float> refined{distances.front()};
+        for (size_t row = 1; row < distances.size(); ++row) {
+            float longest = 0;
+            for (size_t col = 0; col < knots.size(); ++col) {
+                const auto a = XMLoadFloat3(&positions[(row - 1) * knots.size() + col]);
+                const auto b = XMLoadFloat3(&positions[row * knots.size() + col]);
+                longest = std::max(longest, XMVectorGetX(XMVector3Length(XMVectorSubtract(b, a))));
+            }
+            if (longest > kBandCellMeters + 1e-5f) {
+                const float middle = std::midpoint(distances[row - 1], distances[row]);
+                if (middle <= distances[row - 1] || middle >= distances[row]) return fail("沿道の変化が急すぎて分割できません");
+                refined.push_back(middle);
+            }
+            refined.push_back(distances[row]);
+        }
+        if (refined.size() == distances.size()) break;
+        distances = std::move(refined);
     }
     renderer::MeshData mesh;
     // 断面の稜線を保つため面ごとに頂点を持つ。隣接面の位置は共通の標本から取る。
@@ -277,13 +318,15 @@ CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const Surfac
         const auto& preset = *found;
         renderer::SceneMesh context;
         context.materialOnly = true;
-        context.roadMetersPerUv = preset.materials.front().uvRepeatMeters;
+        std::vector<PresetMaterial> materials;
+        if (!CompilePresetMaterials(preset, materials, result.error)) return result;
+        context.roadMetersPerUv = materials.front().uvRepeatMeters;
         context.roadWidthMeters = arc;
         context.roadLengthMeters = road.rowDistances.back();
         context.layerBlendRange = preset.layerBlendRange;
         const RoadMaskNodeSettings* masks[3]{};
-        for (size_t slot = 0; slot < preset.materials.size(); ++slot) {
-            const auto& source = preset.materials[slot];
+        for (size_t slot = 0; slot < materials.size(); ++slot) {
+            const auto& source = materials[slot];
             context.layerUvRepeat[slot] = source.uvRepeatMeters;
             context.layerWorldUv[slot] = source.worldUv;
             context.layerHeightGate[slot] = source.heightGate;

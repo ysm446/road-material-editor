@@ -1,3 +1,4 @@
+#include "graph/SurfacePresetGraph.h"
 #include "graph/SurfaceLayoutEvaluation.h"
 #include "graph/RoadMask.h"
 #include <algorithm>
@@ -109,15 +110,17 @@ CompiledMeshGraph CompileSurfaceLayoutPreview(const NodeGraph& graph, const Surf
         const auto& preset = *FindPreset(document, id);
         renderer::SceneMesh context;
         context.materialOnly = true;
-        context.roadMetersPerUv = preset.materials.front().uvRepeatMeters;
+        std::vector<PresetMaterial> materials;
+        if (!CompilePresetMaterials(preset, materials, result.error)) return result;
+        context.roadMetersPerUv = materials.front().uvRepeatMeters;
         context.roadUvAlongU = road.settings.uvAlongU;
         context.displacementMeters = preset.displacementMeters;
         context.layerBlendRange = preset.layerBlendRange;
         context.roadWidthMeters = road.settings.widthMeters;
         context.roadLengthMeters = length;
         const RoadMaskNodeSettings* masks[3]{};
-        for (size_t slot = 0; slot < preset.materials.size(); ++slot) {
-            const auto& source = preset.materials[slot];
+        for (size_t slot = 0; slot < materials.size(); ++slot) {
+            const auto& source = materials[slot];
             context.layerUvRepeat[slot] = source.uvRepeatMeters;
             context.layerWorldUv[slot] = source.worldUv;
             context.layerHeightGate[slot] = source.heightGate;

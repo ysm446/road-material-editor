@@ -107,6 +107,7 @@ set(tg_sources
     src/graph/SurfaceBandGeometry.h
     src/graph/SurfaceLayoutEvaluation.cpp
     src/graph/SurfaceLayoutEvaluation.h
+    src/graph/SurfacePresetGraph.cpp
     src/graph/SurfaceLayout.cpp
     src/graph/SurfaceLayout.h
     src/io/SurfaceLayoutIo.cpp
@@ -295,6 +296,7 @@ add_executable(road_editor_tests
     src/graph/SurfaceBandGeometry.h
     src/graph/SurfaceLayoutEvaluation.cpp
     src/graph/SurfaceLayoutEvaluation.h
+    src/graph/SurfacePresetGraph.cpp
     src/graph/SurfaceLayout.cpp
     src/graph/SurfaceLayout.h
     src/io/SurfaceLayoutIo.cpp

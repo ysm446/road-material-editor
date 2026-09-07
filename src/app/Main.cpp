@@ -62,6 +62,8 @@ tg::StartupOptions ParseCommandLine() {
             options.profileMode = ::_wtoi(argv[++i]);
         } else if (argument == L"--select-node" && (i + 1) < argc) {
             options.selectNode = ::_wtoi(argv[++i]);
+        } else if (argument == L"--edit-preset" && (i + 1) < argc) {
+            options.editPreset = static_cast<tg::graph::SurfaceId>(::_wtoi(argv[++i]));
         } else if (argument == L"--save-project" && (i + 1) < argc) {
             options.saveProjectPath = argv[i + 1];
             ++i;

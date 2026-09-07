@@ -1,4 +1,5 @@
 #include "graph/SurfaceBandGeometry.h"
+#include "graph/RoadMask.h"
 #include <algorithm>
 #include <cmath>
 
@@ -16,6 +17,62 @@ DirectX::XMFLOAT2 SampleProfile(const Profile& profile, float t) {
     const float u = std::clamp((t - profile.knots[i - 1]) / (profile.knots[i] - profile.knots[i - 1]), 0.0f, 1.0f);
     return {std::lerp(points[i - 1].across, points[i].across, u),
             std::lerp(points[i - 1].height, points[i].height, u)};
+}
+// ワールドノイズは道路中央ではなく、沿道の断面位置で評価する。
+void BakeBandWorldNoise(RoadMaskImage& image, const RoadMaskNodeSettings* const masks[3],
+                        const RoadGeometry& road, const SurfaceLayoutDocument& document,
+                        const SurfaceBand& band, float width) {
+    using namespace DirectX;
+    if (std::none_of(masks, masks + 3, [](const auto* m) { return m && m->shape == RoadMaskShape::WorldNoise; })) return;
+    std::vector<Profile> profiles;
+    std::vector<float> arcs;
+    for (const auto& preset : document.presets) {
+        if (std::none_of(band.spans.begin(), band.spans.end(), [&](const auto& span) { return span.preset == preset.id; })) continue;
+        Profile profile{preset.id, &preset, {0}};
+        float arc = 0;
+        for (size_t i = 1; i < preset.section.size(); ++i) {
+            arc += std::hypot(preset.section[i].across - preset.section[i-1].across, preset.section[i].height - preset.section[i-1].height);
+            profile.knots.push_back(arc);
+        }
+        for (auto& knot : profile.knots) knot /= arc;
+        profiles.push_back(std::move(profile)); arcs.push_back(arc);
+    }
+    const float length = road.rowDistances.back();
+    for (uint32_t y = 0; y < image.height; ++y) {
+        const float distance = (float(y) + 0.5f) / float(image.height) * length;
+        const auto upper = std::upper_bound(road.rowDistances.begin(), road.rowDistances.end(), distance);
+        const size_t row = std::clamp(size_t(upper - road.rowDistances.begin()), size_t(1), road.rowDistances.size() - 1);
+        const float t = (distance - road.rowDistances[row - 1]) / (road.rowDistances[row] - road.rowDistances[row - 1]);
+        const auto edge = [&](uint32_t column) {
+            return XMVectorLerp(XMLoadFloat3(&road.surface.vertices[(row - 1) * road.stride + column].position),
+                                XMLoadFloat3(&road.surface.vertices[row * road.stride + column].position), t);
+        };
+        const auto right = edge(0), left = edge(road.stride - 1);
+        const bool isLeft = band.side == SurfaceSide::Left;
+        const auto origin = isLeft ? left : right;
+        const auto outward = XMVectorScale(XMVector3Normalize(XMVectorSubtract(left, right)), isLeft ? 1.0f : -1.0f);
+        const auto samples = SampleSurfaceBand(document, band, distance);
+        float actualArc = 0;
+        for (const auto& sample : samples) {
+            const auto index = std::find_if(profiles.begin(), profiles.end(), [&](const auto& p) { return p.id == sample.preset; }) - profiles.begin();
+            actualArc += arcs[index] * sample.weight;
+        }
+        for (uint32_t x = 0; x < image.width; ++x) {
+            const float meters = (float(x) + 0.5f) / float(image.width) * width;
+            float across = 0;
+            for (const auto& sample : samples) {
+                const auto& profile = *std::find_if(profiles.begin(), profiles.end(), [&](const auto& p) { return p.id == sample.preset; });
+                across += SampleProfile(profile, std::clamp(meters / actualArc, 0.0f, 1.0f)).x * sample.weight;
+            }
+            XMFLOAT3 world; XMStoreFloat3(&world, XMVectorAdd(origin, XMVectorScale(outward, across)));
+            auto* pixel = &image.rgba[(size_t(y) * image.width + x) * 4];
+            for (size_t c = 0; c < 3; ++c) if (masks[c] && masks[c]->shape == RoadMaskShape::WorldNoise) {
+                const float value = EvaluateRoadMask(*masks[c], meters - width * 0.5f, distance, width * 0.5f, length,
+                                                    nullptr, world.x, world.z, true);
+                pixel[c] = static_cast<uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255));
+            }
+        }
+    }
 }
 }
 
@@ -211,29 +268,53 @@ CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const Surfac
         if (std::any_of(presets.begin(), presets.end(), [&](const auto* p) { return p->id == span.preset; })) continue;
         const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == span.preset; });
         if (presets.size() == 3) { result.error = "沿道材質の試作は1帯につき最大3プリセットに対応します"; return result; }
-        if (std::any_of(found->materials.begin() + 1, found->materials.end(), [](const auto& m) { return m.mask.has_value(); })) {
-            result.error = "沿道材質の試作は下地1層に対応します。上層の合成は後続です"; return result;
-        }
         presets.push_back(&*found);
         float arc = 0;
         for (size_t i = 1; i < found->section.size(); ++i)
             arc += std::hypot(found->section[i].across - found->section[i - 1].across,
                               found->section[i].height - found->section[i - 1].height);
         arcLengths.push_back(arc);
-        const auto& source = found->materials.front();
+        const auto& preset = *found;
         renderer::SceneMesh context;
         context.materialOnly = true;
-        context.roadMetersPerUv = source.uvRepeatMeters;
-        context.layerUvRepeat[0] = source.uvRepeatMeters;
-        context.layerWorldUv[0] = source.worldUv;
-        compositor::MaterialStack stack;
-        auto layer = compositor::MaterialStack::MakeBaseLayer();
-        layer.name = found->name; layer.material = source.material;
-        layer.baseColor = {source.baseColor[0], source.baseColor[1], source.baseColor[2]};
-        layer.roughness = source.roughness; layer.metallic = source.metallic; layer.ambientOcclusion = source.ambientOcclusion;
-        layer.heightSource = compositor::ValueSource::Texture; layer.heightBase = 0.5f; layer.heightGain = 1;
-        stack.Layers() = {layer}; stack.SetTerrainScale(source.uvRepeatMeters, 1);
-        context.materialStack = std::move(stack);
+        context.roadMetersPerUv = preset.materials.front().uvRepeatMeters;
+        context.roadWidthMeters = arc;
+        context.roadLengthMeters = road.rowDistances.back();
+        context.layerBlendRange = preset.layerBlendRange;
+        const RoadMaskNodeSettings* masks[3]{};
+        for (size_t slot = 0; slot < preset.materials.size(); ++slot) {
+            const auto& source = preset.materials[slot];
+            context.layerUvRepeat[slot] = source.uvRepeatMeters;
+            context.layerWorldUv[slot] = source.worldUv;
+            context.layerHeightGate[slot] = source.heightGate;
+            context.layerHeightGateThreshold[slot] = source.heightGateThreshold;
+            context.layerHeightGateSoftness[slot] = source.heightGateSoftness;
+            context.layerBlendMode[slot] = source.blendMode;
+            if (slot && !source.mask) continue;
+            compositor::MaterialStack stack;
+            auto layer = compositor::MaterialStack::MakeBaseLayer();
+            layer.name = preset.name;
+            layer.material = source.material;
+            layer.baseColor = {source.baseColor[0], source.baseColor[1], source.baseColor[2]};
+            layer.roughness = source.roughness;
+            layer.metallic = source.metallic;
+            layer.ambientOcclusion = source.ambientOcclusion;
+            layer.heightSource = compositor::ValueSource::Texture;
+            layer.heightBase = 0.5f;
+            layer.heightGain = 1;
+            stack.Layers() = {layer};
+            stack.SetTerrainScale(source.uvRepeatMeters, 1);
+            if (slot == 0) context.materialStack = std::move(stack);
+            else {
+                context.layerStacks[slot - 1] = std::move(stack);
+                masks[slot - 1] = &*source.mask;
+            }
+        }
+        if (masks[0] || masks[1] || masks[2]) {
+            auto mask = BakeRoadMask(masks, arc, road.rowDistances.back());
+            BakeBandWorldNoise(mask, masks, road, document, *band, arc);
+            context.roadMask = {mask.width, mask.height, std::move(mask.rgba)};
+        }
         contexts.push_back(std::move(context));
     }
     // 形状側の断面比率を実距離に変換する。段差の垂直面にもUV幅がある。

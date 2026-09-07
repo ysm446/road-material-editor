@@ -454,11 +454,54 @@ void RunSurfaceLayoutTests() {
         Check(surface.geometry.indices == bandMesh.indices && surface.geometry.vertices.front().position.x == bandMesh.vertices.front().position.x,
               "材質を付けても沿道の形状は変わらない");
     }
-    auto unsupportedBand = roadside;
-    unsupportedBand.presets[0].materials.emplace_back();
-    unsupportedBand.presets[0].materials.back().mask.emplace();
-    const auto rejectedBand = graph::CompileSurfaceBandPreview(sceneGraph, unsupportedBand, roadId, unsupportedBand.layouts[0].bands[1].id);
-    Check(!rejectedBand.error.empty() && rejectedBand.scene.meshes.empty(), "未対応の上層を黙って捨てずに理由を返す");
+    auto multilayerBand = roadside;
+    auto& layeredGround = multilayerBand.presets[0];
+    layeredGround.materials.resize(4);
+    layeredGround.layerBlendRange = 0.37f;
+    for (size_t slot = 1; slot < 4; ++slot) {
+        auto& layer = layeredGround.materials[slot];
+        layer.mask.emplace(); layer.mask->shape = graph::RoadMaskShape::Constant;
+        layer.material = 13; layer.blendMode = 1; layer.heightGate = 2;
+        layer.uvRepeatMeters = float(slot + 1);
+    }
+    const auto layeredBandPreview = graph::CompileSurfaceBandPreview(sceneGraph, multilayerBand, roadId, multilayerBand.layouts[0].bands[1].id);
+    Check(layeredBandPreview.error.empty() && renderer::ValidateMeshScene(layeredBandPreview.scene), "沿道4層の合成を評価できる");
+    if (layeredBandPreview.scene.meshes.size() > 1) {
+        const auto& context = layeredBandPreview.scene.meshes[1];
+        Check(context.layerStacks[0] && context.layerStacks[1] && context.layerStacks[2] &&
+              context.layerBlendMode[3] == 1 && context.layerHeightGate[3] == 2 &&
+              context.layerUvRepeat[3] == 4 && context.layerBlendRange == 0.37f &&
+              context.roadWidthMeters > 0 && context.roadLengthMeters == 50 && !context.roadMask.rgba.empty(),
+              "沿道の上層・ハイト競合・下地条件・反復長・マスク座標を保持する");
+    }
+    graph::SurfaceLayoutDocument layeredSideReload;
+    layeredGround.materials[1].mask->shape = graph::RoadMaskShape::WorldNoise;
+    const auto worldBandPreview = graph::CompileSurfaceBandPreview(sceneGraph, multilayerBand, roadId, multilayerBand.layouts[0].bands[1].id);
+    Check(worldBandPreview.error.empty(), "沿道のワールドノイズを評価する");
+    if (worldBandPreview.scene.meshes.size() > 1) {
+        const auto& context = worldBandPreview.scene.meshes[1];
+        const auto& mask = context.roadMask;
+        const float u = 0.5f / float(mask.width), distance = 25.0f / float(mask.height);
+        const auto& origin = bandRoad.surface.vertices[bandRoad.stride - 1].position;
+        const float expected = graph::EvaluateRoadMask(*layeredGround.materials[1].mask,
+            (u - 0.5f) * context.roadWidthMeters, distance, context.roadWidthMeters * 0.5f, 50,
+            nullptr, origin.x + 2 * u, origin.z + distance, true);
+        Check(mask.rgba[0] == static_cast<uint8_t>(std::lround(std::clamp(expected, 0.0f, 1.0f) * 255)),
+              "ワールドノイズを道路中央ではなく左路肩の実位置で評価する");
+    }
+    Check(io::ReadSurfaceLayouts(io::WriteSurfaceLayouts(multilayerBand), layeredSideReload, error) &&
+          io::WriteSurfaceLayouts(layeredSideReload) == io::WriteSurfaceLayouts(multilayerBand), "沿道4層を保存往復する");
+    auto layeredSideScene = graph::CompileMeshGraph(sceneGraph);
+    Check(graph::ConnectSurfaceBandMaterials(layeredSideScene, sceneGraph, multilayerBand, roadId,
+          multilayerBand.layouts[0].bands[1].id, error, true) && renderer::ValidateMeshScene(layeredSideScene.scene),
+          "沿道4層の材質を変位つき横接続に使用する");
+    graph::SurfaceLayoutDocument uniformSides;
+    Check(graph::CreateUniformRoadside(uniformSides, sceneGraph, roadId, graph::SurfaceSide::Left, graph::SurfaceRole::Ground, error) &&
+          graph::CreateUniformRoadside(uniformSides, sceneGraph, roadId, graph::SurfaceSide::Right, graph::SurfaceRole::Ground, error),
+          "左右とも全長を路肩で作成する");
+    for (const auto& uniformBand : uniformSides.layouts[0].bands) if (uniformBand.side != graph::SurfaceSide::Road)
+        Check(uniformBand.spans.size() == 1 && uniformBand.spans[0].startMeters == 0 && uniformBand.spans[0].endMeters == 50 &&
+              graph::BuildSurfaceBandGeometry(bandRoad, uniformSides, uniformBand, bandMesh, error), "全長路肩の形状を生成する");
     graph::SurfaceLayoutDocument materialReload;
     Check(io::ReadSurfaceLayouts(io::WriteSurfaceLayouts(roadside), materialReload, error), "沿道の下地材質が保存往復する");
     const auto reloadedBand = graph::CompileSurfaceBandPreview(sceneGraph, materialReload, roadId, materialReload.layouts[0].bands[1].id);

@@ -199,6 +199,8 @@ void Application::ResetProject() {
     m_meshSelection = MeshSelectionState{};
     m_graph = graph::NodeGraph::CreateDefault();
     m_surfaceLayouts = {};
+    m_editSurfacePreset = 0;
+    m_surfacePresetError.clear();
     m_selectedGraphNode = 0;
     m_previewGraphNode = 0;
     m_previewGraphPin = 0;
@@ -267,6 +269,9 @@ void Application::ProcessPendingFileWork() {
             m_projectPath = path;
             m_selectedGraphNode = m_graph.FindNode(m_options.selectNode) ? m_options.selectNode : 0;
             m_options.selectNode = 0;
+            m_editSurfacePreset = m_options.editPreset;
+            m_options.editPreset = 0;
+            m_surfacePresetError.clear();
             m_pathEdit = PathEditState{};
             m_pathEdit.nodeId = m_selectedGraphNode;
             if (m_options.selectPathPoint != 0) m_pathEdit.selected = {m_options.selectPathPoint};

@@ -1,5 +1,6 @@
 #include "graph/SurfaceLayoutEditing.h"
 #include "graph/Road.h"
+#include "graph/SurfaceBandGeometry.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -9,6 +10,21 @@ SurfaceBand* FindRoadBand(SurfaceLayoutDocument& document, GraphId roadId) {
     for (auto& layout : document.layouts) if (layout.roadNode == roadId)
         for (auto& band : layout.bands) if (band.side == SurfaceSide::Road) return &band;
     return nullptr;
+}
+bool CreateUniformRoadside(SurfaceLayoutDocument& document, const NodeGraph& graph, GraphId roadId,
+                          SurfaceSide side, SurfaceRole role, std::string& error) {
+    if (role != SurfaceRole::Ground && role != SurfaceRole::Sidewalk) { error = "路肩または歩道を選んでください"; return false; }
+    auto next = document;
+    if (!CreateRoadsideExample(next, graph, roadId, side, error)) return false;
+    for (auto& layout : next.layouts) if (layout.roadNode == roadId)
+        for (auto& band : layout.bands) if (band.side == side) {
+            auto span = role == SurfaceRole::Ground ? band.spans.front() : band.spans.back();
+            span.startMeters = 0; span.endMeters = band.spans.back().endMeters;
+            span.blendInMeters = span.blendOutMeters = 0;
+            band.spans = {span};
+        }
+    document = std::move(next);
+    return true;
 }
 void ClampSpanBlends(SurfaceSpan& span) {
     const float length = span.endMeters - span.startMeters;

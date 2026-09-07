@@ -13,12 +13,13 @@
 
 namespace tg {
 bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
-    ui::SectionHeader("沿道形状（試作）");
+    ui::SectionHeader("沿道の配置");
+    if (!m_surfacePresetError.empty()) ui::HintText(m_surfacePresetError.c_str());
     if (ui::BeginPropertyTable("surfaceBandPreviewRows")) {
         if (ui::PropertyBool("形状を表示", &m_previewSurfaceBands, false,
             "沿道の形状と下地材質を確認する。ハイト変位は横接続の「変位もつなぐ」で確認する")) m_graph.MarkDirty();
-        const char* sides[] = {"左", "右"};
-        if (ui::PropertyCombo("配置する側", &m_surfaceBandSide, sides, 2, 0, "編集する沿道の左右。横接続は左右両方へ適用する")) m_graph.MarkDirty();
+        const char* sides[] = {"左沿道", "右沿道"};
+        if (ui::PropertyCombo("編集する沿道", &m_surfaceBandSide, sides, 2, 0, "編集する沿道の左右。横接続は左右両方へ適用する")) m_graph.MarkDirty();
         if (ui::PropertyBool("横接続を試す", &m_connectSurfaceBands, false,
             "道路最大3種類と左右それぞれ最大2種類の沿道を境界で混ぜる。形状表示もオンにする。凹凸は「変位もつなぐ」で有効にする")) {
             if (m_connectSurfaceBands) m_previewSurfaceBands = true;
@@ -39,9 +40,15 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
     for (const auto& layout : m_surfaceLayouts.layouts) if (layout.roadNode == roadId)
         for (const auto& candidate : layout.bands) if (candidate.side == side) exists = true;
     if (!exists) {
-        if (ui::Button("路肩→歩道を作る", ui::kWideButtonWidth)) {
+        if (ui::BeginPropertyTable("roadsideCreateRows")) {
+            const char* kinds[] = {"路肩", "歩道"};
+            ui::PropertyCombo("作る沿道", &m_surfaceBandCreateRole, kinds, 2, 0, "選んだ側の全長を同じ種類で作成。途中の変更は作成後に区間を分割する");
+            ui::EndPropertyTable();
+        }
+        if (ui::Button("全長に作成", ui::kWideButtonWidth)) {
             std::string error;
-            if (graph::CreateRoadsideExample(m_surfaceLayouts, m_graph, roadId, side, error)) {
+            if (graph::CreateUniformRoadside(m_surfaceLayouts, m_graph, roadId, side,
+                m_surfaceBandCreateRole == 0 ? graph::SurfaceRole::Ground : graph::SurfaceRole::Sidewalk, error)) {
                 m_previewSurfaceBands = true;
                 return true;
             }
@@ -62,7 +69,9 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 }
                 std::vector<std::string> labels;
                 for (const auto& span : candidate.spans) {
-                    char label[96]; std::snprintf(label, sizeof(label), "%.2f ～ %.2f m", span.startMeters, span.endMeters);
+                    const auto labelPreset = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+                    char label[192]; std::snprintf(label, sizeof(label), "%.2f～%.2f m / %s", span.startMeters, span.endMeters,
+                        labelPreset == m_surfaceLayouts.presets.end() ? "未設定" : labelPreset->name.c_str());
                     labels.emplace_back(label);
                 }
                 std::vector<const char*> items;
@@ -123,44 +132,16 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                         "この区間に割り当てる沿道プリセット。切替時は公開値の上書きを解除する")) {
                         span.preset = presetIds[presetIndex]; span.parameters.clear(); changed = true;
                     }
-                    auto preset = std::find_if(roadsideEdit.presets.begin(), roadsideEdit.presets.end(), [&](const auto& p) { return p.id == span.preset; });
-                    if (preset != roadsideEdit.presets.end()) {
-                        char name[128]; std::snprintf(name, sizeof(name), "%s", preset->name.c_str());
-                        if (ui::PropertyTextInput("名前", name, sizeof(name), "一覧に表示する沿道プリセットの名前") && name[0]) { preset->name = name; changed = true; }
-                        float width, height;
-                        if (graph::GetSimpleRoadsideDimensions(*preset, width, height)) {
-                            const graph::SimpleRoadsideDefaults shapeDefaults;
-                            const bool step = preset->section.size() == 3;
-                            bool dimensionsChanged = ui::PropertyFloat("幅", &width, 0.1f, 10, shapeDefaults.width,
-                                "道路端を固定して外側へ広げる。同じプリセットの全区間へ反映", "%.2f m");
-                            dimensionsChanged |= ui::PropertyFloat(step ? "段差の高さ" : "外端の高さ", &height, step ? 0.01f : -2.0f, 2,
-                                step ? shapeDefaults.sidewalkHeight : shapeDefaults.groundHeight,
-                                "道路端を基準とする高さ。路肩は外端まで傾斜し、歩道は垂直段差と水平面を保つ", "%.2f m");
-                            if (dimensionsChanged) changed |= graph::SetSimpleRoadsideDimensions(*preset, width, height);
-                        } else ui::PropertyValue("断面", "%s", "この断面の寸法編集は未対応");
-                        auto& material = preset->materials.front();
-                        const graph::PresetMaterial defaults;
-                        const graph::SurfacePreset presetDefaults;
-                        changed |= ui::PropertyFloat("凹凸の高さ", &preset->displacementMeters, 0, 1, presetDefaults.displacementMeters,
-                            "横接続で変位もつなぐときの押し出し量。境界では自動で抑える", "%.3f m");
-                        changed |= DrawMaterialSlotRow("素材", material.material, m_materialLibrary);
-                        changed |= ui::PropertyFloat("反復長", &material.uvRepeatMeters, 0.01f, 100, defaults.uvRepeatMeters,
-                            "素材が繰り返す実距離。断面の垂直面も距離に含む", "%.2f m");
-                        const char* spaces[] = {"面に沿う", "ワールド XZ"};
-                        int space = material.worldUv ? 1 : 0;
-                        if (ui::PropertyCombo("座標", &space, spaces, 2, defaults.worldUv ? 1 : 0, "ワールド XZは垂直面では模様が伸びるため、歩道の段差には面に沿うを推奨")) {
-                            material.worldUv = space == 1; changed = true;
-                        }
-                        if (!material.material) {
-                            changed |= ui::PropertyColorLinear("色", material.baseColor.data(), defaults.baseColor.data(), "素材未指定時の色");
-                            changed |= ui::PropertyFloat("粗さ", &material.roughness, 0, 1, defaults.roughness, "素材未指定時の反射のぼけ");
-                        }
-                    }
                     ui::EndPropertyTable();
                 }
-                ui::HintText("寸法・材質は同じプリセットの全区間へ反映。個別に変える場合は複製");
-                if (ui::Button("沿道プリセットを複製", ui::kWideButtonWidth))
+                if (ui::Button("プリセットを編集", ui::kWideButtonWidth)) {
+                    m_editSurfacePreset = candidate.spans[m_surfaceBandSpan].preset; m_surfacePresetError.clear();
+                }
+                ImGui::SameLine();
+                if (ui::Button("複製して編集", ui::kWideButtonWidth)) {
                     changed |= graph::DuplicateSurfacePreset(roadsideEdit, candidate, static_cast<size_t>(m_surfaceBandSpan));
+                    if (changed) { m_editSurfacePreset = candidate.spans[m_surfaceBandSpan].preset; m_surfacePresetError.clear(); }
+                }
                 if (changed) {
                     graph::EnsureRoadsideTransitions(candidate);
                     // 共有プリセットの変更が別の道路・沿道を壊さないことも確認する。
@@ -177,12 +158,13 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                         if (error.empty() && m_connectSurfaceBands && unique.size() > 2) error = "横接続中は沿道各2種類までです";
                     }
                     if (error.empty()) { m_surfaceLayouts = std::move(roadsideEdit); m_previewSurfaceBands = true; return true; }
+                    m_editSurfacePreset = 0; m_surfacePresetError = error;
                     TG_LOG_ERROR("沿道プリセット: %s", error.c_str());
                 }
                 break;
             }
         }
-        ui::HintText("下地1層の試作。凹凸は横接続の「変位もつなぐ」で確認");
+        ui::HintText("材質のレイヤー合成は「プリセットを編集」で設定します");
     }
     ui::SectionHeader("路面区間");
     auto edited = m_surfaceLayouts;
@@ -216,7 +198,9 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
             int selected = found == band->spans.end() ? 0 : static_cast<int>(found - band->spans.begin());
             std::vector<std::string> labels;
             for (const auto& span : band->spans) {
-                char label[96]; std::snprintf(label, sizeof(label), "%.2f ～ %.2f m", span.startMeters, span.endMeters);
+                const auto labelPreset = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+                    char label[192]; std::snprintf(label, sizeof(label), "%.2f～%.2f m / %s", span.startMeters, span.endMeters,
+                        labelPreset == m_surfaceLayouts.presets.end() ? "未設定" : labelPreset->name.c_str());
                 labels.emplace_back(label);
             }
             std::vector<const char*> items;
@@ -261,69 +245,13 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 auto& span = band->spans[selected];
                 auto preset = std::find_if(edited.presets.begin(), edited.presets.end(), [&](const auto& p) { return p.id == span.preset; });
                 if (preset != edited.presets.end()) {
-                    ui::SectionHeader("プリセットの材質");
-                    ui::HintText("同じプリセットを使う全区間へ反映。個別に変える場合は複製");
-                    if (ui::Button("複製して編集", ui::kWideButtonWidth)) changed |= graph::DuplicateSurfacePreset(edited, *band, selected);
-                    if (!changed && ui::BeginPropertyTable("surfacePresetRows")) {
-                        char name[128]; std::snprintf(name, sizeof(name), "%s", preset->name.c_str());
-                        if (ui::PropertyTextInput("名前", name, sizeof(name), "プリセット一覧に表示する名前") && name[0]) { preset->name = name; changed = true; }
-                        const graph::SurfacePreset defaults;
-                        changed |= ui::PropertyFloat("凹凸の高さ", &preset->displacementMeters, 0, 10, defaults.displacementMeters,
-                            "素材のハイトで押し出す量。0なら形状を変えない", "%.3f m");
-                        const char* layers[] = {"下地", "層 2", "層 3", "層 4"};
-                        m_surfaceLayoutLayer = std::clamp(m_surfaceLayoutLayer, 0, static_cast<int>(preset->materials.size()) - 1);
-                        ui::PropertyCombo("編集する層", &m_surfaceLayoutLayer, layers, static_cast<int>(preset->materials.size()), 0, "プリセット内部で編集する材質層");
-                        auto& material = preset->materials[m_surfaceLayoutLayer];
-                        const graph::PresetMaterial materialDefaults;
-                        changed |= DrawMaterialSlotRow("素材", material.material, m_materialLibrary);
-                        changed |= ui::PropertyFloat("反復長", &material.uvRepeatMeters, 0.01f, 100, materialDefaults.uvRepeatMeters,
-                            "素材が繰り返す実距離。大きくすると模様が大きくなる", "%.2f m");
-                        const char* spaces[] = {"面に沿う", "ワールド XZ"};
-                        int space = material.worldUv ? 1 : 0;
-                        if (ui::PropertyCombo("座標", &space, spaces, 2, materialDefaults.worldUv ? 1 : 0,
-                            "面に沿う: 道路の曲がりに追従。ワールド XZ: 地面や隣の面と同じ座標で素材を配置")) {
-                            material.worldUv = space == 1; changed = true;
-                        }
-                        changed |= ui::PropertyFloat("ブレンド幅", &preset->layerBlendRange, 0, 1, defaults.layerBlendRange,
-                            "プリセット内の全層に共通する、ハイトによる境界の柔らかさ");
-                        if (!material.material) {
-                            changed |= ui::PropertyColorLinear("色", material.baseColor.data(), materialDefaults.baseColor.data(), "素材未指定時の路面色");
-                            changed |= ui::PropertyFloat("粗さ", &material.roughness, 0, 1, materialDefaults.roughness, "大きいほど反射がぼける");
-                            changed |= ui::PropertyFloat("金属度", &material.metallic, 0, 1, materialDefaults.metallic, "素材未指定時の金属の割合");
-                            changed |= ui::PropertyFloat("AO", &material.ambientOcclusion, 0, 1, materialDefaults.ambientOcclusion, "素材未指定時の環境光の遮蔽。1で遮蔽なし");
-                        }
-                        if (m_surfaceLayoutLayer > 0) {
-                            bool enabled = material.mask.has_value();
-                            if (ui::PropertyBool("層を使用", &enabled, false, "マスクを使って上層を表示する")) {
-                                if (enabled) { material.mask.emplace(); material.mask->shape = graph::RoadMaskShape::Constant; }
-                                else material.mask.reset();
-                                changed = true;
-                            }
-                            if (material.mask) {
-                                const char* modes[] = {"マスクどおり", "ハイトで競合"};
-                                int mode = static_cast<int>(material.blendMode);
-                                if (ui::PropertyCombo("混ぜ方", &mode, modes, 2, static_cast<int>(materialDefaults.blendMode),
-                                    "マスクどおり: 被覆率で混ぜる。ハイトで競合: 素材の高い部分を優先する")) {
-                                    material.blendMode = static_cast<uint32_t>(mode); changed = true;
-                                }
-                                const char* gates[] = {"使わない", "下地の高い所", "下地の低い所"};
-                                int gate = static_cast<int>(material.heightGate);
-                                if (ui::PropertyCombo("下地のハイト", &gate, gates, 3, static_cast<int>(materialDefaults.heightGate),
-                                    "下地の凹凸で上層を絞る。粒の露出や低い所に溜まる土を表現する")) {
-                                    material.heightGate = static_cast<uint32_t>(gate); changed = true;
-                                }
-                                if (material.heightGate) {
-                                    changed |= ui::PropertyFloat("高さのしきい値", &material.heightGateThreshold, 0, 1,
-                                        materialDefaults.heightGateThreshold, "下地のハイト0〜1のうち、境界にする高さ");
-                                    changed |= ui::PropertyFloat("高さの柔らかさ", &material.heightGateSoftness, 0.001f, 1,
-                                        materialDefaults.heightGateSoftness, "高さ条件の境界をぼかす幅");
-                                }
-                                ImGui::PushID("presetMask");
-                                changed |= DrawRoadMaskPropertyRows(*material.mask);
-                                ImGui::PopID();
-                            }
-                        }
-                        ui::EndPropertyTable();
+                    if (ui::Button("プリセットを編集##road", ui::kWideButtonWidth)) {
+                        m_editSurfacePreset = preset->id; m_surfacePresetError.clear();
+                    }
+                    ImGui::SameLine();
+                    if (ui::Button("複製して編集##road", ui::kWideButtonWidth)) {
+                        changed |= graph::DuplicateSurfacePreset(edited, *band, selected);
+                        if (changed) { m_editSurfacePreset = band->spans[selected].preset; m_surfacePresetError.clear(); }
                     }
                 }
             }
@@ -340,6 +268,7 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 error = graph::CompileSurfaceLayoutPreview(m_graph, edited, roadId).error;
             if (error.empty()) { m_surfaceLayouts = std::move(edited); return true; }
         }
+        m_editSurfacePreset = 0; m_surfacePresetError = error;
         TG_LOG_ERROR("路面区間: %s", error.c_str());
     }
     return false;

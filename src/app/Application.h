@@ -63,6 +63,7 @@ struct StartupOptions {
     bool measurePreview = false;
     // プロジェクト読込後に選択するノード。スクリーンショット検証用。
     graph::GraphId selectNode = 0;
+    graph::SurfaceId editPreset = 0;
     graph::PathElementId selectPathPoint = 0;
     // 線形の編集モード（0 = 制御点、1 = 縦断、2 = バンク）と選択するポイント。スクリーンショット検証用。
     int profileMode = 0;
@@ -120,6 +121,7 @@ private:
     bool IsGraphPinVisible(const graph::Pin& pin) const;
     // グラフノードのレイヤー設定のプロパティ行。変更があれば true。
     bool DrawSurfaceLayoutSettings(graph::GraphId roadId);
+    void DrawSurfacePresetEditor();
     bool DrawLayerSettings(compositor::MaterialLayer& layer);
     // グラフの変更をメッシュシーンへ反映する。フレームの頭（フレームの外）で呼ぶ。
     void SyncMeshGraph();
@@ -289,11 +291,14 @@ private:
     graph::NodeGraph m_graph = graph::NodeGraph::CreateDefault();
     graph::SurfaceId m_surfaceLayoutSpan = 0;
     int m_surfaceLayoutLayer = 0;
+    graph::SurfaceId m_editSurfacePreset = 0;
+    std::string m_surfacePresetError;
     bool m_showLegacyRoadInputs = false;
     bool m_previewSurfaceBands = false;
     bool m_connectSurfaceBands = false;
     bool m_displaceConnectedBands = false;
     int m_surfaceBandSide = 0;
+    int m_surfaceBandCreateRole = 0;
     int m_surfaceBandSpan = 0;
     graph::GraphId m_selectedGraphNode = 0;
     // エディタで選ばれているノード全部。コピーはこれを見る

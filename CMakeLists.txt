@@ -164,6 +164,8 @@ set(tg_sources
     src/renderer/MeshData.h
     src/renderer/Mesh.cpp
     src/renderer/Mesh.h
+    src/renderer/PreviewDiagnostics.cpp
+    src/renderer/PreviewDiagnostics.h
     src/renderer/PreviewRenderer.cpp
     src/renderer/PreviewRenderer.h
     src/renderer/SkyLibrary.cpp

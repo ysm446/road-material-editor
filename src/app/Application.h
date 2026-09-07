@@ -58,6 +58,7 @@ struct StartupOptions {
     graph::GraphId prototypeGravel = 0;
     graph::GraphId prototypeSidewalk = 0;
     bool prototypeDisplacement = true;
+    bool measurePreview = false;
     // プロジェクト読込後に選択するノード。スクリーンショット検証用。
     graph::GraphId selectNode = 0;
     graph::PathElementId selectPathPoint = 0;

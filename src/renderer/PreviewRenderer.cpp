@@ -364,6 +364,7 @@ bool PreviewRenderer::SetGeneratedMeshScene(rhi::Device& device, const MeshScene
 }
 
 void PreviewRenderer::InvalidateSceneMaterials() {
+    m_diagnostics.Invalidate();
     for (auto& material : m_sceneMaterials) {
         material.stack.MarkDirty();
         for (auto& layerStack : material.layerStacks) layerStack.MarkDirty();
@@ -471,12 +472,14 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
     for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes = std::move(uploaded);
     m_meshScene = scene;
+    m_diagnostics.ResetScene(device);
     m_meshSceneRadius = MeshSceneRadius(scene);
     m_meshSceneEnabled = true;
     return true;
 }
 
 void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
+    m_diagnostics.ResetScene(device);
     for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes.clear();
     for (auto& material : m_sceneMaterials) {
@@ -490,6 +493,7 @@ void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
 }
 
 void PreviewRenderer::Shutdown(rhi::Device& device) {
+    m_diagnostics.Shutdown(device);
     ClearMeshScene(device);
     device.DeferRelease(m_shadowMap);
     m_environment.Shutdown(device);
@@ -503,6 +507,7 @@ void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
     // 合成解像度の変更。シーンの評価器（スロット 1〜4）を作り直す。
     // 新しく作る評価器（UploadMeshScene）は m_materialResolution を見るので、先に値を確定する。
     if (m_requestedMaterialResolution != m_materialResolution) {
+        m_diagnostics.ResetScene(device);
         m_materialResolution = m_requestedMaterialResolution;
         for (auto& material : m_sceneMaterials) {
             if (material.evaluator && !material.evaluator->Resize(device, m_materialResolution))
@@ -669,6 +674,7 @@ bool PreviewRenderer::Resize(rhi::Device& device, uint32_t width, uint32_t heigh
     // 作り直す前に、GPU がまだ参照しているターゲットを解放できる状態にする。
     device.WaitForGpu();
     ReleaseTargets(device);
+    m_diagnostics.ResetScene(device);
 
     rhi::TextureDesc colorDesc;
     colorDesc.width = width;
@@ -807,6 +813,10 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     if (meshPipeline == nullptr || tonemapPipeline == nullptr) {
         return;
     }
+
+    m_diagnostics.Begin(device, commandList);
+    D3D12_GPU_VIRTUAL_ADDRESS probeConstants = 0;
+    size_t probeMesh = 0;
 
     // DirectXMath は行ベクトル規約、HLSL の行列は既定で列優先。
     // XMMATRIX をそのまま積むと HLSL 側では転置として解釈され、
@@ -981,6 +991,10 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             if (!allocation.IsValid()) continue;
             std::memcpy(allocation.cpu, &drawConstants, sizeof(drawConstants));
             commandList->SetGraphicsRootConstantBufferView(1, allocation.gpuAddress);
+            if (drawConstants.connectionContextCount != 0 && probeConstants == 0) {
+                probeConstants = allocation.gpuAddress;
+                probeMesh = i;
+            }
             drawMesh.Draw(commandList, useTessellation);
             CountMeshDraw(m_stats, drawMesh, useTessellation);
         }
@@ -1266,6 +1280,9 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     // ImGui から SRV として読むため、ピクセルシェーダ可視の状態へ移す。
     TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    m_diagnostics.End(device, commandList, !IsEvaluating() && m_stats.drawCalls > 0, m_width, m_height, useTessellation);
+    if (probeConstants != 0 && !IsEvaluating())
+        m_diagnostics.Probe(device, pipelineCache, commandList, m_meshScene.meshes[probeMesh], probeConstants);
 }
 
 // 作業グリッドの線。

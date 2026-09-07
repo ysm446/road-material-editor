@@ -54,6 +54,8 @@ bool ValidateMeshScene(const MeshScene& scene) {
         for (uint32_t index : data.indices) {
             if (index >= data.vertices.size()) return false;
         }
+        for (const auto& seam : mesh.connectionSeams)
+            for (uint32_t index : seam) if (index >= data.vertices.size()) return false;
     }
     return std::isfinite(MeshSceneRadius(scene));
 }

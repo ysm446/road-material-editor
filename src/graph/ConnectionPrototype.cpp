@@ -123,12 +123,25 @@ bool BuildConnectionPrototype(const RoadGeometry& road, const ConnectionPrototyp
         return std::abs(a - b) < 1e-5f;
     }), distances.end());
     const uint32_t rows = static_cast<uint32_t>(distances.size() - 1);
+    std::vector<std::array<uint32_t, 2>> previousRightEdges;
     const auto panel = [&](float u0, float u1, float x0, float x1, float y0, float y1) {
         const uint32_t columns = static_cast<uint32_t>(std::ceil((u1 - u0) / s.sampleSpacing));
         const XMVECTOR tangent = XMVector3Normalize(XMVectorAdd(XMVectorScale(across, x1 - x0), XMVectorSet(0, y1 - y0, 0, 0)));
+        std::vector<std::array<uint32_t, 2>> rightEdges;
         // 各行間で法線を分け、目地の斜面の法線を平板の中央へ補間しない。
         for (uint32_t segment = 0; segment < rows; ++segment) {
             const uint32_t start = static_cast<uint32_t>(mesh.geometry.vertices.size());
+            if (!previousRightEdges.empty()) {
+                const auto& edge = previousRightEdges[segment];
+                mesh.connectionSeams.push_back({edge[0], edge[1], start, start + columns + 1});
+            }
+            // 長さ方向の硬い法線境界も独立した両側として検査する。
+            if (segment > 0) {
+                const uint32_t previousRow = start - columns - 1;
+                for (uint32_t col = 0; col < columns; ++col)
+                    mesh.connectionSeams.push_back({previousRow + col, previousRow + col + 1, start + col, start + col + 1});
+            }
+            rightEdges.push_back({start + columns, start + columns * 2 + 1});
             const float derivative = (JointDrop(distances[segment + 1], s) - JointDrop(distances[segment], s)) /
                                      (distances[segment + 1] - distances[segment]);
             for (uint32_t row = 0; row < 2; ++row) {
@@ -157,6 +170,7 @@ bool BuildConnectionPrototype(const RoadGeometry& road, const ConnectionPrototyp
                 }
             }
         }
+        previousRightEdges = std::move(rightEdges);
     };
     // 地表は一枚。立ち上がりの稜線では法線だけ分け、位置・共通座標を共有する。
     panel(0, groundWidth, 0, groundWidth, 0, 0);

@@ -115,6 +115,7 @@ bool Application::Initialize(const StartupOptions& options) {
     if (!m_pipelineCache.Create(m_device.GetDevice(), &m_shaderCompiler)) {
         return false;
     }
+    m_renderer.EnableDiagnostics(m_options.measurePreview);
     if (!m_renderer.Initialize(m_device, m_pipelineCache)) {
         return false;
     }

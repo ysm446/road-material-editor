@@ -40,6 +40,8 @@ struct SceneMesh {
     bool materialOnly = false;
     std::array<int, 3> connectionSources{-1, -1, -1};
     std::array<DirectX::XMFLOAT2, 3> connectionOrigins{};
+    // 接続すべき二辺の頂点。位置の一致から逆算せず、生成時の隣接関係を記録する。
+    std::vector<std::array<uint32_t, 4>> connectionSeams;
     MaterialSettings material;
     // 道路の表示用メタデータ。0は道路以外。生成時に再構築する。
     float roadMetersPerUv = 0.0f;

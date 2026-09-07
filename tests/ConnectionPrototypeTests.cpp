@@ -22,6 +22,23 @@ void RunConnectionPrototypeTests() {
     }
     Check(renderer::ValidateMeshScene({{mesh}}), "接続面のインデックス・座標・接空間が有効");
     Check(mesh.roadMask.IsValid(), "共通マスクが有効");
+    bool seamPairsValid = !mesh.connectionSeams.empty();
+    bool hardNormalSeam = false;
+    for (const auto& seam : mesh.connectionSeams) {
+        for (size_t endpoint = 0; endpoint < 2; ++endpoint) {
+            const auto& left = mesh.geometry.vertices[seam[endpoint]];
+            const auto& right = mesh.geometry.vertices[seam[endpoint + 2]];
+            seamPairsValid &= std::abs(left.position.x - right.position.x) < 1e-5f &&
+                std::abs(left.position.y - right.position.y) < 1e-5f &&
+                std::abs(left.position.z - right.position.z) < 1e-5f &&
+                std::abs(left.roadUv.x - right.roadUv.x) < 1e-5f && std::abs(left.roadUv.y - right.roadUv.y) < 1e-5f;
+            hardNormalSeam |= std::abs(left.normal.y - right.normal.y) > 0.5f;
+        }
+    }
+    Check(seamPairsValid && hardNormalSeam, "GPU検査用の隣接辺は横・長さ方向の両側と硬い法線を保持する");
+    auto invalidSeam = mesh;
+    invalidSeam.connectionSeams.front()[0] = static_cast<uint32_t>(mesh.geometry.vertices.size());
+    Check(!renderer::ValidateMeshScene({{invalidSeam}}), "範囲外の検査頂点をGPUへ渡さない");
     Check(graph::PrototypeGravelCoverage(0, 0, settings) == 1.0f &&
           graph::PrototypeGravelCoverage(5, 0, settings) == 0.0f &&
           graph::PrototypeGravelCoverage(5, 24, settings) == 1.0f,

@@ -300,7 +300,7 @@ void Application::SyncMeshGraph() {
         ? graph::CompileConnectionPrototype(m_graph, m_options.prototypeRoad, m_options.prototypeGravel,
                                             m_options.prototypeSidewalk, m_options.prototypeDisplacement)
         : graph::CompileMeshGraph(m_graph, previewMeshNode);
-    if (m_options.prototypeRoad != 0) {
+    if (m_options.prototypeRoad != 0 || m_options.measurePreview) {
         const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - compileStart).count();
         size_t vertices = 0, triangles = 0, maskBytes = 0;
         for (const auto& mesh : compiled.scene.meshes) {
@@ -308,7 +308,8 @@ void Application::SyncMeshGraph() {
             triangles += mesh.geometry.indices.size() / 3;
             maskBytes += mesh.roadMask.rgba.size();
         }
-        TG_LOG_INFO("接続試作: %.2f ms, %zu 頂点, %zu 三角形, マスク %zu bytes", elapsed, vertices, triangles, maskBytes);
+        TG_LOG_INFO("道路生成 (%s): %.2f ms, %zu 頂点, %zu 三角形, マスク %zu bytes",
+                    m_options.prototypeRoad != 0 ? "connection" : "ordinary", elapsed, vertices, triangles, maskBytes);
         if (!compiled.error.empty()) TG_LOG_ERROR("接続試作: %s", compiled.error.c_str());
     }
     // 鎖が無くなったらシーンを空にする（グリッドと背景だけになる）。

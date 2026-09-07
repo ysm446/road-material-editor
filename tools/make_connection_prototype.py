@@ -3,6 +3,7 @@
 import argparse
 import copy
 import json
+import math
 from pathlib import Path
 
 
@@ -13,7 +14,10 @@ def main():
     parser.add_argument("--asphalt", type=int, required=True, help="既存の材質 ID")
     parser.add_argument("--gravel", type=int, required=True, help="既存の材質 ID")
     parser.add_argument("--layered", action="store_true", help="道路4層＋接続先4層＋歩道の検証構成を作る")
+    parser.add_argument("--length", type=float, default=24.0, help="検証道路の長さ（m、0より大きく50以下）")
     args = parser.parse_args()
+    if not math.isfinite(args.length) or not 0 < args.length <= 50:
+        parser.error("長さは0より大きく50 m以下にしてください")
     if args.source.resolve() == args.output.resolve():
         parser.error("出力には元ファイルと異なるパスを指定してください")
     doc = json.loads(args.source.read_text(encoding="utf-8-sig"))
@@ -47,8 +51,8 @@ def main():
         surface(1, 2, args.asphalt, [0, 0]), surface(3, 4, args.gravel, [0, 180]),
         surface(5, 6, None, [0, 360]),
         {"id": 7, "kind": "path", "inputs": [8], "outputs": [9], "position": [240, 0],
-         "path": {"worldSpace": True, "points": [{"id": 1, "position": [0, 0, -12]},
-                   {"id": 2, "position": [0, 0, 12]}],
+         "path": {"worldSpace": True, "points": [{"id": 1, "position": [0, 0, -args.length * 0.5]},
+                   {"id": 2, "position": [0, 0, args.length * 0.5]}],
                   "edges": [{"id": 3, "from": 1, "to": 2, "curve": "line"}], "nextId": 4}},
         {"id": 10, "kind": "road", "inputs": list(range(11, 19)), "outputs": [19, 20, 21],
          "position": [480, 0], "road": {"width": 6, "uvRepeat": 2, "displacement": 0.015}},
@@ -83,7 +87,8 @@ def main():
                               {"id": next_id + 5, "start": next_id + 3, "end": road_node["inputs"][slot + 4]}])
                 next_id += 6
     preview = doc.setdefault("preview", {})
-    preview["camera"] = {"target": [0, 0, 0], "distance": 26, "yaw": -0.55, "pitch": 0.9, "fovY": 0.785398}
+    preview["camera"] = {"target": [0, 0, 0], "distance": max(16, args.length * 26 / 24),
+                         "yaw": -0.55, "pitch": 0.9, "fovY": 0.785398}
     preview["depthOfField"] = {"enabled": False}
     preview["exposure"] = {"useManualEv": True, "manualEv100": 14}
     preview["materialResolution"] = 1024

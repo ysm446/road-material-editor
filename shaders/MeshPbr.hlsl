@@ -965,3 +965,28 @@ float4 PsMain(VsOutput input) : SV_Target0
     return float4(ApplyRoadGrid(min(radiance, 60000.0f), input.uv),
                   (g_mesh.opacityMode == 2u) ? opacity : 1.0f);
 }
+
+// 描画と同じApplyDisplacementを使う検査。ハード法線の両側を独立して評価する。
+struct ConnectionProbeConstants { uint inputIndex; uint outputIndex; uint edgeCount; uint samples; };
+ConstantBuffer<ConnectionProbeConstants> g_probe : register(b0);
+[numthreads(8, 8, 1)]
+void CsConnectionProbe(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= g_probe.samples || id.y >= g_probe.edgeCount) return;
+    Texture2D<float4> source = ResourceDescriptorHeap[g_probe.inputIndex];
+    RWTexture2D<float4> output = ResourceDescriptorHeap[g_probe.outputIndex];
+    const float t = float(id.x) / float(g_probe.samples - 1);
+    const float a = 1 - t;
+    // DSの辺上の補間と同じ重み。両側の頂点・UV・法線を別々に読み込む。
+    const float3 positionA = source.Load(int3(0, id.y, 0)).xyz * a + source.Load(int3(1, id.y, 0)).xyz * t;
+    const float3 positionB = source.Load(int3(2, id.y, 0)).xyz * a + source.Load(int3(3, id.y, 0)).xyz * t;
+    const float2 uvA = source.Load(int3(4, id.y, 0)).xy * a + source.Load(int3(5, id.y, 0)).xy * t;
+    const float2 uvB = source.Load(int3(6, id.y, 0)).xy * a + source.Load(int3(7, id.y, 0)).xy * t;
+    const float3 normalA = normalize(source.Load(int3(8, id.y, 0)).xyz * a + source.Load(int3(9, id.y, 0)).xyz * t);
+    const float3 normalB = normalize(source.Load(int3(10, id.y, 0)).xyz * a + source.Load(int3(11, id.y, 0)).xyz * t);
+    const float3 displacedA = ApplyDisplacement(positionA, normalA, uvA, uvA);
+    const float3 displacedB = ApplyDisplacement(positionB, normalB, uvB, uvB);
+    // 既知の1mm差も出力し、未実行・ゼロ埋めの読み戻しを合格と扱わない。
+    const float control = length(displacedA - (displacedA + float3(0.001f, 0, 0)));
+    output[id.xy] = float4(length(displacedA - displacedB), displacedA.y, displacedB.y, control);
+}

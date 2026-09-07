@@ -6,6 +6,7 @@
 #include "renderer/Environment.h"
 #include "renderer/SkyLibrary.h"
 #include "renderer/Mesh.h"
+#include "renderer/PreviewDiagnostics.h"
 #include "rhi/Device.h"
 #include "rhi/PipelineCache.h"
 
@@ -229,6 +230,7 @@ public:
     bool& ShowWireframe() { return m_showWireframe; }
     bool& ShowReferenceGrid() { return m_showReferenceGrid; }
     // 直前のフレームの描画の量。
+    void EnableDiagnostics(bool enabled) { m_diagnostics.SetEnabled(enabled); }
     const RenderStats& Stats() const { return m_stats; }
     // 道路の材質の合成解像度。作り直しは GPU 待機を伴うのでフレームの外で行う（`ProcessPendingWork`）。
     uint32_t MaterialResolution() const { return m_materialResolution; }
@@ -296,6 +298,7 @@ private:
     bool m_shadowEnabled = kPreviewDefaults.shadowEnabled;
     DofSettings m_dof;
     RenderStats m_stats;
+    PreviewDiagnostics m_diagnostics;
     bool m_tessellationEnabled = kPreviewDefaults.tessellationEnabled;
     float m_tessellationFactor = kPreviewDefaults.tessellationFactor;
     float m_tessellationTargetPixels = kPreviewDefaults.tessellationTargetPixels;

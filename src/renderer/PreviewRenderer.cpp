@@ -31,8 +31,6 @@ struct OverlayLineConstants {
     // xyz: ワールド座標、w: 端点ごとの不透明度。
     DirectX::XMFLOAT4 positions[kOverlayLineMaxVertices];
 };
-// シャドウマップの解像度。プレビューの被写体 1 個ぶんなのでこれで足りる。
-constexpr uint32_t kShadowMapSize = 2048;
 
 // 背景をぼかすときに引くプリフィルタ済みキューブのミップ。小数で指定する。
 //
@@ -323,10 +321,13 @@ bool PreviewRenderer::Initialize(rhi::Device& device, rhi::PipelineCache& pipeli
         return false;
     }
 
-    // シャドウマップ。深度として書き、SRV としても読むので TYPELESS で作る。
+    return ResizeShadowMap(device, m_requestedShadowResolution);
+}
+
+bool PreviewRenderer::ResizeShadowMap(rhi::Device& device, uint32_t resolution) {
     rhi::TextureDesc shadowDesc;
-    shadowDesc.width = kShadowMapSize;
-    shadowDesc.height = kShadowMapSize;
+    shadowDesc.width = resolution;
+    shadowDesc.height = resolution;
     shadowDesc.format = DXGI_FORMAT_R32_TYPELESS;
     shadowDesc.dsvFormat = kShadowDsvFormat;
     shadowDesc.srvFormat = DXGI_FORMAT_R32_FLOAT;
@@ -335,9 +336,15 @@ bool PreviewRenderer::Initialize(rhi::Device& device, rhi::PipelineCache& pipeli
     shadowDesc.clearDepth = 1.0f;
     shadowDesc.initialState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     shadowDesc.debugName = L"ShadowMap";
-    if (!device.Allocator().CreateTexture2D(shadowDesc, m_shadowMap)) {
+    rhi::GpuTexture replacement;
+    if (!device.Allocator().CreateTexture2D(shadowDesc, replacement)) {
+        device.DeferRelease(replacement);
         return false;
     }
+    // 使用中の影とディスクリプタは、GPUが参照を終えるまで保持する。
+    device.DeferRelease(m_shadowMap);
+    m_shadowMap = std::move(replacement);
+    m_shadowResolution = resolution;
     return true;
 }
 
@@ -506,6 +513,12 @@ void PreviewRenderer::Shutdown(rhi::Device& device) {
 void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
                                         rhi::PipelineCache& pipelineCache) {
     if (!m_meshSceneEnabled && !m_sceneMeshes.empty()) ClearMeshScene(device);
+    if (m_requestedShadowResolution != m_shadowResolution) {
+        if (!ResizeShadowMap(device, m_requestedShadowResolution)) {
+            m_requestedShadowResolution = m_shadowResolution;
+            TG_LOG_ERROR("影の解像度を変更できませんでした。元の解像度を維持します");
+        } else TG_LOG_INFO("影の解像度を %u に変更しました", m_shadowResolution);
+    }
 
     // 合成解像度の変更。シーンの評価器（スロット 1〜4）を作り直す。
     // 新しく作る評価器（UploadMeshScene）は m_materialResolution を見るので、先に値を確定する。
@@ -549,6 +562,7 @@ void PreviewRenderer::ResetSettings() {
     m_showSkybox = defaults.showSkybox;
     m_skyboxBlur = defaults.skyboxBlur;
     m_shadowEnabled = defaults.shadowEnabled;
+    RequestShadowResolution(defaults.shadowResolution);
     // 解像度の作り直しは GPU 待機を伴うので、要求だけ積む。
     RequestMaterialResolution(defaults.materialResolution);
 
@@ -1025,7 +1039,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     // ライトから深度だけを描く。同じ頂点シェーダを通るので、
     // ディスプレイスメントで押し出した形がそのまま影になる。
     constants.shadowIndex = kNoShadowIndex;
-    constants.shadowTexelSize = 1.0f / static_cast<float>(kShadowMapSize);
+    constants.shadowTexelSize = 1.0f / static_cast<float>(m_shadowResolution);
     constants.shadowBias = kShadowBias;
 
     // 描くものが無ければシャドウパスも走らせない。
@@ -1064,10 +1078,10 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                                                nullptr);
 
             const auto shadowViewport =
-                CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(kShadowMapSize),
-                                 static_cast<float>(kShadowMapSize));
-            const auto shadowScissor = CD3DX12_RECT(0, 0, static_cast<LONG>(kShadowMapSize),
-                                                    static_cast<LONG>(kShadowMapSize));
+                CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(m_shadowResolution),
+                                 static_cast<float>(m_shadowResolution));
+            const auto shadowScissor = CD3DX12_RECT(0, 0, static_cast<LONG>(m_shadowResolution),
+                                                    static_cast<LONG>(m_shadowResolution));
             commandList->RSSetViewports(1, &shadowViewport);
             commandList->RSSetScissorRects(1, &shadowScissor);
 

@@ -1085,6 +1085,7 @@ json WritePreview(renderer::PreviewRenderer& renderer) {
     node["showSkybox"] = renderer.ShowSkybox();
     node["skyboxBlur"] = renderer.SkyboxBlur();
     node["shadow"] = renderer.ShadowEnabled();
+    node["shadowResolution"] = renderer.ShadowResolution();
 
     // 被写界深度。見え方だけの設定だが、プロジェクトごとに変えるものなので残す。
     const renderer::DofSettings& dof = renderer.Dof();
@@ -1148,6 +1149,7 @@ void ReadPreview(const json& node, renderer::PreviewRenderer& renderer) {
     renderer.ShowSkybox() = ReadBool(node, "showSkybox", previewDefaults.showSkybox);
     renderer.SkyboxBlur() = ReadBool(node, "skyboxBlur", previewDefaults.skyboxBlur);
     renderer.ShadowEnabled() = ReadBool(node, "shadow", previewDefaults.shadowEnabled);
+    renderer.RequestShadowResolution(ReadUInt(node, "shadowResolution", previewDefaults.shadowResolution));
 
     // 節が丸ごと欠けていても既定値で埋める。file-format.md の「欠けているキーは
     // 既定値で埋める」に合わせる（節ごと飛ばすと前のプロジェクトの値が残る）。

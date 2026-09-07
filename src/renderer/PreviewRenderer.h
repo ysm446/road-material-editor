@@ -152,6 +152,7 @@ struct PreviewDefaults {
     bool showSkybox = true;
     bool skyboxBlur = false;
     bool shadowEnabled = true;
+    uint32_t shadowResolution = 2048;
 };
 inline constexpr PreviewDefaults kPreviewDefaults{};
 
@@ -215,6 +216,11 @@ public:
     bool& SkyboxBlur() { return m_skyboxBlur; }
     // ディレクショナルライトの影を落とすか。落とさないとシャドウパスも走らない。
     bool& ShadowEnabled() { return m_shadowEnabled; }
+    uint32_t ShadowResolution() const { return m_requestedShadowResolution; }
+    void RequestShadowResolution(uint32_t resolution) {
+        m_requestedShadowResolution = (resolution == 1024 || resolution == 2048 || resolution == 4096)
+            ? resolution : kPreviewDefaults.shadowResolution;
+    }
     DofSettings& Dof() { return m_dof; }
     const DofSettings& Dof() const { return m_dof; }
     // 実際にピント面として使う距離。注視点に合わせる設定ならカメラの距離。
@@ -279,6 +285,9 @@ private:
     rhi::GpuTexture m_output;  // トーンマップ後の表示用
     // ディレクショナルライトから見た深度。ビューポートの大きさとは無関係に固定。
     rhi::GpuTexture m_shadowMap;
+    bool ResizeShadowMap(rhi::Device& device, uint32_t resolution);
+    uint32_t m_shadowResolution = kPreviewDefaults.shadowResolution;
+    uint32_t m_requestedShadowResolution = kPreviewDefaults.shadowResolution;
 
     Camera m_camera;
     ExposureSettings m_exposure;

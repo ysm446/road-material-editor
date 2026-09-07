@@ -66,6 +66,23 @@ void Application::DrawMaterialPanel() {
             ui::EndPropertyTable();
         }
 
+        ui::SectionHeader("影");
+        if (ui::BeginPropertyTable("shadowRows")) {
+            ui::PropertyBool("有効", &m_renderer.ShadowEnabled(), renderer::kPreviewDefaults.shadowEnabled,
+                "太陽の影を表示する。素材のハイトによる凹凸も影に反映する");
+            const char* labels[] = {"1024 × 1024", "2048 × 2048", "4096 × 4096"};
+            const uint32_t values[] = {1024, 2048, 4096};
+            int selected = 0, defaultIndex = 0;
+            for (int i = 0; i < 3; ++i) {
+                if (values[i] == m_renderer.ShadowResolution()) selected = i;
+                if (values[i] == renderer::kPreviewDefaults.shadowResolution) defaultIndex = i;
+            }
+            if (ui::PropertyCombo("解像度", &selected, labels, 3, defaultIndex,
+                "高くすると影の輪郭が細かくなる。解像度を2倍にすると画素数と必要なメモリは4倍になる"))
+                m_renderer.RequestShadowResolution(values[selected]);
+            ui::EndPropertyTable();
+        }
+
         ui::SectionHeader("カメラ");
         if (ui::BeginPropertyTable("cameraRows")) {
             // 露出を絞り / シャッター / ISO で決めているので、レンズも同じ言葉で扱う。
@@ -174,10 +191,6 @@ void Application::DrawLightingPanel() {
                               kDefaultLight.illuminance,
                               "lux。晴天の直射日光がおよそ 100000 lux", "%.0f");
             ui::PropertyColorLinear("光の色", &light.color.x, &kDefaultLight.color.x);
-            ui::PropertyBool("影", &m_renderer.ShadowEnabled(),
-                             renderer::kPreviewDefaults.shadowEnabled,
-                             "ディレクショナルライトの影を落とす。"
-                             "ディスプレイスメントで押し出した形にも落ちる");
             ui::EndPropertyTable();
         }
 

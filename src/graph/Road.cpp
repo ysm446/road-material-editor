@@ -458,7 +458,8 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
     const RoadLanes lanes = ComputeRoadLanes(road.settings, leftHandTraffic);
     if (lanes.laneWidthMeters < line * 2.0f) return fail("車線幅に対して線幅が大きすぎます。車線数か線幅を見直してください");
     std::vector<float> offsets;
-    if (settings.centerLine && lanes.hasCenter) offsets.push_back(lanes.centerLateral);
+    const bool dashedCenter = settings.centerLine && lanes.hasCenter && settings.centerLineDashed;
+    if (settings.centerLine && lanes.hasCenter && !dashedCenter) offsets.push_back(lanes.centerLateral);
     if (settings.edgeLines) {
         const float edge = width * 0.5f - settings.edgeInsetMeters;
         if (edge - line * 0.5f < 0.0f) return fail("外側線が中心を越えています。端からの距離を小さくしてください");
@@ -467,7 +468,7 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
         offsets.push_back(-edge);
         offsets.push_back(edge);
     }
-    const bool dashed = settings.laneLines && !lanes.dividers.empty();
+    const bool dashed = dashedCenter || (settings.laneLines && !lanes.dividers.empty());
     if (dashed && (!std::isfinite(settings.dashLengthMeters) || settings.dashLengthMeters < 0.1f ||
                    !std::isfinite(settings.dashGapMeters) || settings.dashGapMeters < 0.0f))
         return fail("破線の長さは0.1 m以上、間隔は0 m以上にしてください");
@@ -522,7 +523,9 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
         }
     }
     if (dashed) {
-        for (const float divider : lanes.dividers) BuildDashedStrip(road, settings, divider, result);
+        if (dashedCenter) BuildDashedStrip(road, settings, lanes.centerLateral, result);
+        if (settings.laneLines)
+            for (const float divider : lanes.dividers) BuildDashedStrip(road, settings, divider, result);
     }
     if (stops) BuildStopLines(road, settings, lanes, result);
     if (settings.arrows) BuildArrowMarkings(road, settings, lanes, result);

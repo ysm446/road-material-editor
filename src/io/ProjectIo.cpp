@@ -694,6 +694,7 @@ json WriteGraph(const graph::NodeGraph& graphData,
         } else if (const auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&node.settings)) {
             item["roadMarking"] = {{"lineWidth", marking->lineWidthMeters},
                                    {"centerLine", marking->centerLine},
+                                   {"centerLineDashed", marking->centerLineDashed},
                                    {"edgeLines", marking->edgeLines},
                                    {"edgeInset", marking->edgeInsetMeters},
                                    {"laneLines", marking->laneLines},
@@ -969,6 +970,7 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
                 if (const json* marking = FindMember(item, "roadMarking"); marking && marking->is_object()) {
                     settings.lineWidthMeters = ReadFloat(*marking, "lineWidth", settings.lineWidthMeters);
                     settings.centerLine = ReadBool(*marking, "centerLine", settings.centerLine);
+                    settings.centerLineDashed = ReadBool(*marking, "centerLineDashed", settings.centerLineDashed);
                     settings.edgeLines = ReadBool(*marking, "edgeLines", settings.edgeLines);
                     settings.edgeInsetMeters = ReadFloat(*marking, "edgeInset", settings.edgeInsetMeters);
                     settings.laneLines = ReadBool(*marking, "laneLines", settings.laneLines);

@@ -258,6 +258,7 @@ struct RoadMarkingNodeSettings {
     float lineWidthMeters = 0.15f;
     // 中央線（進行方向と対向の境）。一方通行なら出ない。
     bool centerLine = true;
+    bool centerLineDashed = false;
     bool edgeLines = true;
     float edgeInsetMeters = 0.5f;
     // 車線境界線。同方向の車線の間に破線で引く。

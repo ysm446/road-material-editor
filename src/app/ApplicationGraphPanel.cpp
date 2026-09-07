@@ -1265,11 +1265,20 @@ void Application::DrawGraphPanel() {
         if (ui::BeginPropertyTable("roadMarkingRows")) {
             changed |= ui::PropertyBool("中央線", &marking->centerLine, defaults.centerLine,
                 "進行方向と対向の境に1本引く。Road の車線数で位置が決まる。一方通行なら出ない");
+            if (marking->centerLine) {
+                static const char* const labels[] = {"実線", "破線"};
+                int style = marking->centerLineDashed ? 1 : 0;
+                if (ui::PropertyCombo("中央線の種類", &style, labels, IM_ARRAYSIZE(labels), 0,
+                    "中央線を実線または破線にする。破線の長さ・間隔は車線境界線と共通")) {
+                    marking->centerLineDashed = style == 1;
+                    changed = true;
+                }
+            }
             changed |= ui::PropertyBool("外側線", &marking->edgeLines, defaults.edgeLines,
                 "左右の道路端の手前に1本ずつ引く");
             changed |= ui::PropertyBool("車線境界線", &marking->laneLines, defaults.laneLines,
                 "同方向の車線の間に破線で引く。Road の車線数が片側 2 以上のときに出る");
-            if (marking->laneLines) {
+            if (marking->laneLines || (marking->centerLine && marking->centerLineDashed)) {
                 changed |= ui::PropertyFloat("破線の長さ", &marking->dashLengthMeters, 0.1f, 50.0f,
                     defaults.dashLengthMeters, "破線 1 本の長さ", "%.1f m");
                 changed |= ui::PropertyFloat("破線の間隔", &marking->dashGapMeters, 0.0f, 50.0f,

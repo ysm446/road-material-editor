@@ -393,6 +393,43 @@ void RunRoadTests() {
         float fullMaxZ = -1e9f;
         for (const auto& v : dashMesh.vertices) fullMaxZ = std::max(fullMaxZ, v.position.z);
         Check(std::abs(fullMaxZ - 10.0f) < 1e-3f, "zero gap reaches the end of the road");
+        {
+            auto center = dashes;
+            center.centerLine = center.centerLineDashed = true;
+            center.laneLines = false;
+            center.dashGapMeters = 5.0f;
+            renderer::MeshData centerMesh;
+            for (const bool leftTraffic : {true, false}) {
+                Check(graph::BuildRoadMarkings(laneRoad, center, leftTraffic, centerMesh, error) &&
+                      !centerMesh.indices.empty(), "dashed centre builds without lane dividers");
+                const float lateral = graph::ComputeRoadLanes(laneSettings, leftTraffic).centerLateral;
+                bool correctPosition = true, gapEmpty = true;
+                for (const auto& v : centerMesh.vertices)
+                    correctPosition &= std::abs(v.position.x - lateral) <= 0.076f;
+                for (size_t i = 0; i + 2 < centerMesh.indices.size(); i += 3) {
+                    float lo = 1e9f, hi = -1e9f;
+                    for (size_t j = 0; j < 3; ++j) {
+                        const float distance = centerMesh.vertices[centerMesh.indices[i + j]].roadUv.y *
+                            laneSettings.uvRepeatMeters;
+                        lo = std::min(lo, distance); hi = std::max(hi, distance);
+                    }
+                    gapEmpty &= hi <= 5.001f || lo >= 9.999f;
+                }
+                Check(correctPosition && gapEmpty, "centre follows traffic side and no triangle bridges dash gap");
+            }
+            center.dashLengthMeters = 0.0f;
+            Check(!graph::BuildRoadMarkings(laneRoad, center, true, centerMesh, error),
+                  "invalid centre dash length is rejected even with lane dividers off");
+            center.dashLengthMeters = 5.0f;
+            auto oneWaySettings = laneSettings;
+            oneWaySettings.lanesBackward = 0;
+            graph::RoadGeometry oneWayRoad;
+            center.edgeLines = true;
+            Check(graph::BuildRoad(path, oneWaySettings, oneWayRoad, error) &&
+                  graph::BuildRoadMarkings(oneWayRoad, center, true, centerMesh, error) &&
+                  centerMesh.vertices.size() == oneWayRoad.rowDistances.size() * 4,
+                  "one-way road keeps only edge lines when dashed centre is selected");
+        }
         // 停止線。終点の制御点に「進行方向」を付けると、道路の末尾に進行方向の車線幅の帯が出る。
         {
             graph::PathSettings stopPath = path;

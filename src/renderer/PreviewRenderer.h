@@ -29,9 +29,8 @@ enum class DebugView : uint32_t {
     Metallic = 5,
     AmbientOcclusion = 6,
     Height = 7,
-    // **地形の大きな高さを引いた「その場の起伏」だけ**の表示。
-    // 素材のハイトマップをそのまま貼ったように見える（Height だと
-    // 標高差 600m の傾きに埋もれて、素材の凹凸が見えないため）。
+    // **周りの平均を引いた「その場の起伏」だけ**の表示。
+    // 素材のハイトマップをそのまま貼ったように見える。
     HeightLocal = 8,
     // 形だけを見る表示。ラスタライザをワイヤーフレームにする。
     Wireframe = 9,
@@ -143,18 +142,12 @@ struct DofSettings {
 // 「読み込みで別の値に化ける」という食い違いが起きる。
 struct PreviewDefaults {
     TonemapMode tonemap = TonemapMode::Aces;
-    bool useMaterialTextures = true;
-    float displacementScale = 0.0f;
-    // 平面の一辺（m）。Megascans のサーフェスが 2m 角で作られていることに合わせた既定。
-    float planeSize = 2.0f;
     bool tessellationEnabled = false;
     float tessellationFactor = 8.0f;
     // 分割で 1 辺を保つ画面上の長さ（px）。小さいほど細かい。
     float tessellationTargetPixels = 10.0f;
+    // 道路の材質（スロット 1〜4）を合成する解像度。タイル 1 枚ぶん。
     uint32_t materialResolution = 1024;
-    // 平面メッシュの分割数。**形の細かさの上限はここで決まる。**
-    // 地形の一辺 ÷ 分割数 が 1 マスの大きさ（2048m を 256 分割で 8m）。
-    uint32_t meshSubdivisions = 256;
     bool showSkybox = true;
     bool skyboxBlur = false;
     bool shadowEnabled = true;
@@ -163,11 +156,7 @@ inline constexpr PreviewDefaults kPreviewDefaults{};
 
 class PreviewRenderer {
 public:
-    // 平面メッシュを作るときの一辺（XZ 平面、原点中心、Y = 0）。
-    // **これは頂点データの基準サイズで、表示される大きさではない。**
-    // 実際の大きさは PlaneSize()（m）で、モデル行列の拡大で合わせる。
-    // メッシュを作り直さずに 2m の素材から 2km の地形まで扱えるようにするため。
-    static constexpr float kPlaneMeshSize = 2.0f;
+    // 作業グリッド（50m 角）を包む球の半径。シーンが無いときのカメラの基準。
     static constexpr float kReferenceGridRadius = 25.0f * 1.41421356f;
 
     bool Initialize(rhi::Device& device, rhi::PipelineCache& pipelineCache);
@@ -181,15 +170,16 @@ public:
     // 天球は SkyLibrary が持つので、ここでは触らない。
     void ResetSettings();
 
-    // フレームの外で生成結果を渡す。検証・転送が失敗したら現在のシーンを保つ。
-    bool SetMeshScene(rhi::Device& device, const MeshScene& scene);
-    void ClearMeshScene(rhi::Device& device);
+    // フレームの外で生成結果（グラフの Mesh Output）を渡す。検証・転送が失敗したら現在のシーンを保つ。
     bool SetGeneratedMeshScene(rhi::Device& device, const MeshScene& scene);
-    bool RestoreAuthoredMeshScene(rhi::Device& device);
-    bool HasAuthoredMeshScene() const { return m_authoredSceneEnabled; }
-    const MeshScene& AuthoredScene() const { return m_authoredScene; }
+    void ClearMeshScene(rhi::Device& device);
     bool HasMeshScene() const { return m_meshSceneEnabled; }
     const MeshScene& Scene() const { return m_meshScene; }
+    // 材質アセットや画像を編集したときに呼ぶ。シーンの材質を次のフレームで評価し直す
+    // （グラフの構造は変わらないので、シーンを作り直す必要はない）。
+    void InvalidateSceneMaterials();
+    // シーンの材質のどれかが非同期で評価中か（UI の「評価中」表示と、開発用の撮影の待ちに使う）。
+    bool IsEvaluating() const;
 
     // ビューポートに適用する天球を渡す。**毎フレーム呼んでよい。**
     // 前回と中身が違えば、必要な作り直し（環境マップの再生成か、
@@ -204,7 +194,7 @@ public:
     bool Resize(rhi::Device& device, uint32_t width, uint32_t height);
 
     void Render(rhi::Device& device, rhi::PipelineCache& pipelineCache,
-                ID3D12GraphicsCommandList* commandList, const compositor::MaterialStack& stack,
+                ID3D12GraphicsCommandList* commandList,
                 const compositor::TextureLibrary& textures,
                 const compositor::MaterialLibrary& materials);
 
@@ -212,8 +202,7 @@ public:
     const Camera& GetCamera() const { return m_camera; }
     ExposureSettings& Exposure() { return m_exposure; }
     LightSettings& Light() { return m_light; }
-    MaterialSettings& Material() { return m_material; }
-    // 平面を包む球の半径（原点中心）。カメラの Frame() が使う。
+    // シーンを包む球の半径（原点中心）。カメラの Frame() が使う。シーンが無ければ作業グリッドの半径。
     float BoundingRadius() const;
     TonemapMode& Tonemap() { return m_tonemap; }
     DebugView& Debug() { return m_debugView; }
@@ -234,31 +223,16 @@ public:
     // 1 辺あたりの分割の上限。
     float& TessellationFactor() { return m_tessellationFactor; }
     float& TessellationTargetPixels() { return m_tessellationTargetPixels; }
-    bool& UseMaterialTextures() { return m_useMaterialTextures; }
-    // ハイトを形状に反映する量（0 で反映しない）。頂点シェーダで押し出す。
-    // **単位は m。** ハイト 0〜1 の全幅がこの高さに対応する。
-    float& DisplacementScale() { return m_displacementScale; }
-    float DisplacementScale() const { return m_displacementScale; }
-    // 平面の一辺（m）。**ジオメトリだけがメートルで、テクスチャは無次元のまま**
-    // （1 UV が何 m かは決めない）。地形の実寸はここで決まる。
-    float& PlaneSize() { return m_planeSize; }
-    float PlaneSize() const { return m_planeSize; }
     bool& ShowRoadGrid() { return m_showRoadGrid; }
     bool& ShowUvChecker() { return m_showUvChecker; }
     // メッシュシーンにワイヤーフレームを重ねる。テセレーションと変位の後の辺を見る。
     bool& ShowWireframe() { return m_showWireframe; }
     bool& ShowReferenceGrid() { return m_showReferenceGrid; }
-    const compositor::MaterialEvaluator& Evaluator() const { return m_evaluator; }
     // 直前のフレームの描画の量。
     const RenderStats& Stats() const { return m_stats; }
+    // 道路の材質の合成解像度。作り直しは GPU 待機を伴うのでフレームの外で行う（`ProcessPendingWork`）。
     uint32_t MaterialResolution() const { return m_materialResolution; }
     void RequestMaterialResolution(uint32_t resolution) { m_requestedMaterialResolution = resolution; }
-    // 平面メッシュの分割数。作り直しは GPU 待機を伴うのでフレームの外で行う
-    // （`ProcessPendingWork`）。合成解像度と同じ作法。
-    uint32_t MeshSubdivisions() const { return m_meshSubdivisions; }
-    void RequestMeshSubdivisions(uint32_t subdivisions) {
-        m_requestedMeshSubdivisions = subdivisions;
-    }
 
     // 表示用テクスチャを PNG に書き出す。フレームの外で呼ぶこと。
     bool SaveOutputToPng(rhi::Device& device, const std::filesystem::path& path);
@@ -273,7 +247,6 @@ private:
     // 手続き的な空へ落とす（アセットの中身は書き換えない）。
     void ApplyActiveSky(rhi::Device& device, rhi::PipelineCache& pipelineCache);
 
-    const Mesh& CurrentMesh() const;
     // ライトから見たビュー×投影。プレビューの被写体を囲む平行投影。
     DirectX::XMMATRIX LightViewProjection() const;
     void ReleaseTargets(rhi::Device& device);
@@ -281,10 +254,7 @@ private:
     void DrawGuideOverlay(rhi::Device& device, rhi::PipelineCache& pipelineCache,
                           ID3D12GraphicsCommandList* commandList);
 
-    Mesh m_plane;
     bool UploadMeshScene(rhi::Device& device, const MeshScene& scene);
-    MeshScene m_authoredScene;
-    bool m_authoredSceneEnabled = false;
     MeshScene m_meshScene;
     std::vector<Mesh> m_sceneMeshes;
     struct SceneMaterial {
@@ -296,7 +266,6 @@ private:
         rhi::GpuTexture roadMask;
     };
     std::vector<SceneMaterial> m_sceneMaterials;
-    uint64_t m_sceneMaterialSourceRevision = 0;
     bool m_meshSceneEnabled = false;
     float m_meshSceneRadius = 0.1f;
 
@@ -304,9 +273,6 @@ private:
     // 被写界深度を掛けた結果。**トーンマップはこちらを読む。**
     // 元のシーンカラーを潰さないので、掛けるかどうかを毎フレーム選べる。
     rhi::GpuTexture m_sceneColorDof;
-    // メッシュ描画の 2 枚目のターゲット。xy: マテリアル UV、z: メッシュに当たったか。
-    // ビューポートのカーソル位置からマテリアルの UV を引くために使う。
-    rhi::GpuTexture m_materialUv;
     rhi::GpuTexture m_depth;
     rhi::GpuTexture m_output;  // トーンマップ後の表示用
     // ディレクショナルライトから見た深度。ビューポートの大きさとは無関係に固定。
@@ -315,9 +281,7 @@ private:
     Camera m_camera;
     ExposureSettings m_exposure;
     LightSettings m_light;
-    MaterialSettings m_material;
     Environment m_environment;
-    compositor::MaterialEvaluator m_evaluator;
     // ビューポートに適用している天球の中身。**Environment の元になっているもの。**
     // 既定値は Environment::Initialize が作る環境と一致させてあるので、
     // 起動直後は作り直しが要らない。
@@ -325,13 +289,8 @@ private:
     TonemapMode m_tonemap = kPreviewDefaults.tonemap;
     DebugView m_debugView = DebugView::Shaded;
     bool m_skyLuminanceRebuildRequested = false;
-    float m_displacementScale = kPreviewDefaults.displacementScale;
-    float m_planeSize = kPreviewDefaults.planeSize;
     uint32_t m_materialResolution = kPreviewDefaults.materialResolution;
     uint32_t m_requestedMaterialResolution = kPreviewDefaults.materialResolution;
-    uint32_t m_meshSubdivisions = kPreviewDefaults.meshSubdivisions;
-    uint32_t m_requestedMeshSubdivisions = kPreviewDefaults.meshSubdivisions;
-    bool m_useMaterialTextures = kPreviewDefaults.useMaterialTextures;
     bool m_showSkybox = kPreviewDefaults.showSkybox;
     bool m_skyboxBlur = kPreviewDefaults.skyboxBlur;
     bool m_shadowEnabled = kPreviewDefaults.shadowEnabled;

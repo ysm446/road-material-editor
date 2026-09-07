@@ -23,22 +23,6 @@ struct MaterialTextureSet {
     bool IsValid() const { return baseColor.IsValid(); }
 };
 
-// 合成の Height を小さなグリッドで CPU へ写したもの。
-//
-// ビューポートでパスを地形に沿って編集するのに使う（クリック位置の投影、点の表示）。
-// 評価のたびに、評価と同じキューで縮小 → 読み戻しバッファへコピーし、
-// フェンスが立ったら写す。**評価が終わるまでは前回の中身のまま。**
-struct CpuHeightfield {
-    uint32_t resolution = 0;
-    std::vector<float> values;  // 行優先、resolution^2。0〜1 の正規化ハイト
-
-    bool IsValid() const {
-        return resolution > 0 && values.size() == static_cast<size_t>(resolution) * resolution;
-    }
-    // 正規化 UV（0〜1）で双線形に引く。範囲外はクランプ。無効なら 0.5。
-    float Sample(float u, float v) const;
-};
-
 // 評価する出力領域。全体を 1 回で評価するときは矩形に全体を渡す。
 struct TileRect {
     uint32_t x = 0;
@@ -56,7 +40,7 @@ struct TileRect {
 // **プレビューの評価は非同期。** `asynchronous` で作ると出力を 2 組持ち、
 // 評価は専用のコンピュートキュー（`rhi::ComputeQueue`）へ流す。描画は前回の結果
 // （表側）を読み続け、終わった時点で裏側と入れ替える（`Update`）。
-// 書き出し用は同期（`Evaluate` を直接呼び、1 組だけ持つ）。
+// 同期で作ると `Evaluate` を直接呼び、1 組だけ持つ。
 class MaterialEvaluator {
 public:
     // asynchronous: 出力を 2 組持ち、評価をコンピュートキューへ流す（プレビュー用）。
@@ -88,15 +72,8 @@ public:
 
     // 非同期の評価が走っている最中か（UI の「評価中」表示と、開発用の撮影の待ちに使う）。
     bool IsEvaluating() const;
-    // 合成の Height の CPU 側の写し（プレビュー用。書き出し用の評価器は持たない）。
-    // 評価が 1 度も終わっていなければ IsValid() が偽。
-    const CpuHeightfield& Heightfield() const { return m_heightfield; }
     // 走っている評価の完了を CPU で待つ。
     void WaitForEvaluation();
-    // 評価先の Height をその場で CPU へ読み戻す（同期。**フレームの外で呼ぶこと**）。
-    // 経路探索のように、プレビューとは別の評価器で焼いた地形を読むためのもの。
-    // 解像度は評価器のもの。
-    bool ReadbackHeight(rhi::Device& device, CpuHeightfield& out);
 
     uint32_t TileSize() const { return m_tileSize; }
 
@@ -105,11 +82,6 @@ public:
 
     // 描画が読む結果。非同期なら表側（評価済みで入れ替えたもの）、同期なら評価先そのもの。
     const MaterialTextureSet& Textures() const {
-        return m_frontTextures.IsValid() ? m_frontTextures : m_textures;
-    }
-    // 読み戻しのように、状態遷移を伴う操作から触るためのもの。
-    // GpuTexture は自分の状態を持つので、遷移させる側は非 const 参照が要る。
-    MaterialTextureSet& TexturesMutable() {
         return m_frontTextures.IsValid() ? m_frontTextures : m_textures;
     }
     uint32_t Resolution() const { return m_resolution; }
@@ -128,15 +100,6 @@ public:
     void Invalidate() { m_evaluatedRevision = 0; }
 
 private:
-    // --- CPU 側のハイト -----------------------------------------------------
-    // 評価の末尾で Height を縮小して読み戻しバッファへ写す（同じコマンドリストに記録）。
-    void RecordHeightfieldReadback(rhi::Device& device, rhi::PipelineCache& pipelineCache,
-                                   ID3D12GraphicsCommandList* commandList);
-    // 読み戻しが終わっていれば CPU へ写す。
-    void CollectHeightfieldReadback();
-    bool EnsureHeightfieldResources(rhi::Device& device);
-    void ReleaseHeightfieldResources(rhi::Device& device);
-
     void ReleaseTextures(rhi::Device& device);
     // レイヤーの数ぶんの結果サムネイル（評価先＝裏側）を用意する。
     void EnsureLayerThumbnails(rhi::Device& device, size_t layerCount);
@@ -150,7 +113,7 @@ private:
     }
 
     // 定数バッファの置き場。コンピュートキューへ記録している間はそのキューの
-    // 置き場から、それ以外（同期評価 / 書き出し）はフレームのアップロードリングから取る。
+    // 置き場から、それ以外（同期評価）はフレームのアップロードリングから取る。
     // **評価器の中で device.Upload() を直接呼ばない**（キューの仕事はフレームより長生きする）。
     rhi::UploadAllocation AllocateConstants(rhi::Device& device, uint64_t size);
     // 全体をタイルに分ける。
@@ -164,7 +127,7 @@ private:
 
     // 評価先。非同期のときは裏側で、終わったら m_frontTextures と入れ替わる。
     MaterialTextureSet m_textures;
-    // 描画が読む表側。同期（書き出し用）のときは持たない。
+    // 描画が読む表側。同期のときは持たない。
     MaterialTextureSet m_frontTextures;
     // レイヤーごとの結果サムネイル（RGBA8）。評価先（裏側）と描画が読む表側を、
     // 合成結果と一緒に入れ替える（評価中に ImGui が読む側へ書かないため）。
@@ -187,22 +150,6 @@ private:
     uint64_t m_asyncRevision = 0;
     // 表側に描ける結果があるか。無いうちは同期で評価する。
     bool m_hasResult = false;
-
-    // --- CPU 側のハイト -----------------------------------------------------
-    CpuHeightfield m_heightfield;
-    rhi::GpuTexture m_heightfieldTexture;   // R32_FLOAT 縮小先
-    rhi::GpuBuffer m_heightfieldReadback;   // READBACK ヒープ
-    uint64_t m_heightfieldReadbackBytes = 0;
-    uint32_t m_heightfieldRowPitch = 0;
-    // 読み戻しを記録したコマンドリストの完了を待つフェンス。null なら待つものなし。
-    // 評価器のキューか Device のフレームのフェンスで、どちらも評価器より長生きする。
-    ID3D12Fence* m_heightfieldFence = nullptr;
-    uint64_t m_heightfieldFenceValue = 0;
-    bool m_heightfieldPending = false;
 };
-
-// スタックのうち **Height に効く状態**のハッシュ（レイヤーの高さ関連）。
-// 「同じ地形か」を評価せずに見分けるためのもの（経路探索の地形の使い回しに使う）。
-uint64_t HashStackHeightState(const MaterialStack& stack);
 
 }  // namespace tg::compositor

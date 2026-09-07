@@ -31,9 +31,4 @@ private:
     uint32_t m_vertexCount = 0;
 };
 
-// プレビューのジオメトリ。**平面 1 種類だけ。**（このツールが扱うのは地形で、
-// 球やキューブに素材を貼って眺める用途は持たない。）
-// subdivisions はディスプレイスメントを効かせるための分割数。
-MeshData MakePlane(float size, uint32_t subdivisions);
-
 }  // namespace tg::renderer

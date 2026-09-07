@@ -10,7 +10,6 @@ void RunRoadTests() {
     using tests::Check;
     tests::Section("Road geometry and graph");
     graph::PathSettings path;
-    path.worldSpace = true;
     auto a = graph::AddPathPoint(path, 0, 0, 0);
     auto b = graph::AddPathPoint(path, 0, 10, a);
     path.FindPoint(b)->y = 2;
@@ -28,7 +27,7 @@ void RunRoadTests() {
     scene.meshes.push_back({road.surface,{}});
     Check(renderer::ValidateMeshScene(scene), "finite orthonormal mesh with valid indices");
     // 進行方向 +Z に向かって右は -X（右手系 Y-up）。
-    Check(road.left.worldSpace && road.left.points.back().y == 2 &&
+    Check(road.left.points.back().y == 2 &&
           road.right.points.back().x == -3 && road.left.points.back().x == 3,
           "boundaries preserve world coordinates, height, and handedness");
     bool metreCells = true;
@@ -39,7 +38,6 @@ void RunRoadTests() {
     Check(metreCells, "straight cells are at most one metre in both axes");
     const float endUv = road.surface.vertices.back().uv.y;
     graph::PathSettings dense;
-    dense.worldSpace = true;
     auto first = graph::AddPathPoint(dense, 0, 0, 0);
     auto mid = graph::AddPathPoint(dense, 0, 5, first);
     dense.FindPoint(mid)->y = 1;
@@ -53,11 +51,7 @@ void RunRoadTests() {
     path.FindPoint(b)->z = 0;
     Check(!graph::BuildRoad(path, settings, road, error), "vertical section is rejected");
     path.FindPoint(b)->z = 10;
-    path.worldSpace = false;
-    Check(!graph::BuildRoad(path, settings, road, error), "legacy UV path requires conversion");
-    path.worldSpace = true;
     graph::PathSettings curve;
-    curve.worldSpace = true;
     graph::PathElementId prev = 0;
     const float positions[][3] = {{-6,0,-20},{-6,1,-10},{6,2,0},{6,3,16}};
     for (auto& pos : positions) {
@@ -252,7 +246,6 @@ void RunRoadTests() {
     tests::Section("Vertical curve and bank angle");
     {
         graph::PathSettings profile;
-        profile.worldSpace = true;
         auto p0 = graph::AddPathPoint(profile, 0, 0, 0);
         auto p1 = graph::AddPathPoint(profile, 0, 100, p0);
         profile.FindPoint(p1)->y = 10;
@@ -288,7 +281,6 @@ void RunRoadTests() {
               "end heights stay at the control points");
         // 曲率が続く円弧状の線形で自動バンクを確認する。
         graph::PathSettings arc;
-        arc.worldSpace = true;
         graph::PathElementId arcLast = 0;
         for (int i = 0; i <= 24; ++i) {
             const float angle = static_cast<float>(i) / 24.0f * 1.5707963f;
@@ -451,7 +443,6 @@ void RunRoadTests() {
         crackRoadSettings.lanesForward = 2;
         crackRoadSettings.lanesBackward = 1;
         graph::PathSettings longPath;
-        longPath.worldSpace = true;
         const auto c0 = graph::AddPathPoint(longPath, 0, 0, 0);
         graph::AddPathPoint(longPath, 0, 100, c0);
         graph::RoadGeometry crackRoad;
@@ -658,7 +649,6 @@ void RunRoadTests() {
             Check(varies, "world noise varies across space");
             // 焼き込みでは行の左右端からワールド座標を補間する。geometry 無しでは道路座標で代用。
             graph::PathSettings wp;
-            wp.worldSpace = true;
             const auto w0 = graph::AddPathPoint(wp, 0, 0, 0);
             graph::AddPathPoint(wp, 0, 20, w0);
             graph::RoadGeometry wroad;
@@ -736,7 +726,6 @@ void RunRoadTests() {
         Check(!graph::RayHitsRoad(deck, {10.0f, 10.0f, 5.0f}, {0.0f, -1.0f, 0.0f}, hit), "ray beside the road misses");
         // 面上のパス: 横位置 -1 → +1 を距離 2〜8 で斜めに横切る。
         graph::PathSettings surfacePath;
-        surfacePath.worldSpace = true;
         surfacePath.surfaceSpace = true;
         const auto s0 = graph::AddPathPoint(surfacePath, -1.0f, 2.0f, 0);
         graph::AddPathPoint(surfacePath, 1.0f, 8.0f, s0);

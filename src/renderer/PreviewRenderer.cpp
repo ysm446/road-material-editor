@@ -31,10 +31,6 @@ struct OverlayLineConstants {
     // xyz: ワールド座標、w: 端点ごとの不透明度。
     DirectX::XMFLOAT4 positions[kOverlayLineMaxVertices];
 };
-// マテリアル UV バッファ。UV はタイル 1 枚ぶんに畳んであるため半精度で足りる
-// （1.0 付近でも刻みは 2^-11 で、2K のペイントマスクの 1 テクセルに収まる）。
-constexpr DXGI_FORMAT kMaterialUvFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
-
 // シャドウマップの解像度。プレビューの被写体 1 個ぶんなのでこれで足りる。
 constexpr uint32_t kShadowMapSize = 2048;
 
@@ -46,15 +42,11 @@ constexpr uint32_t kShadowMapSize = 2048;
 // 素材を見比べるときに背景が目移りの原因にならないことを優先している。
 constexpr float kSkyboxBlurMip = 1.6f;
 constexpr DXGI_FORMAT kShadowDsvFormat = DXGI_FORMAT_D32_FLOAT;
-// 平面の一辺は PreviewRenderer::kPlaneMeshSize（ヘッダ。オーバーレイも参照する）。
-// 実際の大きさはモデル行列の拡大で決まる。
 
 // 影を落とす範囲。**被写体を包む球の半径に対する倍率**で持つ。
-// 素材の 2m 角と地形の 2km 角では 1000 倍違うので、m の固定値では片方でしか使えない
-// （地形では 4.4m 角の平行投影から完全にはみ出して影が消える）。
+// 数 m の部品と数百 m の道路では大きさが違うので、m の固定値では片方でしか使えない。
 // 係数は、従来の固定値（半径 1.41 のときに 2.2m / 6.0m）と一致するよう選んである。
 // **基準より小さい被写体では従来の固定値のまま**にする（下限で止める）。
-// 狭めると影の解像度は上がるが、既存のプロジェクトの見え方が変わってしまう。
 constexpr float kShadowRadiusMin = 2.2f;
 constexpr float kShadowDistanceMin = 6.0f;
 constexpr float kShadowRadiusRatio = 2.2f / 1.41421356f;
@@ -131,7 +123,7 @@ struct MeshConstants {
     uint32_t layerWorldUv[4];
     float layerUvRepeat[4];
     uint32_t roadMaskIndex;    // 道路空間マスクの SRV。無ければ kNoShadowIndex
-    uint32_t layerCount;       // 変位に使うスロット数（0 なら旧経路）
+    uint32_t layerCount;       // 変位に使うスロット数（0 なら変位しない）
     float layerBlendRange;
     uint32_t roadUvAlongU;
     float roadMaskScale[2];    // (1/幅, 1/長さ)。道路座標（m）→ マスク UV
@@ -299,16 +291,7 @@ XMFLOAT3 LightSettings::Direction() const {
 
 bool PreviewRenderer::Initialize(rhi::Device& device, rhi::PipelineCache& pipelineCache) {
     m_camera.Frame({0.0f, 0.0f, 0.0f}, kReferenceGridRadius);
-    // ディスプレイスメントを頂点で押し出すので、プレビューのメッシュは細かく割る。
-    // 数万頂点はプレビュー 1 個ぶんとしては軽い。
-    if (!m_plane.Create(device, MakePlane(kPlaneMeshSize, m_meshSubdivisions), L"PlaneMesh")) {
-        return false;
-    }
     if (!m_environment.Initialize(device, pipelineCache)) {
-        return false;
-    }
-    // プレビューの評価は非同期（出力 2 組 + コンピュートキュー）。重い加工でも UI が止まらない。
-    if (!m_evaluator.Create(device, m_materialResolution, /*asynchronous=*/true)) {
         return false;
     }
 
@@ -332,7 +315,7 @@ bool PreviewRenderer::Initialize(rhi::Device& device, rhi::PipelineCache& pipeli
 
 // ライトから見たビュー×投影。プレビューの被写体を囲む平行投影で足りる。
 XMMATRIX PreviewRenderer::LightViewProjection() const {
-    // 影の範囲は被写体の大きさに追従させる（平面のサイズと変位量で変わる）。
+    // 影の範囲は被写体の大きさに追従させる。
     const float radius = BoundingRadius();
     const float shadowRadius = std::max(kShadowRadiusMin, radius * kShadowRadiusRatio);
     const float shadowDistance = std::max(kShadowDistanceMin, radius * kShadowDistanceRatio);
@@ -351,21 +334,25 @@ XMMATRIX PreviewRenderer::LightViewProjection() const {
     return XMMatrixMultiply(view, projection);
 }
 
-bool PreviewRenderer::SetMeshScene(rhi::Device& device, const MeshScene& scene) {
-    if (!UploadMeshScene(device, scene)) return false;
-    m_authoredScene = scene;
-    m_authoredSceneEnabled = true;
-    return true;
-}
-
 bool PreviewRenderer::SetGeneratedMeshScene(rhi::Device& device, const MeshScene& scene) {
     return UploadMeshScene(device, scene);
 }
 
-bool PreviewRenderer::RestoreAuthoredMeshScene(rhi::Device& device) {
-    if (m_authoredSceneEnabled) return UploadMeshScene(device, m_authoredScene);
-    ClearMeshScene(device);
-    return true;
+void PreviewRenderer::InvalidateSceneMaterials() {
+    for (auto& material : m_sceneMaterials) {
+        material.stack.MarkDirty();
+        for (auto& layerStack : material.layerStacks) layerStack.MarkDirty();
+    }
+}
+
+bool PreviewRenderer::IsEvaluating() const {
+    for (const auto& material : m_sceneMaterials) {
+        if (material.evaluator && material.evaluator->IsEvaluating()) return true;
+        for (const auto& layer : material.layerEvaluators) {
+            if (layer && layer->IsEvaluating()) return true;
+        }
+    }
+    return false;
 }
 
 bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scene) {
@@ -464,8 +451,6 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
 }
 
 void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
-    m_authoredScene = {};
-    m_authoredSceneEnabled = false;
     for (auto& mesh : m_sceneMeshes) mesh.Release(device);
     m_sceneMeshes.clear();
     for (auto& material : m_sceneMaterials) {
@@ -481,43 +466,25 @@ void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
 void PreviewRenderer::Shutdown(rhi::Device& device) {
     ClearMeshScene(device);
     device.DeferRelease(m_shadowMap);
-    m_evaluator.Destroy(device);
     m_environment.Shutdown(device);
-    m_plane.Release(device);
     ReleaseTargets(device);
 }
 
 void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
                                         rhi::PipelineCache& pipelineCache) {
     if (!m_meshSceneEnabled && !m_sceneMeshes.empty()) ClearMeshScene(device);
-    if (m_requestedMeshSubdivisions != m_meshSubdivisions) {
-        // 古い頂点バッファは GPU がまだ見ているかもしれないので、
-        // Release（Defer）を通してから作り直す。
-        Mesh plane;
-        if (plane.Create(device, MakePlane(kPlaneMeshSize, m_requestedMeshSubdivisions),
-                         L"PlaneMesh")) {
-            m_plane.Release(device);
-            m_plane = std::move(plane);
-            m_meshSubdivisions = m_requestedMeshSubdivisions;
-        } else {
-            TG_LOG_WARN("平面メッシュを作れませんでした（%u 分割）", m_requestedMeshSubdivisions);
-            m_requestedMeshSubdivisions = m_meshSubdivisions;
-        }
-    }
 
+    // 合成解像度の変更。シーンの評価器（スロット 1〜4）を作り直す。
+    // 新しく作る評価器（UploadMeshScene）は m_materialResolution を見るので、先に値を確定する。
     if (m_requestedMaterialResolution != m_materialResolution) {
-        if (m_evaluator.Resize(device, m_requestedMaterialResolution)) {
-            m_materialResolution = m_requestedMaterialResolution;
-            for (auto& material : m_sceneMaterials) {
-                if (material.evaluator && !material.evaluator->Resize(device, m_materialResolution))
-                    TG_LOG_WARN("道路マテリアルの解像度を変更できませんでした");
-                for (auto& layer : material.layerEvaluators) {
-                    if (layer && !layer->Resize(device, m_materialResolution))
-                        TG_LOG_WARN("道路レイヤーの解像度を変更できませんでした");
-                }
+        m_materialResolution = m_requestedMaterialResolution;
+        for (auto& material : m_sceneMaterials) {
+            if (material.evaluator && !material.evaluator->Resize(device, m_materialResolution))
+                TG_LOG_WARN("道路マテリアルの解像度を変更できませんでした");
+            for (auto& layer : material.layerEvaluators) {
+                if (layer && !layer->Resize(device, m_materialResolution))
+                    TG_LOG_WARN("道路レイヤーの解像度を変更できませんでした");
             }
-        } else {
-            m_requestedMaterialResolution = m_materialResolution;
         }
     }
 
@@ -539,14 +506,9 @@ void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
 }
 
 void PreviewRenderer::ResetSettings() {
-    m_authoredScene = {};
-    m_authoredSceneEnabled = false;
     m_meshSceneEnabled = false;
     const PreviewDefaults& defaults = kPreviewDefaults;
     m_tonemap = defaults.tonemap;
-    m_useMaterialTextures = defaults.useMaterialTextures;
-    m_displacementScale = defaults.displacementScale;
-    m_planeSize = defaults.planeSize;
     m_tessellationEnabled = defaults.tessellationEnabled;
     m_tessellationFactor = defaults.tessellationFactor;
     m_tessellationTargetPixels = defaults.tessellationTargetPixels;
@@ -555,7 +517,6 @@ void PreviewRenderer::ResetSettings() {
     m_shadowEnabled = defaults.shadowEnabled;
     // 解像度の作り直しは GPU 待機を伴うので、要求だけ積む。
     RequestMaterialResolution(defaults.materialResolution);
-    RequestMeshSubdivisions(defaults.meshSubdivisions);
 
     // 各節の既定値は構造体の初期値。数値を直接書かない。
     m_camera.SetState(CameraState{});
@@ -563,7 +524,6 @@ void PreviewRenderer::ResetSettings() {
     m_light = LightSettings{};
     m_exposure = ExposureSettings{};
     m_dof = DofSettings{};
-    m_material = MaterialSettings{};
 
     // 表示モードはプロジェクトに保存しないが、ここでは戻す。
     // ハイトやラフネスを覗いたまま「新規」を押すと、
@@ -601,28 +561,14 @@ float PreviewRenderer::FocusDistance() const {
     return m_dof.focusOnTarget ? m_camera.State().distance : m_dof.focusDistance;
 }
 
-// 現在のメッシュを包む球の半径。カメラの Frame()（A キー）が使う。
-//
-// ディスプレイスメントは頂点を法線方向へ (height - 0.5) * scale だけ動かすので、
-// 外へ出る最大量 scale * 0.5 を足す。変位量を上げたときにはみ出さないようにするため。
+// 現在のシーンを包む球の半径。カメラの Frame()（A キー）が使う。
+// シーンが無ければ作業グリッドの半径（グリッドだけが見えている状態の基準）。
 float PreviewRenderer::BoundingRadius() const {
-    if (m_meshSceneEnabled) return m_meshSceneRadius;
-    // 平面は XZ に広がるので、対角の半分が包む球の半径になる。
-    float radius = m_planeSize * 0.5f * 1.41421356f;
-
-    if (m_useMaterialTextures) {
-        radius += m_displacementScale * 0.5f;
-    }
-    return radius;
-}
-
-const Mesh& PreviewRenderer::CurrentMesh() const {
-    return m_plane;
+    return m_meshSceneEnabled ? m_meshSceneRadius : kReferenceGridRadius;
 }
 
 void PreviewRenderer::ReleaseTargets(rhi::Device& device) {
-    rhi::GpuTexture* targets[] = {&m_sceneColor, &m_sceneColorDof, &m_materialUv, &m_depth,
-                                  &m_output};
+    rhi::GpuTexture* targets[] = {&m_sceneColor, &m_sceneColorDof, &m_depth, &m_output};
     for (rhi::GpuTexture* target : targets) {
         if (!target->IsValid()) {
             continue;
@@ -723,27 +669,6 @@ bool PreviewRenderer::Resize(rhi::Device& device, uint32_t width, uint32_t heigh
         return false;
     }
 
-    rhi::TextureDesc materialUvDesc;
-    materialUvDesc.width = width;
-    materialUvDesc.height = height;
-    materialUvDesc.format = kMaterialUvFormat;
-    materialUvDesc.allowRenderTarget = true;
-    materialUvDesc.createSrv = true;
-    // クリア値は実際のクリアと揃える。ずれるとデバッグレイヤーが警告する。
-    materialUvDesc.clearColor[3] = 0.0f;
-    materialUvDesc.initialState = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    materialUvDesc.debugName = L"MaterialUv";
-    if (!device.Allocator().CreateTexture2D(materialUvDesc, m_materialUv)) {
-        return false;
-    }
-
-    // リサイズ直後の最初のフレームには「前フレームの UV」がまだ無い。
-    // 未初期化のままブラシが読むと、被覆フラグのゴミで意図しない位置に描いてしまう。
-    const float uvClearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
-        commandList->ClearRenderTargetView(m_materialUv.rtv.cpu, uvClearColor, 0, nullptr);
-    });
-
     // **被写界深度が深度を読むので SRV も張る。** 深度として書き、SRV としても
     // 読むため TYPELESS で作る（シャドウマップと同じ作法）。
     rhi::TextureDesc depthDesc;
@@ -794,7 +719,6 @@ bool PreviewRenderer::Resize(rhi::Device& device, uint32_t width, uint32_t heigh
 
 void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCache,
                              ID3D12GraphicsCommandList* commandList,
-                             const compositor::MaterialStack& stack,
                              const compositor::TextureLibrary& textures,
                              const compositor::MaterialLibrary& materials) {
     if (!m_sceneColor.IsValid() || !m_output.IsValid()) {
@@ -802,19 +726,15 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     }
 
     // 軌道の距離とクリップ面を被写体の大きさへ合わせる。**毎フレーム渡してよい。**
-    // 平面のサイズや変位量はいつでも変わるので、描く直前に見るのが確実。
+    // シーンはいつでも差し替わるので、描く直前に見るのが確実。
     m_camera.SetSceneRadius(BoundingRadius());
 
     // 描画の量はフレームごとに数え直す。**描くところで足す**ので、
     // パスを増やしたときに数え漏らしても、増やした本人が気づきやすい。
     m_stats = RenderStats{};
 
-    // レイヤースタックに変更があれば評価を投入し、終わった評価があれば結果を受け取る。
+    // シーンの材質（スロット 1〜4）に変更があれば評価を投入し、終わった評価があれば結果を受け取る。
     // 評価はコンピュートキューで走るので、このフレームは前回の結果を描く。
-    if (!m_meshSceneEnabled) {
-        m_evaluator.Update(device, pipelineCache, commandList, stack, textures, materials);
-    }
-
     if (m_meshSceneEnabled) {
         for (auto& material : m_sceneMaterials) {
             // 道路マスクは転送直後は COPY_DEST。頂点 / ドメイン / ピクセルで読むので両方の読み取り状態へ。
@@ -822,11 +742,6 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 TransitionIfNeeded(commandList, material.roadMask,
                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
                                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            }
-            // 素材編集・画像の再読込はグラフ構造を変えず、共通スタックの版を進める。
-            if (m_sceneMaterialSourceRevision != stack.Revision()) {
-                material.stack.MarkDirty();
-                for (auto& layerStack : material.layerStacks) layerStack.MarkDirty();
             }
             if (material.evaluator)
                 material.evaluator->Update(device, pipelineCache, commandList, material.stack,
@@ -837,7 +752,6 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                                                             material.layerStacks[layer], textures, materials);
             }
         }
-        m_sceneMaterialSourceRevision = stack.Revision();
     }
 
     rhi::GraphicsPipelineDesc meshPipelineDesc;
@@ -845,13 +759,11 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     meshPipelineDesc.vertexEntry = L"VsMain";
     meshPipelineDesc.pixelEntry = L"PsMain";
     meshPipelineDesc.rtvFormat = kSceneColorFormat;
-    // 2 枚目にマテリアル UV を書く。ペイントのカーソル位置解決に使う。
-    meshPipelineDesc.rtvFormat1 = kMaterialUvFormat;
     meshPipelineDesc.dsvFormat = kDepthFormat;
     meshPipelineDesc.layout = rhi::VertexLayout::MeshStandard;
     meshPipelineDesc.cullMode = D3D12_CULL_MODE_BACK;
     // テセレーションを使うときは、頂点シェーダを制御点の出力だけに差し替える。
-    // メッシュシーン（道路）でも同じ HS / DS で割る。分割量は画面上の辺の長さで決まる。
+    // 分割量は画面上の辺の長さで決まる。
     const bool useTessellation = m_tessellationEnabled;
     if (useTessellation) {
         meshPipelineDesc.vertexEntry = L"VsControl";
@@ -870,55 +782,35 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         return;
     }
 
-    const Mesh& mesh = CurrentMesh();
-    if (!m_meshSceneEnabled && !mesh.IsValid()) {
-        return;
-    }
-
     // DirectXMath は行ベクトル規約、HLSL の行列は既定で列優先。
     // XMMATRIX をそのまま積むと HLSL 側では転置として解釈され、
     // mul(matrix, vector) が意図どおりの結果になる。転置は入れない。
     const XMMATRIX view = m_camera.ViewMatrix();
     const XMMATRIX projection = m_camera.ProjectionMatrix();
-    // メッシュは作り直さず、モデル行列で実サイズ（m）へ広げる。
-    // **Y は拡大しない。** 高さはディスプレイスメント（m）が世界空間で足すので、
-    // ここで縦に伸ばすと二重に効く。
-    const float planeScale = m_planeSize / kPlaneMeshSize;
-    const XMMATRIX model = XMMatrixScaling(planeScale, 1.0f, planeScale);
-
     const XMMATRIX viewProjection = XMMatrixMultiply(view, projection);
 
+    // シーンのメッシュは世界座標（m）で受け取るので、モデル行列は単位行列。
     MeshConstants constants = {};
     XMStoreFloat4x4(&constants.viewProjection, viewProjection);
     XMStoreFloat4x4(&constants.view, view);
-    XMStoreFloat4x4(&constants.model, model);
-    // 法線行列だけは (M^-1)^T が要るため、転置を明示する。
-    XMStoreFloat4x4(&constants.normalMatrix,
-                    XMMatrixTranspose(XMMatrixInverse(nullptr, model)));
+    XMStoreFloat4x4(&constants.model, XMMatrixIdentity());
+    XMStoreFloat4x4(&constants.normalMatrix, XMMatrixIdentity());
 
     constants.cameraPosition = m_camera.Position();
     constants.lightDirection = m_light.Direction();
     constants.lightIlluminance = m_light.illuminance;
     constants.lightColor = m_light.color;
-    constants.baseColor = m_material.baseColor;
-    constants.roughness = m_material.roughness;
-    constants.metallic = m_material.metallic;
     constants.iblIntensity = m_environment.IsReady() ? m_activeSky.iblIntensity : 0.0f;
     constants.prefilteredMipCount = m_environment.PrefilteredMipCount();
     constants.irradianceIndex = m_environment.IrradianceSrvIndex();
     constants.prefilteredIndex = m_environment.PrefilteredSrvIndex();
     constants.brdfLutIndex = m_environment.BrdfLutSrvIndex();
 
-    const compositor::MaterialTextureSet& materialTextures = m_evaluator.Textures();
-    const bool useMaterial = !m_meshSceneEnabled && m_useMaterialTextures && materialTextures.IsValid();
-    constants.useMaterialTextures = useMaterial ? 1u : 0u;
-    constants.materialBaseColorIndex = materialTextures.baseColor.SrvIndex();
-    constants.materialNormalIndex = materialTextures.normal.SrvIndex();
-    constants.materialSurfaceIndex = materialTextures.surface.SrvIndex();
-    constants.materialHeightIndex = materialTextures.height.SrvIndex();
+    // 材質（合成結果）と変位はメッシュごとに決める（下の drawMeshes）。ここでは無しにしておく。
+    constants.useMaterialTextures = 0u;
+    constants.displacementScale = 0.0f;
     constants.debugView = static_cast<uint32_t>(m_debugView);
-    constants.meshDisplayFlags = m_meshSceneEnabled ? ((m_showRoadGrid ? 1u : 0u) | (m_showUvChecker ? 2u : 0u)) : 0u;
-    constants.displacementScale = m_meshSceneEnabled ? 0.0f : m_displacementScale;
+    constants.meshDisplayFlags = (m_showRoadGrid ? 1u : 0u) | (m_showUvChecker ? 2u : 0u);
     // 分割量はカメラから見た見え方で決める。本描画では viewProjection と同一で、
     // シャドウパスだけが viewProjection 側を上書きして分岐する。
     XMStoreFloat4x4(&constants.tessellationViewProjection, viewProjection);
@@ -929,96 +821,87 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     // メッシュの合成モード。材質の属性から決める。帯（白線）以外は常に不透明。
     const auto blendModeOf = [&](size_t i) {
-        if (!m_meshSceneEnabled || !m_meshScene.meshes[i].useBlendMode) return compositor::BlendMode::Opaque;
+        if (!m_meshScene.meshes[i].useBlendMode) return compositor::BlendMode::Opaque;
         const compositor::MaterialAsset* asset = materials.Find(m_meshScene.meshes[i].blendMaterial);
         return asset ? asset->blendMode : compositor::BlendMode::Opaque;
     };
-    // 各メッシュは世界座標で受け取る。平面の拡大・Height・マスク合成は使わない。
+    // 各メッシュは世界座標で受け取る。
     // passMask: kPassOpaque = 路面など、kPassDecal = 路面に貼る帯（白線。深度バイアス付き）、
     // kPassTranslucent = 半透明の帯。影とワイヤーフレームは半透明以外を全部描く。
     constexpr uint32_t kPassOpaque = 1u;
     constexpr uint32_t kPassDecal = 2u;
     constexpr uint32_t kPassTranslucent = 4u;
     const auto passOf = [&](size_t i) {
-        if (!m_meshSceneEnabled) return kPassOpaque;
         if (blendModeOf(i) == compositor::BlendMode::Translucent) return kPassTranslucent;
         return m_meshScene.meshes[i].useBlendMode ? kPassDecal : kPassOpaque;
     };
+    // シーンが無ければ何も描かない（m_sceneMeshes が空）。背景とグリッドだけが出る。
     const auto drawMeshes = [&](const MeshConstants& passConstants, uint32_t passMask) {
-        const size_t count = m_meshSceneEnabled ? m_sceneMeshes.size() : 1;
-        for (size_t i = 0; i < count; ++i) {
+        for (size_t i = 0; i < m_sceneMeshes.size(); ++i) {
             MeshConstants drawConstants = passConstants;
-            const Mesh& drawMesh = m_meshSceneEnabled ? m_sceneMeshes[i] : mesh;
+            const Mesh& drawMesh = m_sceneMeshes[i];
             const compositor::BlendMode blendMode = blendModeOf(i);
             if ((passOf(i) & passMask) == 0u) continue;
-            if (m_meshSceneEnabled) {
-                if (blendMode != compositor::BlendMode::Opaque) {
-                    const compositor::MaterialAsset* asset = materials.Find(m_meshScene.meshes[i].blendMaterial);
-                    drawConstants.opacityMode = static_cast<uint32_t>(blendMode);
-                    drawConstants.opacityThreshold = asset ? asset->maskThreshold : 0.5f;
-                }
-                XMStoreFloat4x4(&drawConstants.model, XMMatrixIdentity());
-                XMStoreFloat4x4(&drawConstants.normalMatrix, XMMatrixIdentity());
-                drawConstants.roadMetersPerUv = m_meshScene.meshes[i].roadMetersPerUv;
-                drawConstants.displacementScale = m_meshScene.meshes[i].displacementMeters;
-                // レイヤー（スロット 1〜4）と道路マスク。白線は押し出し元の道路面のものを写す。
-                const int source = m_meshScene.meshes[i].displacementSource;
-                const size_t layerSource = (source >= 0 && static_cast<size_t>(source) < m_sceneMaterials.size())
-                                               ? static_cast<size_t>(source) : i;
-                {
-                    const auto& lm = m_meshScene.meshes[layerSource];
-                    const auto& lsm = m_sceneMaterials[layerSource];
-                    const auto valid = [](const std::unique_ptr<compositor::MaterialEvaluator>& e) {
-                        return e && e->EvaluatedRevision() != 0 && e->Textures().IsValid();
-                    };
-                    for (int slot = 0; slot < 4; ++slot) {
-                        drawConstants.layerBaseColorIndex[slot] = kNoShadowIndex;
-                        drawConstants.layerNormalIndex[slot] = kNoShadowIndex;
-                        drawConstants.layerSurfaceIndex[slot] = kNoShadowIndex;
-                        drawConstants.layerHeightIndex[slot] = kNoShadowIndex;
-                        drawConstants.layerWorldUv[slot] = lm.layerWorldUv[static_cast<size_t>(slot)] ? 1u : 0u;
-                        drawConstants.layerUvRepeat[slot] = slot == 0 ? lm.roadMetersPerUv : lm.layerUvRepeat[static_cast<size_t>(slot)];
-                        drawConstants.layerHeightGate[slot] = slot == 0 ? 0u : lm.layerHeightGate[static_cast<size_t>(slot)];
-                        drawConstants.layerHeightGateThreshold[slot] = lm.layerHeightGateThreshold[static_cast<size_t>(slot)];
-                        drawConstants.layerHeightGateSoftness[slot] = lm.layerHeightGateSoftness[static_cast<size_t>(slot)];
-                        drawConstants.layerBlendMode[slot] = lm.layerBlendMode[static_cast<size_t>(slot)];
-                        const compositor::MaterialEvaluator* evaluator =
-                            slot == 0 ? lsm.evaluator.get() : lsm.layerEvaluators[static_cast<size_t>(slot - 1)].get();
-                        if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {
-                            const auto& maps = evaluator->Textures();
-                            drawConstants.layerBaseColorIndex[slot] = maps.baseColor.SrvIndex();
-                            drawConstants.layerNormalIndex[slot] = maps.normal.SrvIndex();
-                            drawConstants.layerSurfaceIndex[slot] = maps.surface.SrvIndex();
-                            drawConstants.layerHeightIndex[slot] = maps.height.SrvIndex();
-                        }
+            if (blendMode != compositor::BlendMode::Opaque) {
+                const compositor::MaterialAsset* asset = materials.Find(m_meshScene.meshes[i].blendMaterial);
+                drawConstants.opacityMode = static_cast<uint32_t>(blendMode);
+                drawConstants.opacityThreshold = asset ? asset->maskThreshold : 0.5f;
+            }
+            drawConstants.roadMetersPerUv = m_meshScene.meshes[i].roadMetersPerUv;
+            drawConstants.displacementScale = m_meshScene.meshes[i].displacementMeters;
+            // レイヤー（スロット 1〜4）と道路マスク。白線は押し出し元の道路面のものを写す。
+            const int source = m_meshScene.meshes[i].displacementSource;
+            const size_t layerSource = (source >= 0 && static_cast<size_t>(source) < m_sceneMaterials.size())
+                                           ? static_cast<size_t>(source) : i;
+            {
+                const auto& lm = m_meshScene.meshes[layerSource];
+                const auto& lsm = m_sceneMaterials[layerSource];
+                for (int slot = 0; slot < 4; ++slot) {
+                    drawConstants.layerBaseColorIndex[slot] = kNoShadowIndex;
+                    drawConstants.layerNormalIndex[slot] = kNoShadowIndex;
+                    drawConstants.layerSurfaceIndex[slot] = kNoShadowIndex;
+                    drawConstants.layerHeightIndex[slot] = kNoShadowIndex;
+                    drawConstants.layerWorldUv[slot] = lm.layerWorldUv[static_cast<size_t>(slot)] ? 1u : 0u;
+                    drawConstants.layerUvRepeat[slot] = slot == 0 ? lm.roadMetersPerUv : lm.layerUvRepeat[static_cast<size_t>(slot)];
+                    drawConstants.layerHeightGate[slot] = slot == 0 ? 0u : lm.layerHeightGate[static_cast<size_t>(slot)];
+                    drawConstants.layerHeightGateThreshold[slot] = lm.layerHeightGateThreshold[static_cast<size_t>(slot)];
+                    drawConstants.layerHeightGateSoftness[slot] = lm.layerHeightGateSoftness[static_cast<size_t>(slot)];
+                    drawConstants.layerBlendMode[slot] = lm.layerBlendMode[static_cast<size_t>(slot)];
+                    const compositor::MaterialEvaluator* evaluator =
+                        slot == 0 ? lsm.evaluator.get() : lsm.layerEvaluators[static_cast<size_t>(slot - 1)].get();
+                    if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {
+                        const auto& maps = evaluator->Textures();
+                        drawConstants.layerBaseColorIndex[slot] = maps.baseColor.SrvIndex();
+                        drawConstants.layerNormalIndex[slot] = maps.normal.SrvIndex();
+                        drawConstants.layerSurfaceIndex[slot] = maps.surface.SrvIndex();
+                        drawConstants.layerHeightIndex[slot] = maps.height.SrvIndex();
                     }
-                    (void)valid;
-                    const bool baseReady = drawConstants.layerHeightIndex[0] != kNoShadowIndex;
-                    drawConstants.layerCount = baseReady ? 4u : 0u;
-                    drawConstants.roadMaskIndex = lsm.roadMask.IsValid() ? lsm.roadMask.SrvIndex() : kNoShadowIndex;
-                    drawConstants.layerBlendRange = lm.layerBlendRange;
-                    drawConstants.roadUvAlongU = lm.roadUvAlongU ? 1u : 0u;
-                    drawConstants.roadMaskScale[0] = lm.roadWidthMeters > 0.0f ? 1.0f / lm.roadWidthMeters : 0.0f;
-                    drawConstants.roadMaskScale[1] = lm.roadLengthMeters > 0.0f ? 1.0f / lm.roadLengthMeters : 0.0f;
-                    drawConstants.roadUvMetersPerUv = lm.roadMetersPerUv;
-                    // 道路面自身はレイヤーで陰影を付ける。白線は自分の材質で描き、押し出しだけ道路に合わせる。
-                    drawConstants.shadeLayers = (layerSource == i && baseReady && drawConstants.roadMaskIndex != kNoShadowIndex) ? 1u : 0u;
-                    if (!baseReady) drawConstants.displacementScale = 0.0f;
                 }
-                if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;
-                const auto& material = m_meshScene.meshes[i].material;
-                drawConstants.baseColor = material.baseColor;
-                drawConstants.roughness = material.roughness;
-                drawConstants.metallic = material.metallic;
-                const auto& evaluator = m_sceneMaterials[i].evaluator;
-                if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {
-                    const auto& maps = evaluator->Textures();
-                    drawConstants.useMaterialTextures = 1u;
-                    drawConstants.materialBaseColorIndex = maps.baseColor.SrvIndex();
-                    drawConstants.materialNormalIndex = maps.normal.SrvIndex();
-                    drawConstants.materialSurfaceIndex = maps.surface.SrvIndex();
-                    drawConstants.materialHeightIndex = maps.height.SrvIndex();
-                }
+                const bool baseReady = drawConstants.layerHeightIndex[0] != kNoShadowIndex;
+                drawConstants.layerCount = baseReady ? 4u : 0u;
+                drawConstants.roadMaskIndex = lsm.roadMask.IsValid() ? lsm.roadMask.SrvIndex() : kNoShadowIndex;
+                drawConstants.layerBlendRange = lm.layerBlendRange;
+                drawConstants.roadUvAlongU = lm.roadUvAlongU ? 1u : 0u;
+                drawConstants.roadMaskScale[0] = lm.roadWidthMeters > 0.0f ? 1.0f / lm.roadWidthMeters : 0.0f;
+                drawConstants.roadMaskScale[1] = lm.roadLengthMeters > 0.0f ? 1.0f / lm.roadLengthMeters : 0.0f;
+                drawConstants.roadUvMetersPerUv = lm.roadMetersPerUv;
+                // 道路面自身はレイヤーで陰影を付ける。白線は自分の材質で描き、押し出しだけ道路に合わせる。
+                drawConstants.shadeLayers = (layerSource == i && baseReady && drawConstants.roadMaskIndex != kNoShadowIndex) ? 1u : 0u;
+                if (!baseReady) drawConstants.displacementScale = 0.0f;
+            }
+            if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;
+            const auto& material = m_meshScene.meshes[i].material;
+            drawConstants.baseColor = material.baseColor;
+            drawConstants.roughness = material.roughness;
+            drawConstants.metallic = material.metallic;
+            const auto& evaluator = m_sceneMaterials[i].evaluator;
+            if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {
+                const auto& maps = evaluator->Textures();
+                drawConstants.useMaterialTextures = 1u;
+                drawConstants.materialBaseColorIndex = maps.baseColor.SrvIndex();
+                drawConstants.materialNormalIndex = maps.normal.SrvIndex();
+                drawConstants.materialSurfaceIndex = maps.surface.SrvIndex();
+                drawConstants.materialHeightIndex = maps.height.SrvIndex();
             }
             const auto allocation = device.Upload().Allocate(sizeof(MeshConstants), 256);
             if (!allocation.IsValid()) continue;
@@ -1036,7 +919,8 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     constants.shadowTexelSize = 1.0f / static_cast<float>(kShadowMapSize);
     constants.shadowBias = kShadowBias;
 
-    if (m_shadowEnabled && m_shadowMap.IsValid()) {
+    // 描くものが無ければシャドウパスも走らせない。
+    if (m_shadowEnabled && m_shadowMap.IsValid() && !m_sceneMeshes.empty()) {
         const XMMATRIX lightViewProjection = LightViewProjection();
         XMStoreFloat4x4(&constants.lightViewProjection, lightViewProjection);
 
@@ -1046,7 +930,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         // ピクセルシェーダは要らない。深度だけ書く。
         shadowPipelineDesc.dsvFormat = kShadowDsvFormat;
         shadowPipelineDesc.layout = rhi::VertexLayout::MeshStandard;
-        // 平面のような片面のメッシュも影を落とすので、両面を描く。
+        // 路面のような片面のメッシュも影を落とすので、両面を描く。
         shadowPipelineDesc.cullMode = D3D12_CULL_MODE_NONE;
         // 本描画と同じ分割で描く。違う形を影にすると自己遮蔽がずれる。
         if (useTessellation) {
@@ -1093,19 +977,14 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     PIXBeginEvent(commandList, PIX_COLOR(80, 200, 120), "PreviewScene");
 
     TransitionIfNeeded(commandList, m_sceneColor, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    TransitionIfNeeded(commandList, m_materialUv, D3D12_RESOURCE_STATE_RENDER_TARGET);
     TransitionIfNeeded(commandList, m_depth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
     const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_sceneColor.rtv.cpu;
     const D3D12_CPU_DESCRIPTOR_HANDLE dsv = m_depth.dsv.cpu;
-    const D3D12_CPU_DESCRIPTOR_HANDLE meshRtvs[] = {rtv, m_materialUv.rtv.cpu};
-    commandList->OMSetRenderTargets(_countof(meshRtvs), meshRtvs, FALSE, &dsv);
+    commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
 
     const float clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    // UV バッファの被覆は z に入る。0 クリアで「メッシュに当たっていない」を表す。
-    const float clearUv[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
-    commandList->ClearRenderTargetView(m_materialUv.rtv.cpu, clearUv, 0, nullptr);
     commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
     const auto viewport = CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(m_width),
@@ -1153,8 +1032,6 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     // --- スカイボックス ----------------------------------------------------
     // メッシュのあとに描く。深度は書かず、まだ何も描かれていない画素だけを埋める。
-    // UV バッファには書かないので、シーンカラーだけを束ね直す。
-    commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
 
     // チャンネルを覗く表示のときは背景を描かない。値だけを見たいため。
     if (m_showSkybox && m_environment.IsReady() && IsShadedView(m_debugView)) {

@@ -115,41 +115,4 @@ void Mesh::Draw(ID3D12GraphicsCommandList* commandList, bool asPatches) const {
     commandList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, 0);
 }
 
-MeshData MakePlane(float size, uint32_t subdivisions) {
-    MeshData data;
-    const uint32_t count = (subdivisions < 1) ? 1 : subdivisions;
-    const float half = size * 0.5f;
-
-    data.vertices.reserve(static_cast<size_t>(count + 1) * (count + 1));
-    for (uint32_t z = 0; z <= count; ++z) {
-        const float tz = static_cast<float>(z) / static_cast<float>(count);
-        for (uint32_t x = 0; x <= count; ++x) {
-            const float tx = static_cast<float>(x) / static_cast<float>(count);
-
-            MeshVertex vertex;
-            vertex.position = XMFLOAT3{-half + tx * size, 0.0f, -half + tz * size};
-            vertex.normal = XMFLOAT3{0.0f, 1.0f, 0.0f};
-            // **w は -1。** シェーダは従法線を cross(normal, tangent) * w で作るが、
-            // cross((0,1,0), (1,0,0)) = (0,0,-1) で、この平面の V の向き
-            // （dP/dv = +Z。uv.v = tz で z が増える）と逆になる。
-            // +1 のままだと接空間法線の Y が世界の -Z へ載り、**Z 方向だけ
-            // 陰影が反転する**（球とキューブは +1 で dP/dv と一致している）。
-            vertex.tangent = XMFLOAT4{1.0f, 0.0f, 0.0f, -1.0f};
-            vertex.uv = XMFLOAT2{tx, tz};
-            vertex.roadUv = vertex.uv;
-            data.vertices.push_back(vertex);
-        }
-    }
-
-    const uint32_t stride = count + 1;
-    for (uint32_t z = 0; z < count; ++z) {
-        for (uint32_t x = 0; x < count; ++x) {
-            const uint32_t i0 = z * stride + x;
-            const uint32_t i1 = i0 + stride;
-            data.indices.insert(data.indices.end(), {i0, i1, i0 + 1, i0 + 1, i1, i1 + 1});
-        }
-    }
-    return data;
-}
-
 }  // namespace tg::renderer

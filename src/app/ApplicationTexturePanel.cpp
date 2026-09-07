@@ -432,7 +432,7 @@ void Application::ProcessPendingTextureRelinks() {
         for (const compositor::MaterialAsset& asset : m_materialLibrary.Entries()) {
             m_materialLibrary.MarkThumbnailDirty(asset.id);
         }
-        m_graphStack.MarkDirty();
+        m_renderer.InvalidateSceneMaterials();
     }
 }
 

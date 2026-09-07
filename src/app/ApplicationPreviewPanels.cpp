@@ -1,5 +1,5 @@
 // プレビュー設定パネルと「ライティング」パネル。
-// どちらも合成結果ではなく、見え方（レンダラ側の設定）を扱う。
+// どちらも道路の中身ではなく、見え方（レンダラ側の設定）を扱う。
 
 #include "app/Application.h"
 
@@ -27,88 +27,6 @@ void Application::DrawMaterialPanel() {
     // **ここでは前面を要求しない。** レイヤーと同じ枠のタブなので、
     // 両方が要求すると後から描いたほうが勝ち、既定の前面が定まらない。
     if (ImGui::Begin("プレビュー設定")) {
-        if (m_renderer.HasMeshScene()) ui::HintText("メッシュの実寸形状と個別の材質を表示しています。");
-        if (!m_renderer.HasMeshScene() && ui::BeginPropertyTable("previewRows")) {
-            const renderer::PreviewDefaults& defaults = renderer::kPreviewDefaults;
-            ui::PropertyBool("合成結果", &m_renderer.UseMaterialTextures(),
-                             defaults.useMaterialTextures,
-                             "オフにすると、レイヤー合成を使わず単色マテリアルで表示する");
-            // 平面の大きさ（m）。**ジオメトリだけがメートル**で、
-            // テクスチャは無次元のまま（1 UV が何 m かは決めない）。
-            ui::PropertyFloat("平面のサイズ", &m_renderer.PlaneSize(), 0.5f, 8192.0f,
-                              defaults.planeSize,
-                              "平面の一辺の長さ（m）。素材は 2m 前後、"
-                              "地形なら 1000m 以上。カメラと影の範囲もこれに追従する",
-                              "%.1f m", ImGuiSliderFlags_Logarithmic);
-
-            if (m_renderer.UseMaterialTextures()) {
-                // 上限は「平面の辺の半分」。素材（2m 角）なら 1m、
-                // 地形（2km 角）なら 1000m まで指定できる。
-                // ハイト 0〜1 の全幅がこの高さに対応するので、
-                // 「この地形の標高差は何 m か」をそのまま入れる。
-                const float displacementMax =
-                    std::max(1.0f, m_renderer.PlaneSize() * 0.5f);
-                ui::PropertyFloat(
-                    "変位量", &m_renderer.DisplacementScale(), 0.0f, displacementMax,
-                    defaults.displacementScale,
-                    "ハイトを形状に反映する量（ディスプレイスメント）。"
-                    "ハイト 0〜1 の全幅がこの高さ（m）になる。0 なら形は変わらない",
-                    "%.2f m", 0, 0.01f);
-
-                ui::PropertyBool("テセレーション", &m_renderer.TessellationEnabled(),
-                                 defaults.tessellationEnabled,
-                                 "画面上の辺が長いところだけメッシュを細かく割る。"
-                                 "変位量を上げたときに形がなめらかになる");
-                if (m_renderer.TessellationEnabled()) {
-                    ui::PropertyFloat("分割の上限", &m_renderer.TessellationFactor(), 1.0f, 64.0f,
-                                      defaults.tessellationFactor,
-                                      "1 辺をこの回数まで割る。上げるほど重くなる（ハードウェアの上限 64）",
-                                      "%.0f", 0, 1.0f);
-                    ui::PropertyFloat("分割する辺の長さ", &m_renderer.TessellationTargetPixels(), 4.0f, 32.0f,
-                                      defaults.tessellationTargetPixels,
-                                      "画面上で 1 辺がこの長さ（px）を超えたら割る。小さいほど細かく、負荷は二乗で増える",
-                                      "%.0f px", 0, 1.0f);
-                }
-
-                // 形の細かさの上限。地形の一辺 ÷ 分割数 が 1 マスの大きさになる。
-                // テセレーションは「画面上で辺が伸びたときだけ」割るので、
-                // 引きの絵ではこの分割数がそのまま形の限界になる。
-                int subdivisions = 0;
-                for (int i = 0; i < IM_ARRAYSIZE(kMeshSubdivisionValues); ++i) {
-                    if (kMeshSubdivisionValues[i] == m_renderer.MeshSubdivisions()) {
-                        subdivisions = i;
-                    }
-                }
-                char meshHint[128] = {};
-                std::snprintf(meshHint, sizeof(meshHint),
-                              "平面を何分割するか。いまは 1 マス %.1f m。"
-                              "上げるほど細かい形が出るが重くなる",
-                              m_renderer.PlaneSize() /
-                                  static_cast<float>(m_renderer.MeshSubdivisions()));
-                if (ui::PropertyCombo("メッシュ分割", &subdivisions, kMeshSubdivisionLabels,
-                                      IM_ARRAYSIZE(kMeshSubdivisionLabels), 0, meshHint)) {
-                    m_renderer.RequestMeshSubdivisions(kMeshSubdivisionValues[subdivisions]);
-                }
-
-                int resolution = ResolutionIndex(m_renderer.MaterialResolution());
-                if (ui::PropertyCombo("合成解像度", &resolution, kResolutionLabels,
-                                      IM_ARRAYSIZE(kResolutionLabels),
-                                      ResolutionIndex(defaults.materialResolution),
-                                      "編集中のプレビュー解像度。上げるほど細部が出るが重くなる")) {
-                    m_renderer.RequestMaterialResolution(kResolutionValues[resolution]);
-                }
-            } else {
-                renderer::MaterialSettings& material = m_renderer.Material();
-                ui::PropertyColorLinear("ベースカラー", &material.baseColor.x,
-                                        &kDefaultMaterial.baseColor.x);
-                ui::PropertyFloat("ラフネス", &material.roughness, 0.0f, 1.0f,
-                                  kDefaultMaterial.roughness, nullptr, "%.2f");
-                ui::PropertyFloat("メタルネス", &material.metallic, 0.0f, 1.0f,
-                                  kDefaultMaterial.metallic, nullptr, "%.2f");
-            }
-            ui::EndPropertyTable();
-        }
-
         // 道路網に共通の設定。走行側は道路ごとに変えるものではないのでここに 1 つ置く。
         ui::SectionHeader("道路");
         if (ui::BeginPropertyTable("roadNetworkRows")) {
@@ -122,7 +40,7 @@ void Application::DrawMaterialPanel() {
                 m_graph.SetRoadNetwork(settings);
                 MarkDocumentChanged();
             }
-            // 道路も平面と同じ HS / DS で割る。変位量は Road ノードごと（材質が違うため）。
+            // 変位量は Road ノードごと（材質が違うため）。分割の仕方だけをここで決める。
             ui::PropertyBool("テセレーション", &m_renderer.TessellationEnabled(),
                              renderer::kPreviewDefaults.tessellationEnabled,
                              "画面上の辺が長いところだけメッシュを細かく割る。"
@@ -137,6 +55,13 @@ void Application::DrawMaterialPanel() {
                                   renderer::kPreviewDefaults.tessellationTargetPixels,
                                   "画面上で 1 辺がこの長さ（px）を超えたら割る。小さいほど細かく、負荷は二乗で増える",
                                   "%.0f px", 0, 1.0f);
+            }
+            // 道路の材質（スロット 1〜4）を合成する解像度。タイル 1 枚ぶんなので、反復長が短いほど細部が出る。
+            int resolution = ResolutionIndex(m_renderer.MaterialResolution());
+            if (ui::PropertyCombo("合成解像度", &resolution, kResolutionLabels, IM_ARRAYSIZE(kResolutionLabels),
+                                  ResolutionIndex(renderer::kPreviewDefaults.materialResolution),
+                                  "道路の材質を合成する解像度（タイル 1 枚ぶん）。上げるほど細部が出るが重くなる")) {
+                m_renderer.RequestMaterialResolution(kResolutionValues[resolution]);
             }
             ui::EndPropertyTable();
         }
@@ -176,7 +101,7 @@ void Application::DrawMaterialPanel() {
         const renderer::DofSettings kDefaultDof;
         if (ui::BeginPropertyTable("dofRows")) {
             ui::PropertyBool("有効", &dof.enabled, kDefaultDof.enabled,
-                             "ビューポートの見え方だけに掛かる。合成結果と書き出しには効かない");
+                             "ビューポートの見え方だけに掛かる。材質の合成には効かない");
 
             ImGui::BeginDisabled(!dof.enabled);
 
@@ -194,9 +119,9 @@ void Application::DrawMaterialPanel() {
             ui::PropertyFloat("ミニチュア", &dof.miniatureScale, 1.0f, 10000.0f,
                               kDefaultDof.miniatureScale,
                               "1 で実物大。上げるほど模型を撮った計算になり、"
-                              "同じレンズでもボケが強くなる。実寸のままだと地形は"
-                              "遠すぎて 1 画素もボケない。2km の地形を引きで見るなら "
-                              "3000〜10000 が目安",
+                              "同じレンズでもボケが強くなる。実寸のままだと長い道路は"
+                              "遠すぎて 1 画素もボケない。数百 m の道路を引きで見るなら "
+                              "100〜1000 が目安",
                               "1 : %.0f", ImGuiSliderFlags_Logarithmic);
             ui::PropertyFloat("ボケの強さ", &dof.blurScale, 0.25f, 16.0f, kDefaultDof.blurScale,
                               "1 で現実どおり。2m 角の地面を広角で撮れば現実でも"

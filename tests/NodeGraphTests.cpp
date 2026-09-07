@@ -58,7 +58,7 @@ void RunNodeGraphTests() {
         NodeGraph graph;
         const auto id = graph.CreateNode(NodeKind::Path);
         auto& path = std::get<tg::graph::PathNodeSettings>(graph.FindMutableNode(id)->settings).path;
-        Check(path.worldSpace, "新規Pathは実寸座標");
+        Check(path.points.empty() && !path.surfaceSpace, "新規Pathは実寸座標で空");
         const auto a = tg::graph::AddPathPoint(path, -30.0f, -12.0f, 0);
         path.FindPoint(a)->y = 3.0f;
         const auto b = tg::graph::AddPathPoint(path, 40.0f, 15.0f, a);
@@ -84,7 +84,6 @@ void RunNodeGraphTests() {
     {
         using namespace tg::graph;
         PathSettings vertical;
-        vertical.worldSpace = true;
         const auto a = AddPathPoint(vertical, 0.0f, 0.0f, 0);
         const auto b = AddPathPoint(vertical, 0.0f, 0.0f, a);
         vertical.FindPoint(b)->y = 10.0f;
@@ -93,7 +92,6 @@ void RunNodeGraphTests() {
               "垂直エッジの中点も3次元の距離で挿入する");
         for (const auto curve : {PathCurve::Quadratic, PathCurve::Cubic}) {
             PathSettings path;
-            path.worldSpace = true;
             const auto p0 = AddPathPoint(path, 0.0f, 0.0f, 0);
             const auto p1 = AddPathPoint(path, 2.0f, 3.0f, p0);
             const auto p2 = AddPathPoint(path, 9.0f, 1.0f, p1);
@@ -128,32 +126,28 @@ void RunNodeGraphTests() {
         const tg::graph::PathEdge* bc = path.FindEdgeBetween(b, c);
         Check(ab != nullptr && bc != nullptr && lone != 0, "3 点の鎖と孤立点を作れる");
 
-        // まとめて動かす。0〜1 へ丸める。
+        // まとめて動かす。座標は丸めない。
         const bool moved = tg::graph::MovePathPoints(path, {a, b, c}, 0.1f, -0.3f);
         const tg::graph::PathPoint* pa = path.FindPoint(a);
         const tg::graph::PathPoint* pc = path.FindPoint(c);
         Check(moved && pa != nullptr && pc != nullptr && std::abs(pa->x - 0.3f) < 1e-5f &&
-                  pa->z == 0.0f && std::abs(pc->x - 0.5f) < 1e-5f && std::abs(pc->z - 0.1f) < 1e-5f,
-              "MovePathPoints は指定した点だけを動かし、0〜1 へ丸める");
+                  std::abs(pa->z + 0.1f) < 1e-5f && std::abs(pc->x - 0.5f) < 1e-5f && std::abs(pc->z - 0.1f) < 1e-5f,
+              "MovePathPoints は指定した点だけを動かす");
         float cu = 0.0f;
         float cv = 0.0f;
         Check(tg::graph::PathPointsCentroid(path, {a, b, c}, cu, cv) &&
                   std::abs(cu - (0.3f + 0.5f + 0.5f) / 3.0f) < 1e-5f,
               "PathPointsCentroid は重心を返す");
 
-        // 鎖を切り出す。エッジは両端の点を連れていき、内部点は持ち越さない。
+        // 鎖を切り出す。エッジは両端の点を連れていく。
         if (ab != nullptr && bc != nullptr) {
-            tg::graph::PathEdge* mutableAb = const_cast<tg::graph::PathEdge*>(ab);
-            mutableAb->routed = true;
-            mutableAb->waypoints.push_back({0.35f, 0.1f});
-            mutableAb->curve = tg::graph::PathCurve::Cubic;
+            const_cast<tg::graph::PathEdge*>(ab)->curve = tg::graph::PathCurve::Cubic;
         }
         PathClip clip;
         const bool extracted = tg::graph::ExtractPathClip(path, {}, {ab->id, bc->id}, clip);
         Check(extracted && clip.points.size() == 3 && clip.edges.size() == 2 &&
-                  !clip.edges.front().routed && clip.edges.front().waypoints.empty() &&
                   clip.edges.front().curve == tg::graph::PathCurve::Cubic,
-              "ExtractPathClip は鎖の点とエッジを切り出し、内部点は捨てて曲線の性質は残す");
+              "ExtractPathClip は鎖の点とエッジを切り出し、曲線の性質は残す");
 
         // 点の集合から切り出すと、その間のエッジだけが付いてくる。
         PathClip pointClip;
@@ -177,7 +171,7 @@ void RunNodeGraphTests() {
         Check(pasted && path.points.size() == pointsBefore + 3 &&
                   path.edges.size() == edgesBefore + 2 && pastedEdges.size() == 2 && idsFresh &&
                   firstPasted != nullptr && std::abs(firstPasted->x - 0.5f) < 1e-5f &&
-                  std::abs(firstPasted->z - 0.5f) < 1e-5f &&
+                  std::abs(firstPasted->z - 0.4f) < 1e-5f &&
                   path.FindEdgeBetween(pastedPoints[0], pastedPoints[1]) != nullptr,
               "PastePathClip は新しい ID で同じ形を、ずらした位置に貼る");
         Check(tg::graph::BuildPathStrands(path).size() == 2,

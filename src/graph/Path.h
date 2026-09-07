@@ -6,9 +6,7 @@
 
 // パス（Path ノードの中身）。道路生成へ渡す、向き付きの実寸カーブ。
 //
-// 新規ノードは worldSpace=true。x/y/zの3次元座標（m）を保存する。
-// 座標を0〜1やグリッド内へ丸めない。
-// worldSpace=false は旧形式の地形UV＋相対高さ。明示的に実寸へ変換できる。
+// x/y/z の 3 次元座標（m）を保存する。座標を 0〜1 やグリッド内へ丸めない。
 //
 // - 幅 / フェザー / 強さは点ごと。エッジ上では両端から補間する。
 // - エッジは from → to の向きを持つ（川や氷河の流れの向き。道路では無視してよい）。
@@ -30,13 +28,12 @@ enum class PathStopLine : uint8_t {
 
 struct PathPoint {
     PathElementId id = 0;
-    float x = 0.5f;  // worldSpace: X(m)、旧形式: 地形UV
-    float z = 0.5f;
+    float x = 0.5f;  // X（m）。面上のパスでは横位置
+    float z = 0.5f;  // Z（m）。面上のパスでは始点からの実距離
     float widthMeters = 24.0f;    // パスの全幅（m）
     float featherMeters = 12.0f;  // 幅の外側を 0 へ落とす幅（m）
     float intensity = 1.0f;       // マスクの強さ（0〜1）
-    // Y座標（m）。旧形式だけは地形からの高さのずれ。
-    // Mask Path は見ない。
+    // Y 座標（m）。面上のパスでは面からの高さ。
     float y = 0.0f;
     // 停止線（実寸 Path のみ）。曲線は点を通らないので、道路上ではこの点に最も近い位置になる。
     PathStopLine stopLine = PathStopLine::None;
@@ -54,22 +51,6 @@ enum class PathCurve : uint32_t {
     // クロソイド → 円弧 → クロソイド。角ごとに曲率が 0 から連続的に立ち上がる緩和曲線
     // （道路 / 鉄道の線形）。2 次と同じく両端の点だけ通る。
     Clothoid = 3,
-};
-
-// 経路探索。鎖ごとに切り替え、両端の点の間の経路を地形から導いて、エッジの
-// **内部点**として持つ。ユーザーの点は動かさない。曲線は「ユーザーの点 + 内部点」を
-// 制御点にして今までどおり引く。
-enum class PathRoute : uint32_t {
-    None = 0,  // 両端をそのまま結ぶ
-    Road = 1,  // 道路。許容勾配を超えた分をペナルティにする。上りも下りも同じ扱い
-    // 流れ（川 / 氷河）。from → to へ下る。上りに強いペナルティ、低い所（谷底）を好む。
-    // 向きに依存するので、反転すると計算し直しになる。
-    Flow = 2,
-};
-
-struct PathRouteWaypoint {
-    float x = 0.0f;
-    float z = 0.0f;
 };
 
 struct PathEdge {
@@ -91,21 +72,6 @@ struct PathEdge {
     float widthMeters = 24.0f;
     float featherMeters = 12.0f;
     float intensity = 1.0f;
-
-    // --- 経路探索 ---
-    PathRoute route = PathRoute::None;
-    float maxGradePercent = 10.0f;  // 道路の許容勾配（%）
-    // 経路探索の結果（from → to の順。両端は含まない）。**導出したものだが保存する。**
-    // 地形は評価しないと分からず、上流を触るたびに勝手に追従させない方針のため
-    // （作り直すのは両端が動いたときと、再計算のボタン）。ユーザーは触れない。
-    std::vector<PathRouteWaypoint> waypoints;
-    // 内部点を計算したときの両端の位置。今の両端と違えば古い（内部点を無視して両端を
-    // 直線で結ぶ）。routed が偽なら未計算。
-    bool routed = false;
-    float routedFromU = 0.0f;
-    float routedFromV = 0.0f;
-    float routedToU = 0.0f;
-    float routedToV = 0.0f;
 };
 
 // 鎖。エッジが 2 本だけ付いた点を通り、それ以外の点（端 / 分岐 / 交差）で止まる。
@@ -117,7 +83,7 @@ struct PathStrand {
     bool closed = false;                // 分岐の無い輪
 };
 
-// 曲線を割った標本。座標系はPathSettingsに従う。高さと幅も補間して道路生成へ渡せる。
+// 曲線を割った標本。座標系は PathSettings に従う。高さと幅も補間して道路生成へ渡せる。
 struct PathCurveSample {
     float x = 0.0f;
     float z = 0.0f;
@@ -147,14 +113,12 @@ struct PathBankPoint {
 };
 
 struct PathSettings {
-    // true: x/y/zはワールド座標(m)。falseは旧形式のUV(x/z)と相対高さ(y)。
-    bool worldSpace = false;
     // true: Surface 入力の道路の面の座標。x = 横位置（m、正が Left）、z = 始点からの実距離（m）、
-    // y = 面からの高さ。worldSpace と併用する。道路を変形しても面に貼り付いたまま追従する。
+    // y = 面からの高さ。道路を変形しても面に貼り付いたまま追従する。偽ならワールド座標（m）。
     bool surfaceSpace = false;
     std::vector<PathPoint> points;
     std::vector<PathEdge> edges;
-    // --- 道路線形（実寸 Path のみ） ---
+    // --- 道路線形（面上のパスでは使わない） ---
     std::vector<PathVerticalPoint> verticalPoints;
     std::vector<PathBankPoint> bankPoints;
     // バンク角を道路へ反映するか。偽なら手動ポイントがあっても水平のまま。
@@ -186,9 +150,8 @@ struct PathSettings {
 PathElementId AddPathPoint(PathSettings& path, float u, float v, PathElementId connectFrom);
 // 2 点をエッジで繋ぐ（from → to）。既に繋がっていれば何もしない（真を返す）。
 bool ConnectPathPoints(PathSettings& path, PathElementId from, PathElementId to);
-// エッジの途中（t: 0〜1。内部点があれば折れ線の道のり）に点を挿入し、エッジを 2 本に割る。
-// 幅 / フェザー / 強さは両端から補間する。経路の内部点は挿入した所で前後に分ける。
-// 返り値は新しい点（失敗なら 0）。
+// エッジの途中（t: 0〜1）に点を挿入し、エッジを 2 本に割る。
+// 幅 / フェザー / 強さは両端から補間する。返り値は新しい点（失敗なら 0）。
 PathElementId InsertPathPointOnEdge(PathSettings& path, PathElementId edgeId, float t);
 // 点を消す。鎖の途中の点（エッジがちょうど 2 本）なら、両隣を 1 本のエッジで繋ぎ直して
 // から消すので線は切れない（曲線の種類 / 丸め / 向きは残ったエッジのものが続く）。
@@ -200,7 +163,7 @@ bool DeletePathEdge(PathSettings& path, PathElementId edgeId);
 // 位置と幅は target のものが残る（持っていった側が相手に合わせに行く）。
 bool MergePathPoints(PathSettings& path, PathElementId source, PathElementId target);
 // 点を分離する。エッジの本数ぶんに分け、各エッジの端に新しい点を作って
-// そのエッジの向きに沿って少し戻した位置（offsetUv）へ置く。
+// そのエッジの向きに沿って少し戻した位置（offsetUv、m）へ置く。
 // 出ていくエッジ（下流）は元の点に残す。新しく作った点を outCreated に返す。
 // エッジが 1 本以下なら何もしない。
 bool SplitPathPoint(PathSettings& path, PathElementId pointId, float offsetUv,
@@ -214,28 +177,21 @@ bool ReversePathEdge(PathSettings& path, PathElementId edgeId);
 // 点に付いているエッジを全部反転する。
 bool ReversePathEdgesAt(PathSettings& path, PathElementId pointId);
 
-// --- 経路の内部点 -----------------------------------------------------------
-// エッジの経路が今の両端の位置に合っているか。route が None なら常に真。
-bool IsPathEdgeRouteCurrent(const PathSettings& path, const PathEdge& edge);
-// エッジの制御点列（from、内部点…、to）。内部点の値（幅 / フェザー / 強さ / 高さのずれ）は
-// 両端の値を道のりで補間したもの（id は 0）。経路が古いエッジは内部点を飛ばして両端だけ返す。
-// 幅を上書きするエッジなら、両端も含めて幅 / フェザー / 強さはエッジの値。端点が無ければ空。
+// --- エッジの制御点 ---------------------------------------------------------
+// エッジの制御点列（from、to）。幅を上書きするエッジなら、幅 / フェザー / 強さは
+// エッジの値。端点が無ければ空。
 std::vector<PathPoint> PathEdgeControlPoints(const PathSettings& path, const PathEdge& edge);
-// 経路探索が有効で、経路が古い（両端が動いた / 未計算）エッジの数。
-size_t CountStalePathRoutes(const PathSettings& path);
 
 // --- まとめて動かす / コピーと貼り付け ---------------------------------------
-// 点をまとめて動かす（0〜1 へ丸める）。1 つでも動いたら真。
+// 点をまとめて動かす。1 つでも動いたら真。
 bool MovePathPoints(PathSettings& path, const std::vector<PathElementId>& pointIds, float du,
                     float dv);
-// 点の重心（UV）。1 つも無ければ偽。
+// 点の重心（XZ）。1 つも無ければ偽。
 bool PathPointsCentroid(const PathSettings& path, const std::vector<PathElementId>& pointIds,
                         float& outU, float& outV);
 
 // 切り出した部分。点と、その間のエッジ。ID はこの中でだけ一意（元のパスの ID のまま）。
-// 経路の内部点は持たない（貼った先の地形で計算し直す）。
 struct PathClip {
-    bool worldSpace = false;
     std::vector<PathPoint> points;
     std::vector<PathEdge> edges;
 };
@@ -243,7 +199,7 @@ struct PathClip {
 // 何も無ければ偽。
 bool ExtractPathClip(const PathSettings& path, const std::vector<PathElementId>& pointIds,
                      const std::vector<PathElementId>& edgeIds, PathClip& out);
-// 貼り付ける。ID を振り直し、UV を (du, dv) だけずらして 0〜1 へ丸める。
+// 貼り付ける。ID を振り直し、XZ を (du, dv) だけずらす。
 // 新しい点 / エッジの ID を返す。空なら偽。
 bool PastePathClip(PathSettings& path, const PathClip& clip, float du, float dv,
                    std::vector<PathElementId>* outPoints, std::vector<PathElementId>* outEdges);
@@ -259,7 +215,7 @@ PathCurve StrandCurve(const PathSettings& path, const PathStrand& strand, float*
 // 鎖のクロソイド比（先頭のエッジの値）。
 float StrandClothoidRatio(const PathSettings& path, const PathStrand& strand);
 // 鎖を折れ線（曲線なら細かく割ったもの）にする。samplesPerSpan は制御点の区間ごとの標本数。
-// 制御点は「ユーザーの点 + 経路の内部点」。直線の鎖は制御点そのものを返す。
+// 直線の鎖は制御点そのものを返す。
 std::vector<PathCurveSample> SamplePathStrand(const PathSettings& path, const PathStrand& strand,
                                               int samplesPerSpan);
 // 鎖のエッジを全部反転する。

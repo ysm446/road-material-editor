@@ -37,7 +37,7 @@ struct MeshConstants
     uint irradianceIndex;    // irradiance キューブの SRV
     uint prefilteredIndex;   // プリフィルタ済みキューブの SRV
     uint brdfLutIndex;       // 環境 BRDF の LUT
-    uint useMaterialTextures;  // 0 なら UI の単色パラメータを使う
+    uint useMaterialTextures;  // 0 ならメッシュの単色マテリアルを使う
 
     // 合成結果のチャンネル（bindless）
     uint materialBaseColorIndex;
@@ -347,31 +347,18 @@ float SampleShadow(float3 worldPosition, float nDotL, uint shadowIndex, float te
 }
 
 // --- ディスプレイスメント -------------------------------------------------
-// 合成した Height を読み、ワールド空間の法線方向へ押し引きする。
+// 道路のレイヤーをブレンドした Height を読み、ワールド空間の法線方向へ押し引きする。
 // **VsMain と DsMain の両方がこの関数を通る。** 別々の式を書くと、
-// モデル行列を入れたときにテセレーションの ON / OFF で形が変わってしまう。
+// テセレーションの ON / OFF で形が変わってしまう。
 // 頂点 / ドメインシェーダには微分が無いので SampleLevel を使う。
 float3 ApplyDisplacement(float3 worldPosition, float3 worldNormal, float2 uv, float2 roadUv)
 {
-    if (g_mesh.displacementScale == 0.0f)
+    if (g_mesh.displacementScale == 0.0f || g_mesh.layerCount == 0u)
     {
         return worldPosition;
     }
-    float height = 0.5f;
-    if (g_mesh.layerCount > 0u)
-    {
-        // 道路面と、その上の帯（白線）。同じ道路座標からブレンド後のハイトを読む。
-        height = BlendedHeightLevel(roadUv, worldPosition);
-    }
-    else if (g_mesh.useMaterialTextures != 0u)
-    {
-        Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.materialHeightIndex];
-        height = SampleMaterialScalarLevel(heightMap, uv);
-    }
-    else
-    {
-        return worldPosition;
-    }
+    // 道路面と、その上の帯（白線）。同じ道路座標からブレンド後のハイトを読む。
+    const float height = BlendedHeightLevel(roadUv, worldPosition);
     // 高さの中央（0.5）を基準にする。全体が膨らまないようにするため。
     return worldPosition + worldNormal * ((height - 0.5f) * g_mesh.displacementScale);
 }
@@ -505,13 +492,6 @@ VsOutput DsMain(HsPatchConstants patchConstants, float3 barycentric : SV_DomainL
     return output;
 }
 
-struct PsOutput
-{
-    float4 color : SV_Target0;
-    // xy: マテリアル UV（タイル 1 枚ぶんに畳んだもの）、z: メッシュに当たったか
-    float4 materialUv : SV_Target1;
-};
-
 // 距離場を画面微分でなだらかにし、遠方の細いグリッドのちらつきを抑える。
 float GridLine(float2 coordinate)
 {
@@ -535,7 +515,7 @@ float4 PsWireframe(VsOutput input) : SV_Target0
     return float4(0.55f, 0.85f, 1.0f, 0.85f);
 }
 
-PsOutput PsMain(VsOutput input)
+float4 PsMain(VsOutput input) : SV_Target0
 {
     if ((g_mesh.meshDisplayFlags & 2u) != 0u)
     {
@@ -548,10 +528,7 @@ PsOutput PsMain(VsOutput input)
         color = lerp(color, float3(0.8f,0.12f,0.08f), step(local.y,0.07f)*fade);
         color = lerp(color, float3(0.08f,0.65f,0.18f), step(local.x,0.07f)*fade);
         color *= lerp(1.0f,0.25f,GridLine(input.uv));
-        PsOutput result;
-        result.color = float4(ApplyRoadGrid(color,input.uv),1.0f);
-        result.materialUv = float4(frac(input.uv),1.0f,0.0f);
-        return result;
+        return float4(ApplyRoadGrid(color,input.uv),1.0f);
     }
     const float3 geometricNormal = normalize(input.worldNormal);
     const float3 viewDirection = normalize(g_mesh.cameraPosition - input.worldPosition);
@@ -754,10 +731,7 @@ PsOutput PsMain(VsOutput input)
             debugColor = saturate(local).xxx;
         }
 
-        PsOutput debugOutput;
-        debugOutput.color = float4(ApplyRoadGrid(debugColor, input.uv), 1.0f);
-        debugOutput.materialUv = float4(frac(input.uv), 1.0f, 0.0f);
-        return debugOutput;
+        return float4(ApplyRoadGrid(debugColor, input.uv), 1.0f);
     }
 
     float3 diffuseColor;
@@ -805,12 +779,8 @@ PsOutput PsMain(VsOutput input)
 
     radiance += (diffuseIbl + specularIbl) * g_mesh.iblIntensity * ambientOcclusion;
 
-    PsOutput output;
     // シーンカラーは R16G16B16A16_FLOAT。half の上限（65504）を超えると Inf になり、
     // トーンマップを経て NaN → ハイライト中心の黒点になる。上限手前でクランプする。
-    output.color = float4(ApplyRoadGrid(min(radiance, 60000.0f), input.uv),
-                          (g_mesh.opacityMode == 2u) ? opacity : 1.0f);
-    // ペイントマスクはタイル 1 枚ぶんのテクスチャなので、UV も畳んで書き出す。
-    output.materialUv = float4(frac(input.uv), 1.0f, 0.0f);
-    return output;
+    return float4(ApplyRoadGrid(min(radiance, 60000.0f), input.uv),
+                  (g_mesh.opacityMode == 2u) ? opacity : 1.0f);
 }

@@ -51,7 +51,6 @@ inline const compositor::MaterialLayer kDefaultLayer;
 
 inline const renderer::LightSettings kDefaultLight;
 inline const renderer::ExposureSettings kDefaultExposure;
-inline const renderer::MaterialSettings kDefaultMaterial;
 inline const renderer::CameraState kDefaultCamera;
 inline const renderer::SkySettings kDefaultSky;
 
@@ -65,9 +64,6 @@ inline const char* const kDebugViewLabels[] = {
 };
 inline const char* const kResolutionLabels[] = {"512", "1024", "2048", "4096"};
 inline constexpr uint32_t kResolutionValues[] = {512, 1024, 2048, 4096};
-// 平面メッシュの分割数。形の細かさの上限を決める。
-inline const char* const kMeshSubdivisionLabels[] = {"256", "512", "1024"};
-inline constexpr uint32_t kMeshSubdivisionValues[] = {256, 512, 1024};
 
 // プレビューの窓（マテリアル / テクスチャ / 天球）の、上の区画に使う正方形の一辺。
 //

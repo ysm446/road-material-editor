@@ -183,9 +183,6 @@ void Application::Shutdown() {
     m_materialLibrary.Destroy(m_device);
     m_skyLibrary.Destroy(m_device);
     m_textureLibrary.Destroy(m_device);
-    if (m_pathRouteEvaluator.Resolution() != 0) {
-        m_pathRouteEvaluator.Destroy(m_device);
-    }
     m_renderer.Shutdown(m_device);
     m_imgui.Shutdown();
     m_pipelineCache.Destroy();
@@ -262,7 +259,7 @@ int Application::Run() {
         // ホットリロードや進行中の処理を生かしておくため。
         //
         // 開発用のオプションが動いている間は落とさない。起動直後はウィンドウが
-        // 背面のことがあり、待つと書き出しやスクリーンショットが遅くなる。
+        // 背面のことがあり、待つと保存やスクリーンショットが遅くなる。
         if (!Headless()) {
             const bool foreground = m_window.IsForeground();
             if (foreground != m_wasForeground) {
@@ -287,23 +284,8 @@ int Application::Run() {
         // プロジェクトとマテリアルの読み書きも GPU 待機を伴うため、フレームの外で。
         // 他の保留処理より先に行う（読み込みが中身を丸ごと入れ替えるため）。
         ProcessPendingFileWork();
-        // 経路探索用の地形（Path ノードの Base）の焼き直しも GPU 待機を伴うため、フレームの外で。
-        ProcessPendingPathRoutes();
+        // 道路メッシュの生成と転送も GPU 待機を伴うため、フレームの外で。
         SyncMeshGraph();
-
-        // 開発用: 数フレーム描いてから合成結果を書き出して終了する。
-        if (!m_options.exportDirectory.empty() && m_frameCounter >= m_options.screenshotFrame) {
-            m_exportSettings.directory = m_options.exportDirectory;
-            SyncGraphStack();
-            // プレビューと同じくグラフのコンパイル結果を書き出す。
-            const io::ExportRefs refs{m_graphStack, m_textureLibrary, m_materialLibrary};
-            if (m_renderer.HasMeshScene()) {
-                TG_LOG_WARN("メッシュシーンのテクスチャ書き出しは未対応です");
-            } else {
-                io::ExportMaterialTextures(m_device, m_pipelineCache, refs, m_exportSettings);
-            }
-            break;
-        }
 
         // 開発用: 数フレーム描いてからプロジェクトを保存して終了する。
         // 対話せずに保存と読み込みを確かめるために使う。
@@ -343,11 +325,11 @@ int Application::Run() {
                 m_scrollToSelectedTexture = true;
             }
             if (loaded) {
-                // 読み込んだ画像を参照しているサムネイルを作り直す。
+                // 読み込んだ画像を参照しているサムネイルと、シーンの材質を作り直す。
                 for (const compositor::MaterialAsset& asset : m_materialLibrary.Entries()) {
                     m_materialLibrary.MarkThumbnailDirty(asset.id);
                 }
-                m_graphStack.MarkDirty();
+                m_renderer.InvalidateSceneMaterials();
             }
         }
 
@@ -395,10 +377,8 @@ int Application::Run() {
         m_renderer.ShowUvChecker() = m_settings.Display().showUvChecker;
         m_renderer.ShowWireframe() = m_settings.Display().showWireframe;
 
-        // グラフをレイヤー列へコンパイルした結果で評価する。
-        SyncGraphStack();
-        m_renderer.Render(m_device, m_pipelineCache, commandList, m_graphStack,
-                          m_textureLibrary, m_materialLibrary);
+        m_renderer.Render(m_device, m_pipelineCache, commandList, m_textureLibrary,
+                          m_materialLibrary);
 
         // マテリアルプレビューの球。**窓を開いている間だけ描く。**
         // ImGui はこのフレームで描いた中身をそのまま読む（submit 済みの
@@ -426,8 +406,8 @@ int Application::Run() {
         m_imgui.EndFrame(commandList);
 
         // UI 込みの書き出しは、バックバッファが描き終わったこのフレームで写す。
-        // **合成の評価は非同期なので、走っている最中は撮らない**（前回の絵が写る）。
-        const bool evaluationIdle = !m_renderer.Evaluator().IsEvaluating();
+        // **材質の評価は非同期なので、走っている最中は撮らない**（前回の絵が写る）。
+        const bool evaluationIdle = !m_renderer.IsEvaluating();
         const bool captureUi = !m_options.uiScreenshotPath.empty() &&
                                (m_frameCounter + 1) >= m_options.screenshotFrame && evaluationIdle;
         if (captureUi) {
@@ -462,7 +442,7 @@ int Application::Run() {
 // 開発用オプションで動いているか。対話せずに書き出して終わる経路。
 bool Application::Headless() const {
     return !m_options.screenshotPath.empty() || !m_options.uiScreenshotPath.empty() ||
-           !m_options.exportDirectory.empty() || !m_options.saveProjectPath.empty();
+           !m_options.saveProjectPath.empty();
 }
 
 void Application::DrawUi() {
@@ -550,7 +530,6 @@ void Application::DrawUi() {
     DrawSkyPreviewWindow();
     DrawInfoWindow();
     DrawSettingsWindow();
-    DrawExportWindow();
 
     if (m_focusDefaultTabs > 0) {
         --m_focusDefaultTabs;
@@ -676,9 +655,9 @@ void Application::DrawStatusBar() {
                 ImGui::PopStyleColor();
                 ImGui::TextDisabled("|");
             }
-            // 合成の評価はコンピュートキューで走る。見えている絵が古い間はここで分かる。
-            if (m_renderer.Evaluator().IsEvaluating()) {
-                ImGui::TextDisabled("合成を評価中…");
+            // 材質の評価はコンピュートキューで走る。見えている絵が古い間はここで分かる。
+            if (m_renderer.IsEvaluating()) {
+                ImGui::TextDisabled("材質を評価中…");
                 ImGui::TextDisabled("|");
             }
 
@@ -933,10 +912,8 @@ void Application::DrawInfoWindow() {
                           1000.0f / io.Framerate);
         ui::PropertyValue("バックバッファ", "%u x %u", m_device.Width(), m_device.Height());
         ui::PropertyValue("ビューポート", "%u x %u", m_renderer.Width(), m_renderer.Height());
-        ui::PropertyValue("合成", "%u^2 / %u レイヤー / %u タイル",
-                          m_renderer.MaterialResolution(),
-                          m_renderer.Evaluator().EvaluatedLayerCount(),
-                          m_renderer.Evaluator().EvaluatedTileCount());
+        ui::PropertyValue("合成", "%u^2 / メッシュ %zu", m_renderer.MaterialResolution(),
+                          m_renderer.Scene().meshes.size());
         ui::PropertyValue("アンドゥ", "%zu 段 / やり直し %zu 段", m_undoHistory.UndoCount(),
                           m_undoHistory.RedoCount());
         // VRAM は 2 行に分ける。1 行目はプロセス全体（枠に対してどれだけ使っているか）、

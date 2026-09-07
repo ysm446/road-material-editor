@@ -241,7 +241,6 @@ float EvaluateBankAngleRadians(const PathSettings& path, const ProfileCurve& cur
 
 bool BuildPathCenterline(const PathSettings& path, ProfileCurve& outCenterline, std::string* error) {
     const auto fail = [&](const char* message) { if (error) *error = message; return false; };
-    if (!path.worldSpace) return fail("旧地形Pathを実寸カーブへ変換してください");
     const auto strands = BuildPathStrands(path);
     if (strands.size() != 1 || strands.front().closed || strands.front().points.size() != path.points.size())
         return fail("分岐・閉ループ・孤立点のない1本のPathが必要です");

@@ -269,7 +269,7 @@ void Application::RequestGraphNodePlacement(bool navigate) {
 // 結果を見ながら別のノードのプロパティをいじれる。
 void Application::SetPreviewGraphNode(graph::GraphId nodeId, graph::GraphId outputPin) {
     const graph::Node* node = m_graph.FindNode(nodeId);
-    // 出力ノードと、プレビューできない種類は「出力ノードのチェーン」に落とす。
+    // Mesh Output と、プレビューできない種類（Surface / Path）は「Mesh Output の鎖」に落とす。
     const bool previewable = (node != nullptr && graph::IsPreviewableNodeKind(node->kind));
     m_previewGraphNode = previewable ? node->id : 0;
     // 見る出力。そのノードの出力ピンでなければ 0（＝最初の出力）に落とす。
@@ -293,9 +293,13 @@ void Application::SyncMeshGraph() {
     }
     if (m_meshGraphRevision == m_graph.Revision() && m_meshGraphPreviewNode == previewMeshNode) return;
     auto compiled = graph::CompileMeshGraph(m_graph, previewMeshNode);
-    const bool uploaded = compiled.active
-        ? m_renderer.SetGeneratedMeshScene(m_device, compiled.scene)
-        : (!m_meshGraphActive || m_renderer.RestoreAuthoredMeshScene(m_device));
+    // 鎖が無くなったらシーンを空にする（グリッドと背景だけになる）。
+    bool uploaded = true;
+    if (compiled.active) {
+        uploaded = m_renderer.SetGeneratedMeshScene(m_device, compiled.scene);
+    } else if (m_meshGraphActive) {
+        m_renderer.ClearMeshScene(m_device);
+    }
     m_meshGraphError = compiled.error;
     if (!uploaded) m_meshGraphError = "道路メッシュをGPUへ転送できませんでした";
     if (uploaded) {
@@ -304,65 +308,6 @@ void Application::SyncMeshGraph() {
     }
     m_meshGraphRevision = m_graph.Revision();
     m_meshGraphPreviewNode = previewMeshNode;
-}
-
-void Application::SyncGraphStack() {
-    // プレビューの対象。**出力ピンのクリックで決める**（選択とは別）。
-    // 0 のときは出力ノードのチェーン。
-    // メッシュノードのプレビューは SyncMeshGraph が受け持つので、2D の合成は出力ノードのままにする。
-    graph::GraphId target = 0;
-    if (const graph::Node* node = m_graph.FindNode(m_previewGraphNode);
-        node != nullptr && graph::IsPreviewableNodeKind(node->kind)) {
-        if (!graph::IsMeshNodeKind(node->kind)) target = node->id;
-    } else {
-        m_previewGraphNode = 0;
-        m_previewGraphPin = 0;
-    }
-    // 合成の法線は実寸の勾配から作るので、評価器にも同じ実寸を渡す。
-    // プレビュー設定がジオメトリを決めるので、そちらに合わせる
-    // （押し出した形と陰影の起伏を一致させる）。
-    // レイヤー列が変わらなくても実寸だけ動くことがあるため、早期 return より前に置く。
-    m_graphStack.SetTerrainScale(m_renderer.PlaneSize(), m_renderer.DisplacementScale());
-
-    if (m_compiledGraphRevision == m_graph.Revision() && m_compiledGraphTarget == target &&
-        m_compiledGraphTargetPin == m_previewGraphPin) {
-        return;
-    }
-    m_compiledGraphRevision = m_graph.Revision();
-    m_compiledGraphTarget = target;
-    m_compiledGraphTargetPin = m_previewGraphPin;
-    graph::CompiledGraph compiled = (target != 0)
-                                        ? m_graph.CompileLayersTo(target, m_previewGraphPin)
-                                        : m_graph.CompileLayers();
-    m_graphStack.Layers() = std::move(compiled.layers);
-    m_graphStack.MarkDirty();
-
-    // レイヤーの出どころを版ごとに控える。評価が追いつくまでの数版ぶんあれば足りる。
-    constexpr size_t kKeepRevisions = 4;
-    GraphLayerSources sources;
-    sources.revision = m_graphStack.Revision();
-    sources.layers = std::move(compiled.layerSources);
-    m_graphLayerSources.push_back(std::move(sources));
-    while (m_graphLayerSources.size() > kKeepRevisions) {
-        m_graphLayerSources.erase(m_graphLayerSources.begin());
-    }
-}
-
-D3D12_GPU_DESCRIPTOR_HANDLE Application::GraphLayerThumbnail(graph::GraphId nodeId) const {
-    const compositor::MaterialEvaluator& evaluator = m_renderer.Evaluator();
-    const uint64_t revision = evaluator.EvaluatedRevision();
-    for (const GraphLayerSources& sources : m_graphLayerSources) {
-        if (sources.revision != revision) {
-            continue;
-        }
-        for (size_t i = sources.layers.size(); i-- > 0;) {
-            if (sources.layers[i] == nodeId) {
-                return evaluator.LayerThumbnailHandle(i);
-            }
-        }
-        break;
-    }
-    return D3D12_GPU_DESCRIPTOR_HANDLE{0};
 }
 
 // 選択中のノードを控える。
@@ -571,16 +516,14 @@ void Application::DrawGraphNode(const graph::Node& node) {
     }
 
     // サムネイル。**繋ぎ替えずに中身が分かる**ようにするためのもの。
-    //   - Surface: そのレイヤーまで合成した結果（アルベドに Height の勾配で陰影を付けたもの）。
-    //   - プレビューしていない枝は評価されないので、枠だけの空き（未評価）になる。
+    //   - Surface: 割り当てた材質のサムネイル（マテリアル一覧と同じ球の絵）。
+    //   - 材質が無ければ枠だけの空き。
     {
         const float thumbnailSize = ui::Scaled(ui::kNodeThumbnail);
         if (layerSettings != nullptr) {
             ImGui::Dummy(ImVec2(kNodeWidth, 2.0f));
-            D3D12_GPU_DESCRIPTOR_HANDLE result = GraphLayerThumbnail(node.id);
-            // 合成結果が無いとき（メッシュシーン表示中や未評価の枝）は、割り当てた材質のサムネイルを出す。
-            // 繋ぎ替えずに何の材質かが分かればよいので、球の絵で足りる。
-            if (result.ptr == 0 && layerSettings->layer.material != compositor::kNoMaterialAsset) {
+            D3D12_GPU_DESCRIPTOR_HANDLE result{0};
+            if (layerSettings->layer.material != compositor::kNoMaterialAsset) {
                 if (const compositor::MaterialAsset* asset = m_materialLibrary.Find(layerSettings->layer.material);
                     asset != nullptr && asset->thumbnail.IsValid()) {
                     result = asset->thumbnail.srv.gpu;
@@ -874,8 +817,8 @@ void Application::DrawGraphEditor() {
     ed::Resume();
 
     // --- プレビュー対象の切り替え -------------------------------------------
-    // **選択とは別。** ノードを選んでプロパティをいじりながら、別のノードの
-    // 出力をビューポートに出しておけるようにする（terrain-editor と同じ作法）。
+    // **選択とは別。** ノードを選んでプロパティをいじりながら、別のメッシュノードの
+    // 出力をビューポートに出しておけるようにする。
     //
     // 出力ピンは押した瞬間からリンクのドラッグが始まるので、
     // **同じピンの上でほとんど動かずに離したとき**だけクリックとみなす。
@@ -892,8 +835,7 @@ void Application::DrawGraphEditor() {
             if (m_graphPressedPin != 0 && hoveredPin == m_graphPressedPin && moved < 6.0f) {
                 if (const graph::Pin* pin = m_graph.FindPin(m_graphPressedPin);
                     pin != nullptr && pin->kind == graph::PinKind::Output) {
-                    // 押したピンそのものを見る（堆積の Mask をクリックすれば
-                    // 積もった厚みが白黒で出る）。
+                    // 押したピンそのもののノードを見る（メッシュノードだけ）。
                     SetPreviewGraphNode(pin->nodeId, pin->id);
                 }
             }
@@ -903,7 +845,7 @@ void Application::DrawGraphEditor() {
         if (const ed::NodeId doubleClicked = ed::GetDoubleClickedNode()) {
             SetPreviewGraphNode(ToGraphId(doubleClicked.Get()));
         }
-        // 背景のダブルクリックで出力ノードのチェーンへ戻す。
+        // 背景のダブルクリックで Mesh Output の鎖へ戻す。
         if (ed::IsBackgroundDoubleClicked()) {
             SetPreviewGraphNode(0);
         }
@@ -958,17 +900,12 @@ void Application::DrawGraphPanel() {
     }
 
     if (m_renderer.HasMeshScene()) {
-        ui::HintText("メッシュシーンを表示中。Path → Road → Mesh Outputで道路を生成できます。");
         if (ui::BeginPropertyTable("meshSceneRows")) {
             ui::PropertyValue("メッシュ数", "%zu", m_renderer.Scene().meshes.size());
             ui::EndPropertyTable();
         }
-    }
-    if (const graph::Node* selected = m_graph.FindNode(m_selectedGraphNode);
-        selected != nullptr && graph::IsLayerNodeKind(selected->kind)) {
-        ui::HintText("選択したノードまでを表示中（選択を外すと既定の下地）");
     } else {
-        ui::HintText("Surface の出力ピンを選ぶと、その鎖がプレビューになる");
+        ui::HintText("Path → Road → Mesh Output と繋ぐと道路がビューポートに出る");
     }
 
     float editorHeight = ui::Scaled(m_graphEditorHeight);
@@ -986,7 +923,7 @@ void Application::DrawGraphPanel() {
     ImGui::BeginChild("graphPropertyPane", ImVec2(0.0f, 0.0f));
 
     // **プレビュー対象は選択とは別。** どれが画面に出ているかをここに出し、
-    // 出力へ戻す手段も置く（出力ピンのクリックで切り替わる、と気づけるように）。
+    // Mesh Output へ戻す手段も置く（出力ピンのクリックで切り替わる、と気づけるように）。
     if (m_meshGraphActive) {
         // 途中のメッシュノードを見ているときは、そのノード名を出して Mesh Output へ戻す手段を置く。
         const graph::Node* previewMeshNode = m_graph.FindNode(m_meshGraphPreviewNode);
@@ -1004,28 +941,8 @@ void Application::DrawGraphPanel() {
             ui::HintText("Mesh Outputへ接続した道路を表示中。Pathを選択するとカーブを編集できます。");
         }
     } else {
-        const graph::Node* previewNode = m_graph.FindNode(m_previewGraphNode);
-        const char* previewName =
-            (previewNode != nullptr) ? NodeDisplayName(*previewNode) : "Output";
-        // 出力が 2 つ以上あるノードは、どちらを見ているのかも出す。
-        const graph::Pin* previewPin = m_graph.FindPin(m_previewGraphPin);
-        if (ui::BeginPropertyTable("graphPreviewRow")) {
-            if (previewPin != nullptr && previewNode != nullptr &&
-                previewNode->outputs.size() > 1) {
-                ui::PropertyValue("プレビュー", "%s（%s）", previewName,
-                                  previewPin->label.c_str());
-            } else {
-                ui::PropertyValue("プレビュー", "%s", previewName);
-            }
-            ui::EndPropertyTable();
-        }
-        if (previewNode != nullptr) {
-            if (ui::Button("出力へ戻す", ui::kWideButtonWidth)) {
-                SetPreviewGraphNode(0);
-            }
-        }
-        ui::HintText("出力ピンをクリック（またはノードをダブルクリック）で、"
-                     "ビューポートに出す出力を切り替える");
+        ui::HintText("メッシュノードの出力ピンをクリック（またはノードをダブルクリック）で、"
+                     "そのノードまでの道路をビューポートに出す");
         ImGui::Spacing();
     }
 

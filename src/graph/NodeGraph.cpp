@@ -135,8 +135,8 @@ bool IsMeshNodeKind(NodeKind kind) {
 }
 
 bool IsPreviewableNodeKind(NodeKind kind) {
-    // 道路メッシュのノードは、そのノードまでの鎖をメッシュシーンに出す。
-    return IsLayerNodeKind(kind) || kind == NodeKind::Path || IsMeshNodeKind(kind);
+    // 道路メッシュのノードだけ。そのノードまでの鎖をメッシュシーンに出す。
+    return IsMeshNodeKind(kind);
 }
 
 // --- NodeGraph ------------------------------------------------------------
@@ -325,7 +325,6 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = CrackNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
-        std::get<PathNodeSettings>(node.settings).path.worldSpace = true;
     } else {
         // Mesh Output は設定を持たない。
         node.settings = std::monostate{};

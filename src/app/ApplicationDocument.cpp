@@ -133,9 +133,9 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
 
 void Application::MarkDocumentChanged() {
     m_documentDirty = true;
-    // マテリアルの編集はグラフの改版に映らないので、スタック側を直接叩いて
-    // 再評価させる（グラフ自体の編集は Revision の変化で再コンパイルされる）。
-    m_graphStack.MarkDirty();
+    // マテリアルの編集はグラフの改版に映らないので、シーンの材質を直接再評価させる
+    // （グラフ自体の編集は Revision の変化でメッシュシーンが作り直される）。
+    m_renderer.InvalidateSceneMaterials();
 }
 
 }  // namespace tg

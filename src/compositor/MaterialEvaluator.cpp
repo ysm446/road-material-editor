@@ -55,44 +55,6 @@ struct LayerConstants {
     float colorAdjust[4];         // 色相（ラジアン）, 彩度, 明るさ, 未使用
 };
 
-// GPU 側の DownsampleConstants（CompositeBlur.hlsl）と一致させること。
-struct DownsampleConstants {
-    uint32_t sourceIndex;  // Height の SRV
-    uint32_t outputIndex;  // 出力 UAV
-    uint32_t resolution;   // 出力の一辺
-    uint32_t pad0;
-};
-
-// CPU へ写すハイトの一辺。パスの投影と表示に使うだけなので粗くてよい
-// （2048 m の地形で 4 m。点の幅は数十 m）。
-constexpr uint32_t kHeightfieldReadbackResolution = 512;
-
-// --- 「同じ地形か」を見分けるハッシュ ---------------------------------------
-//
-// FNV-1a。速度も衝突耐性もこの用途には十分で、依存も増えない。
-uint64_t HashBytes(uint64_t seed, const void* data, size_t size) {
-    const auto* bytes = static_cast<const uint8_t*>(data);
-    uint64_t hash = seed;
-    for (size_t i = 0; i < size; ++i) {
-        hash ^= bytes[i];
-        hash *= 0x100000001b3ull;
-    }
-    return hash;
-}
-
-// **Height に効く値だけ**を混ぜる。色やラフネスを変えても地形は同じ。
-uint64_t HashHeightState(uint64_t seed, const MaterialLayer& layer) {
-    uint64_t hash = HashBytes(seed, &layer.enabled, sizeof(layer.enabled));
-    hash = HashBytes(hash, &layer.channelMask, sizeof(layer.channelMask));
-    hash = HashBytes(hash, &layer.heightSource, sizeof(layer.heightSource));
-    hash = HashBytes(hash, &layer.heightBase, sizeof(layer.heightBase));
-    hash = HashBytes(hash, &layer.heightGain, sizeof(layer.heightGain));
-    hash = HashBytes(hash, &layer.heightNoise, sizeof(layer.heightNoise));
-    hash = HashBytes(hash, &layer.uvScale, sizeof(layer.uvScale));
-    hash = HashBytes(hash, &layer.material, sizeof(layer.material));
-    return hash;
-}
-
 bool CreateChannelTexture(rhi::Device& device, uint32_t resolution, DXGI_FORMAT format,
                           const wchar_t* debugName, rhi::GpuTexture& outTexture) {
     rhi::TextureDesc desc;
@@ -125,89 +87,6 @@ void ReleaseTextureSet(rhi::Device& device, MaterialTextureSet& set) {
 }
 
 }  // namespace
-
-float CpuHeightfield::Sample(float u, float v) const {
-    if (!IsValid()) {
-        return 0.5f;
-    }
-    // テクセル中心が (i + 0.5) / n に当たる（DownsampleHeight の矩形の中心）。
-    const float last = static_cast<float>(resolution - 1);
-    const float fx = std::clamp(u * static_cast<float>(resolution) - 0.5f, 0.0f, last);
-    const float fy = std::clamp(v * static_cast<float>(resolution) - 0.5f, 0.0f, last);
-    const uint32_t x0 = static_cast<uint32_t>(fx);
-    const uint32_t y0 = static_cast<uint32_t>(fy);
-    const uint32_t x1 = std::min(x0 + 1, resolution - 1);
-    const uint32_t y1 = std::min(y0 + 1, resolution - 1);
-    const float tx = fx - static_cast<float>(x0);
-    const float ty = fy - static_cast<float>(y0);
-    const auto at = [&](uint32_t x, uint32_t y) {
-        return values[static_cast<size_t>(y) * resolution + x];
-    };
-    const float top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
-    const float bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
-    return top + (bottom - top) * ty;
-}
-
-uint64_t HashStackHeightState(const MaterialStack& stack) {
-    uint64_t hash = 0xcbf29ce484222325ull;
-    const float sizeMeters = stack.SizeMeters();
-    const float heightMeters = stack.HeightMeters();
-    hash = HashBytes(hash, &sizeMeters, sizeof(sizeMeters));
-    hash = HashBytes(hash, &heightMeters, sizeof(heightMeters));
-    for (const MaterialLayer& layer : stack.Layers()) {
-        hash = HashHeightState(hash, layer);
-    }
-    return hash;
-}
-
-bool MaterialEvaluator::ReadbackHeight(rhi::Device& device, CpuHeightfield& out) {
-    rhi::GpuTexture& height = TexturesMutable().height;
-    if (!height.IsValid() || m_resolution == 0) {
-        return false;
-    }
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-    UINT rowCount = 0;
-    UINT64 rowBytes = 0;
-    UINT64 totalBytes = 0;
-    const D3D12_RESOURCE_DESC desc = height.resource->GetDesc();
-    device.GetDevice()->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &rowCount, &rowBytes,
-                                              &totalBytes);
-    rhi::GpuBuffer readback;
-    if (!device.Allocator().CreateReadbackBuffer(totalBytes, L"HeightReadbackNow", readback)) {
-        return false;
-    }
-    const bool executed = device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
-        PIXBeginEvent(commandList, PIX_COLOR(120, 140, 160), "HeightReadbackNow");
-        TransitionIfNeeded(commandList, height, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        const CD3DX12_TEXTURE_COPY_LOCATION destination(readback.resource.Get(), footprint);
-        const CD3DX12_TEXTURE_COPY_LOCATION source(height.resource.Get(), 0);
-        commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
-        PIXEndEvent(commandList);
-    });
-    if (!executed) {
-        device.DeferRelease(readback);
-        return false;
-    }
-    void* mapped = nullptr;
-    const D3D12_RANGE readRange = {0, static_cast<SIZE_T>(totalBytes)};
-    if (!TG_CHECK_HR(readback.resource->Map(0, &readRange, &mapped))) {
-        device.DeferRelease(readback);
-        return false;
-    }
-    out.resolution = m_resolution;
-    out.values.resize(static_cast<size_t>(m_resolution) * m_resolution);
-    const auto* base = static_cast<const uint8_t*>(mapped) + footprint.Offset;
-    const uint32_t rows = std::min<uint32_t>(rowCount, m_resolution);
-    for (uint32_t y = 0; y < rows; ++y) {
-        std::memcpy(out.values.data() + static_cast<size_t>(y) * m_resolution,
-                    base + static_cast<size_t>(y) * footprint.Footprint.RowPitch,
-                    sizeof(float) * m_resolution);
-    }
-    const D3D12_RANGE writtenRange = {0, 0};
-    readback.resource->Unmap(0, &writtenRange);
-    device.DeferRelease(readback);
-    return true;
-}
 
 bool MaterialEvaluator::Create(rhi::Device& device, uint32_t resolution, bool asynchronous) {
     // 走っている評価が前の組を読んでいるかもしれない。作り直す前に必ず待つ。
@@ -244,7 +123,6 @@ void MaterialEvaluator::Destroy(rhi::Device& device) {
     m_compute.Destroy(device);
     m_asyncInFlight = false;
     m_hasResult = false;
-    ReleaseHeightfieldResources(device);
     ReleaseTextures(device);
     for (rhi::GpuTexture& thumbnail : m_layerThumbnails) {
         device.DeferRelease(thumbnail);
@@ -386,125 +264,6 @@ void MaterialEvaluator::TransitionForDisplay(ID3D12GraphicsCommandList* commandL
     TransitionIfNeeded(commandList, set.surface, kDisplayReadState);
     TransitionIfNeeded(commandList, set.height, kDisplayReadState);
 }
-void MaterialEvaluator::ReleaseHeightfieldResources(rhi::Device& device) {
-    device.DeferRelease(m_heightfieldTexture);
-    device.DeferRelease(m_heightfieldReadback);
-    m_heightfieldReadbackBytes = 0;
-    m_heightfieldRowPitch = 0;
-    m_heightfieldPending = false;
-    m_heightfieldFence = nullptr;
-    m_heightfieldFenceValue = 0;
-}
-
-bool MaterialEvaluator::EnsureHeightfieldResources(rhi::Device& device) {
-    if (m_heightfieldTexture.IsValid() && m_heightfieldReadback.IsValid()) {
-        return true;
-    }
-    ReleaseHeightfieldResources(device);
-    if (!CreateChannelTexture(device, kHeightfieldReadbackResolution, DXGI_FORMAT_R32_FLOAT,
-                              L"HeightfieldReadbackTexture", m_heightfieldTexture)) {
-        return false;
-    }
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-    UINT rowCount = 0;
-    UINT64 rowBytes = 0;
-    UINT64 totalBytes = 0;
-    const D3D12_RESOURCE_DESC desc = m_heightfieldTexture.resource->GetDesc();
-    device.GetDevice()->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &rowCount, &rowBytes,
-                                              &totalBytes);
-    if (!device.Allocator().CreateReadbackBuffer(totalBytes, L"HeightfieldReadback",
-                                                 m_heightfieldReadback)) {
-        ReleaseHeightfieldResources(device);
-        return false;
-    }
-    m_heightfieldReadbackBytes = totalBytes;
-    m_heightfieldRowPitch = footprint.Footprint.RowPitch;
-    return true;
-}
-
-// 評価の末尾で呼ぶ。Height を縮小し、読み戻しバッファへコピーする。
-// コンピュートキューでも記録できる操作だけを使う（COPY_SOURCE への遷移とコピー）。
-void MaterialEvaluator::RecordHeightfieldReadback(rhi::Device& device,
-                                                  rhi::PipelineCache& pipelineCache,
-                                                  ID3D12GraphicsCommandList* commandList) {
-    // 前回の読み戻しをまだ写していなくても、今回で上書きしてよい
-    // （評価は 1 本ずつ流れるので、写す時点で最新の結果が入っている）。
-    if (!EnsureHeightfieldResources(device)) {
-        return;
-    }
-    ID3D12PipelineState* pipeline =
-        pipelineCache.GetCompute(L"CompositeBlur.hlsl", L"CsDownsample");
-    if (pipeline == nullptr) {
-        return;
-    }
-    DownsampleConstants constants = {};
-    constants.sourceIndex = m_textures.height.SrvIndex();
-    constants.outputIndex = m_heightfieldTexture.UavIndex();
-    constants.resolution = kHeightfieldReadbackResolution;
-    const rhi::UploadAllocation cb = AllocateConstants(device, sizeof(DownsampleConstants));
-    if (!cb.IsValid()) {
-        return;
-    }
-    std::memcpy(cb.cpu, &constants, sizeof(constants));
-
-    PIXBeginEvent(commandList, PIX_COLOR(120, 140, 160), "HeightfieldReadback");
-    TransitionIfNeeded(commandList, m_textures.height,
-                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    TransitionIfNeeded(commandList, m_heightfieldTexture, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    commandList->SetPipelineState(pipeline);
-    commandList->SetComputeRootConstantBufferView(1, cb.gpuAddress);
-    commandList->Dispatch(DispatchCount(kHeightfieldReadbackResolution),
-                          DispatchCount(kHeightfieldReadbackResolution), 1);
-    TransitionIfNeeded(commandList, m_heightfieldTexture, D3D12_RESOURCE_STATE_COPY_SOURCE);
-
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-    const D3D12_RESOURCE_DESC desc = m_heightfieldTexture.resource->GetDesc();
-    device.GetDevice()->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr,
-                                              nullptr);
-    const CD3DX12_TEXTURE_COPY_LOCATION destination(m_heightfieldReadback.resource.Get(),
-                                                    footprint);
-    const CD3DX12_TEXTURE_COPY_LOCATION source(m_heightfieldTexture.resource.Get(), 0);
-    commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
-    PIXEndEvent(commandList);
-
-    // 完了を待つフェンス。非同期ならコンピュートキューの次の値、同期ならこのフレームの値。
-    if (m_recordingAsync) {
-        m_heightfieldFence = m_compute.Fence();
-        m_heightfieldFenceValue = m_compute.SubmittedValue() + 1;
-    } else {
-        m_heightfieldFence = device.FrameFence();
-        m_heightfieldFenceValue = device.NextFenceValue();
-    }
-    m_heightfieldPending = true;
-}
-
-void MaterialEvaluator::CollectHeightfieldReadback() {
-    if (!m_heightfieldPending || m_heightfieldFence == nullptr ||
-        !m_heightfieldReadback.IsValid()) {
-        return;
-    }
-    if (m_heightfieldFence->GetCompletedValue() < m_heightfieldFenceValue) {
-        return;
-    }
-    m_heightfieldPending = false;
-    void* mapped = nullptr;
-    const D3D12_RANGE readRange = {0, static_cast<SIZE_T>(m_heightfieldReadbackBytes)};
-    if (!TG_CHECK_HR(m_heightfieldReadback.resource->Map(0, &readRange, &mapped))) {
-        return;
-    }
-    const uint32_t resolution = kHeightfieldReadbackResolution;
-    m_heightfield.resolution = resolution;
-    m_heightfield.values.resize(static_cast<size_t>(resolution) * resolution);
-    const auto* base = static_cast<const uint8_t*>(mapped);
-    for (uint32_t y = 0; y < resolution; ++y) {
-        std::memcpy(m_heightfield.values.data() + static_cast<size_t>(y) * resolution,
-                    base + static_cast<size_t>(y) * m_heightfieldRowPitch,
-                    sizeof(float) * resolution);
-    }
-    const D3D12_RANGE writtenRange = {0, 0};
-    m_heightfieldReadback.resource->Unmap(0, &writtenRange);
-}
-
 bool MaterialEvaluator::Evaluate(rhi::Device& device, rhi::PipelineCache& pipelineCache,
                                  ID3D12GraphicsCommandList* commandList,
                                  const MaterialStack& stack, const TextureLibrary& textures,
@@ -682,8 +441,7 @@ bool MaterialEvaluator::Evaluate(rhi::Device& device, rhi::PipelineCache& pipeli
 
     // 読み取りへ。**ここでは NON_PIXEL までしか遷移させない。** コンピュートキューでは
     // PIXEL_SHADER_RESOURCE を含む遷移を記録できないため、描画から読める状態への
-    // 遷移はグラフィックス側（TransitionForDisplay）で行う。書き出しはコンピュートと
-    // コピーで読むだけなので、この状態で足りる。
+    // 遷移はグラフィックス側（TransitionForDisplay）で行う。
     constexpr D3D12_RESOURCE_STATES kOutputReadState =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     TransitionIfNeeded(commandList, m_textures.baseColor, kOutputReadState);
@@ -695,11 +453,6 @@ bool MaterialEvaluator::Evaluate(rhi::Device& device, rhi::PipelineCache& pipeli
     // グラフィックス側で PIXEL へ遷移させる。
     for (rhi::GpuTexture& thumbnail : m_layerThumbnails) {
         TransitionIfNeeded(commandList, thumbnail, kOutputReadState);
-    }
-
-    // プレビュー用の評価器だけ、Height を CPU へ写す（パスの編集に使う）。
-    if (m_asynchronous && complete) {
-        RecordHeightfieldReadback(device, pipelineCache, commandList);
     }
 
     PIXEndEvent(commandList);
@@ -720,10 +473,6 @@ void MaterialEvaluator::Update(rhi::Device& device, rhi::PipelineCache& pipeline
     if (!m_textures.IsValid()) {
         return;
     }
-    // CPU 側のハイトの読み戻しは、評価の回収とは別に毎フレーム見る
-    // （同期評価のときはフレームのフェンスで終わるため）。
-    CollectHeightfieldReadback();
-
     // --- 回収 -----------------------------------------------------------------
     if (m_asyncInFlight && !m_compute.IsBusy()) {
         m_asyncInFlight = false;

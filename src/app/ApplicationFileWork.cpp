@@ -145,18 +145,6 @@ void Application::DrawFileMenu() {
     }
 
     ImGui::Separator();
-    if (ImGui::MenuItem("テクスチャを書き出す…")) {
-        // 書き出し先が未設定なら、プロジェクトの隣を初期値にする。
-        if (m_exportSettings.directory.empty() && !m_projectPath.empty()) {
-            m_exportSettings.directory = m_projectPath.parent_path();
-        }
-        if (m_exportSettings.baseName.empty() && !m_projectPath.empty()) {
-            m_exportSettings.baseName = ToUtf8Display(m_projectPath.stem());
-        }
-        m_showExport = true;
-    }
-
-    ImGui::Separator();
     if (ImGui::MenuItem("終了")) {
         m_window.RequestClose();
     }
@@ -206,22 +194,19 @@ void Application::ResetProject() {
     m_skyLibrary.EnsureDefault();
     m_textureLibrary.Clear(m_device);
 
-    // グラフを既定（ベース → 出力）へ戻す。位置はエディタへ流し込み直す。
-    // m_graphStack は代入で作り直さず MarkDirty で改版する（revision が戻ると
-    // 評価器が「変わっていない」と判断してしまう）。
+    // グラフを既定へ戻す。位置はエディタへ流し込み直す。
+    // メッシュシーンは次のフレームの SyncMeshGraph が作り直す（改版を 0 に戻す）。
     m_meshSelection = MeshSelectionState{};
     m_graph = graph::NodeGraph::CreateDefault();
     m_selectedGraphNode = 0;
     m_previewGraphNode = 0;
     m_previewGraphPin = 0;
-    m_compiledGraphRevision = 0;
     m_meshGraphRevision = 0;
     m_meshGraphActive = false;
     m_meshGraphError.clear();
-    m_graphStack.MarkDirty();
     RequestGraphNodePlacement();
 
-    // **プレビュー設定も既定へ戻す。** 形状・変位量・カメラ・ライト・露出・
+    // **プレビュー設定も既定へ戻す。** テセレーション・カメラ・ライト・露出・
     // 被写界深度はプロジェクトが持つ値なので、戻さないと前の中身が残る。
     m_renderer.ResetSettings();
 
@@ -293,11 +278,9 @@ void Application::ProcessPendingFileWork() {
             m_options.profileMode = 0;
             m_previewGraphNode = 0;
             m_previewGraphPin = 0;
-            m_compiledGraphRevision = 0;
             m_meshGraphRevision = 0;
             m_meshGraphActive = false;
             m_meshGraphError.clear();
-            m_graphStack.MarkDirty();
             RequestGraphNodePlacement();
             m_selectedMaterial = 0;
             m_selectedTexture = 0;
@@ -387,7 +370,7 @@ void Application::ProcessPendingFileWork() {
 
         // 解放は DeferRelease でフレーム同期後に行われるため、GPU 待機は不要。
         m_textureLibrary.Remove(m_device, removed);
-        m_graphStack.MarkDirty();
+        m_renderer.InvalidateSceneMaterials();
     }
 
     if (m_pendingMaterialRemove != compositor::kNoMaterialAsset) {
@@ -410,23 +393,6 @@ void Application::ProcessPendingFileWork() {
             }
             m_selectedMaterial = std::max(0, m_selectedMaterial - 1);
             MarkDocumentChanged();
-        }
-    }
-
-    if (m_pendingExport) {
-        m_pendingExport = false;
-        SyncGraphStack();
-        // プレビューと同じくグラフのコンパイル結果を書き出す。
-        const io::ExportRefs refs{m_graphStack, m_textureLibrary, m_materialLibrary};
-        uint32_t written = 0;
-            if (m_renderer.HasMeshScene()) {
-                TG_LOG_WARN("メッシュシーンのテクスチャ書き出しは未対応です");
-            } else {
-                written = io::ExportMaterialTextures(m_device, m_pipelineCache, refs, m_exportSettings);
-            }
-        if (written > 0) {
-            m_toasts.Push("テクスチャを " + std::to_string(written) + " 枚書き出しました");
-            m_showExport = false;
         }
     }
 

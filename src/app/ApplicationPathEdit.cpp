@@ -13,7 +13,8 @@
 //   Ctrl + 点をクリック     選択した点とその点を繋ぐ
 //   Ctrl + エッジをクリック そこに点を挿入して選択（そのままドラッグできる。点を選んで
 //                           いればその点と繋ぐ）
-//   点をドラッグ            地形の表面に沿って動かす。他の点や線に重ねると吸着して結合
+//   点をドラッグ            作業面（選択した点の高さの水平面 / 道路面）に沿って動かす。
+//                           他の点や線に重ねると吸着して結合
 //   右クリック              点 / エッジ / 空のメニュー（分離、削除、反転、挿入…）
 //   Delete                  選択した点（またはエッジ）を消す。鎖の途中の点なら線は繋ぎ直す
 //   R                       選択した点に付くエッジ（または選択した鎖）の向きを反転
@@ -29,15 +30,14 @@
 // 現れ、Ctrl を離しても状態は変わらない（選択は残る）。
 // 操作の案内はビューポートの下端に出す（プロパティに書くと目を離さないと読めない）。
 //
-// 新規PathはX/Y/Zを実寸で保持し、クリックは選択点の高さ（未選択ならY=0）の平面へ投影する。
-// 旧形式のPathだけは地形UVとCPUハイトへの投影を継続し、UIで実寸へ変換できる。
+// Path は X/Y/Z を実寸で保持し、クリックは選択点の高さ（未選択なら Y=0）の平面へ投影する。
+// 面上のパス（Surface に道路を繋いだ Path）は道路面へ投影し、横位置 / 実距離で持つ。
 
 #include "app/Application.h"
 
 #include "app/ApplicationUiHelpers.h"
 #include "core/Log.h"
 #include "graph/Path.h"
-#include "graph/PathRoute.h"
 #include "graph/RoadProfile.h"
 #include "graph/Road.h"
 #include "ui/UiStyle.h"
@@ -45,7 +45,6 @@
 #include <imgui.h>
 
 #include <DirectXMath.h>
-#include <pix3.h>
 
 #include <algorithm>
 #include <cmath>
@@ -98,13 +97,10 @@ struct PathScreenEdge {
     graph::PathElementId id = 0;
     graph::PathElementId from = 0;
     graph::PathElementId to = 0;
-    // 地形に沿わせるために細かく割った折れ線。t は from 側が 0（内部点があれば道のりの割合）。
+    // 面上のパスが道路面に沿うように細かく割った折れ線。t は from 側が 0。
     std::vector<ImVec2> polyline;
     std::vector<float> t;
     std::vector<bool> visible;
-    // 経路探索が打った内部点（表示だけ。選べない）。
-    std::vector<ImVec2> waypoints;
-    std::vector<bool> waypointVisible;
 };
 
 // 鎖の曲線（曲線の鎖だけ）。ガイドの折れ線とは別に、本線として描く。
@@ -156,15 +152,14 @@ PathScreenCache BuildPathScreenCache(const graph::PathSettings& path, const XMMA
         screenEdge.id = edge.id;
         screenEdge.from = edge.from;
         screenEdge.to = edge.to;
-        // **曲線の鎖のエッジはガイド（制御の骨組み）なので、地形に沿わせず点と点を
-        // 3D の直線で結ぶ。** 結果である曲線のほうが地形に沿う。役割の違いが一目で分かり、
-        // ハイトを引かないぶん軽い。直線の鎖のエッジはそれ自体が結果なので地形に沿わせる。
+        // **曲線の鎖のエッジはガイド（制御の骨組み）なので、面に沿わせず点と点を
+        // 3D の直線で結ぶ。** 結果である曲線のほうが面に沿う。役割の違いが一目で分かる。
+        // 直線の鎖のエッジはそれ自体が結果なので面に沿わせる（面上のパスで効く）。
         const graph::PathStrand* strand = graph::FindStrandOfEdge(cache.strands, edge.id);
         const bool guide =
             strand != nullptr &&
             graph::StrandCurve(path, *strand, nullptr, nullptr) != graph::PathCurve::Line;
-        // 制御点列（from、経路の内部点…、to）。経路が古ければ両端だけ。
-        // t は UV の道のりの割合（点の挿入がこれを使う）。
+        // 制御点列（from、to）。t は道のりの割合（点の挿入がこれを使う）。
         const std::vector<graph::PathPoint> control = graph::PathEdgeControlPoints(path, edge);
         if (control.size() < 2) {
             continue;
@@ -184,7 +179,7 @@ PathScreenCache BuildPathScreenCache(const graph::PathSettings& path, const XMMA
                 size);
             const ProjectedPoint pb = ProjectToViewport(
                 viewProjection, worldOf(to.x, to.z, to.y), viewportMin, size);
-            // 画面上の長さで割る数を決める。長い線ほど細かく割って地形に沿わせる。
+            // 画面上の長さで割る数を決める。長い線ほど細かく割って面に沿わせる。
             // ガイドは 3D の直線で、画面上でも直線になるので両端だけでよい。
             const float length =
                 (pa.visible && pb.visible) ? Distance(pa.screen, pb.screen) : 400.0f;
@@ -204,14 +199,10 @@ PathScreenCache BuildPathScreenCache(const graph::PathSettings& path, const XMMA
                                        total);
                 screenEdge.visible.push_back(projected.visible);
             }
-            if (c + 2 < control.size()) {
-                screenEdge.waypoints.push_back(pb.screen);
-                screenEdge.waypointVisible.push_back(pb.visible);
-            }
         }
         cache.edges.push_back(std::move(screenEdge));
     }
-    // 曲線の鎖。制御点の区間ごとに割り、各標本を地形の高さで描く。
+    // 曲線の鎖。制御点の区間ごとに割り、各標本を実寸の高さで描く。
     cache.curves.resize(cache.strands.size());
     for (size_t i = 0; i < cache.strands.size(); ++i) {
         if (graph::StrandCurve(path, cache.strands[i], nullptr, nullptr) == graph::PathCurve::Line) {
@@ -277,15 +268,15 @@ graph::PathElementId NearestEdge(const PathScreenCache& cache, const ImVec2& mou
 
 }  // namespace
 
-// 移動ギズモの画面上の形。重心と、X（u）/ Z（v）の軸の先端。
-// 軸は地形の高さに沿わせず、重心の高さで水平に出す（傾いた軸だと向きが読めない）。
+// 移動ギズモの画面上の形。重心と、X / Z / Y の軸の先端。
+// 軸は重心の高さから世界軸の向きに出す（傾いた軸だと向きが読めない）。
 struct PathGizmoScreen {
     bool valid = false;
     ImVec2 center{};
     ImVec2 tip[3]{};
     bool axisValid[3]{};
-    int axisCount = 2;
-    // 軸に沿って画面上を 1px 動いたときの UV の変化量。
+    int axisCount = 3;
+    // 軸に沿って画面上を 1px 動いたときの実寸（m）の変化量。
     float uvPerPixel[3]{};
     // 軸の画面上の単位ベクトル。
     ImVec2 direction[3]{};
@@ -316,13 +307,13 @@ std::vector<graph::PathElementId> PathMovablePoints(const graph::PathSettings& p
 
 template <typename WorldFn>
 PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
-                               const std::vector<graph::PathElementId>& movable, float planeSize,
+                               const std::vector<graph::PathElementId>& movable,
                                const XMMATRIX& viewProjection, const ImVec2& viewportMin,
                                const ImVec2& size, const WorldFn& worldOf) {
     PathGizmoScreen gizmo;
     float u = 0.0f;
     float v = 0.0f;
-    if (movable.empty() || !graph::PathPointsCentroid(path, movable, u, v) || planeSize <= 0.0f) {
+    if (movable.empty() || !graph::PathPointsCentroid(path, movable, u, v)) {
         return gizmo;
     }
     float height = 0.0f;
@@ -332,7 +323,6 @@ PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
     }
     if (count > 0) height /= static_cast<float>(count);
     const XMFLOAT3 center = worldOf(u, v, height);
-    gizmo.axisCount = path.worldSpace ? 3 : 2;
     const ProjectedPoint projectedCenter =
         ProjectToViewport(viewProjection, center, viewportMin, size);
     if (!projectedCenter.visible) {
@@ -349,7 +339,7 @@ PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
         gizmo.axisValid[axis] = true;
         gizmo.direction[axis] = ImVec2(delta.x / length, delta.y / length);
         gizmo.tip[axis] = ImVec2(gizmo.center.x + delta.x, gizmo.center.y + delta.y);
-        gizmo.uvPerPixel[axis] = 1.0f / (projectedAxes.pixelsPerMeter[axis] * planeSize);
+        gizmo.uvPerPixel[axis] = 1.0f / projectedAxes.pixelsPerMeter[axis];
     }
     gizmo.valid = true;
     return gizmo;
@@ -933,18 +923,10 @@ XMFLOAT3 Application::PathWorldPosition(float u, float v, float y) const {
                     point.position.z + point.normal.z * y};
         }
     }
-    if (settings && settings->path.worldSpace) return {u, y, v};
-    const float size = m_renderer.PlaneSize();
-    const float scale = m_renderer.DisplacementScale();
-    const float height = m_renderer.Evaluator().Heightfield().Sample(u, v);
-    return XMFLOAT3{(u - 0.5f) * size, (height - 0.5f) * scale + y,
-                    (v - 0.5f) * size};
+    return {u, y, v};
 }
 
-// カーソルからレイを飛ばし、CPU 側のハイトと最初に交わる所を探す。
-//
-// 地形を包む箱の中だけを一定の歩幅で進み、レイが地形の下へ潜った区間を二分法で詰める。
-// ハイトの写しは 512² なので、歩幅もその程度で足りる。
+// カーソルからレイを飛ばし、パスの作業面（水平面 / 道路面）と交わる所を探す。
 bool Application::PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin,
                                 const ImVec2& viewportMax, float& outU, float& outV) const {
     const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
@@ -976,87 +958,19 @@ bool Application::PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin,
         const graph::RoadGeometry* road = SurfacePathRoad(*node);
         return road != nullptr && PickSurface(*road, mouse, viewportMin, viewportMax, outU, outV);
     }
-    if (settings && settings->path.worldSpace) {
-        // メッシュの有無やグリッドの範囲に依存しない作業平面。
-        float height = 0.0f;
-        if (!m_pathEdit.selected.empty()) {
-            if (const auto* point = settings->path.FindPoint(m_pathEdit.selected.front())) {
-                height = point->y;
-            }
+    // メッシュの有無やグリッドの範囲に依存しない作業平面（選択した点の高さ。無ければ Y = 0）。
+    float height = 0.0f;
+    if (settings && !m_pathEdit.selected.empty()) {
+        if (const auto* point = settings->path.FindPoint(m_pathEdit.selected.front())) {
+            height = point->y;
         }
-        if (std::abs(dir.y) < 1e-6f) return false;
-        const float t = (height - origin.y) / dir.y;
-        if (!std::isfinite(t) || t < 0.0f) return false;
-        outU = origin.x + dir.x * t;
-        outV = origin.z + dir.z * t;
-        return std::isfinite(outU) && std::isfinite(outV);
     }
-
-    const float half = m_renderer.PlaneSize() * 0.5f;
-    const float scale = m_renderer.DisplacementScale();
-    const float yMin = -0.5f * scale - 1.0f;
-    const float yMax = 0.5f * scale + 1.0f;
-
-    // 箱との交差区間（スラブ法）。
-    float tEnter = 0.0f;
-    float tExit = 1.0e12f;
-    const auto slab = [&](float o, float d, float lo, float hi) {
-        if (std::abs(d) < 1e-9f) {
-            return o >= lo && o <= hi;
-        }
-        float t0 = (lo - o) / d;
-        float t1 = (hi - o) / d;
-        if (t0 > t1) {
-            std::swap(t0, t1);
-        }
-        tEnter = std::max(tEnter, t0);
-        tExit = std::min(tExit, t1);
-        return tEnter <= tExit;
-    };
-    if (!slab(origin.x, dir.x, -half, half) || !slab(origin.z, dir.z, -half, half) ||
-        !slab(origin.y, dir.y, yMin, yMax)) {
-        return false;
-    }
-
-    const compositor::CpuHeightfield& heightfield = m_renderer.Evaluator().Heightfield();
-    const float sizeMeters = std::max(m_renderer.PlaneSize(), 1e-3f);
-    const auto above = [&](float t, float& outUu, float& outVv) {
-        const float x = origin.x + dir.x * t;
-        const float y = origin.y + dir.y * t;
-        const float z = origin.z + dir.z * t;
-        outUu = std::clamp(x / sizeMeters + 0.5f, 0.0f, 1.0f);
-        outVv = std::clamp(z / sizeMeters + 0.5f, 0.0f, 1.0f);
-        const float terrainY = (heightfield.Sample(outUu, outVv) - 0.5f) * scale;
-        return y - terrainY;
-    };
-
-    constexpr int kSteps = 384;
-    float previousT = tEnter;
-    float u = 0.0f;
-    float v = 0.0f;
-    float previous = above(previousT, u, v);
-    for (int i = 1; i <= kSteps; ++i) {
-        const float t = tEnter + (tExit - tEnter) * (static_cast<float>(i) / kSteps);
-        const float current = above(t, u, v);
-        if (previous > 0.0f && current <= 0.0f) {
-            // 潜った区間を二分法で詰める。
-            float lo = previousT;
-            float hi = t;
-            for (int k = 0; k < 12; ++k) {
-                const float mid = (lo + hi) * 0.5f;
-                if (above(mid, u, v) > 0.0f) {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            above(hi, outU, outV);
-            return true;
-        }
-        previous = current;
-        previousT = t;
-    }
-    return false;
+    if (std::abs(dir.y) < 1e-6f) return false;
+    const float t = (height - origin.y) / dir.y;
+    if (!std::isfinite(t) || t < 0.0f) return false;
+    outU = origin.x + dir.x * t;
+    outV = origin.z + dir.z * t;
+    return std::isfinite(outU) && std::isfinite(outV);
 }
 
 void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemHovered,
@@ -1093,7 +1007,7 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     {
         // 「面上か」はリンクで決める。道路の評価に一時的に失敗しても座標の意味は変えない
         // （実寸へ戻して次のフレームで再変換すると点が壊れる）。
-        const bool bound = path.worldSpace && graph::FindSurfaceRoad(m_graph, node) != nullptr;
+        const bool bound = graph::FindSurfaceRoad(m_graph, node) != nullptr;
         const graph::RoadGeometry* surfaceRoad = bound ? SurfacePathRoad(node) : nullptr;
         if (surfaceRoad != nullptr && !path.surfaceSpace) {
             for (graph::PathPoint& point : path.points) {
@@ -1118,7 +1032,7 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
         }
     }
     // 縦断 / バンクの編集モードは別の入力処理。制御点の選択やギズモは出さない。
-    if (path.worldSpace && !path.surfaceSpace && state.profileMode != PathEditState::kProfilePoints) {
+    if (!path.surfaceSpace && state.profileMode != PathEditState::kProfilePoints) {
         HandlePathProfileInput(node, itemHovered, viewportMin, viewportMax);
         return;
     }
@@ -1149,8 +1063,7 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     // 面上のパスは面に沿ってドラッグするだけ。世界軸のギズモは意味が変わるので出さない。
     const PathGizmoScreen gizmo =
         (!io.KeyCtrl && !state.dragging && !state.boxPending && !path.surfaceSpace)
-            ? BuildPathGizmo(path, movable, path.worldSpace ? 1.0f : m_renderer.PlaneSize(), viewProjection, viewportMin,
-                             size, worldOf)
+            ? BuildPathGizmo(path, movable, viewProjection, viewportMin, size, worldOf)
             : PathGizmoScreen{};
     state.gizmoHover = (mouseInside && !state.gizmoDragging && !state.boxPending) ? PathGizmoHit(gizmo, mouse) : -1;
 
@@ -1195,7 +1108,7 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     const graph::PathElementId anchor = state.selected.empty() ? 0 : state.selected.front();
     // Ctrl を押している間が「伸ばす」モード。
     const bool extend = io.KeyCtrl;
-    // 分離 / 切り離しで点を離す距離を、その点の位置での UV へ直す。
+    // 分離 / 切り離しで点を離す距離を、その点の位置での実寸（m）へ直す。
     const auto detachOffsetUv = [&](graph::PathElementId pointId) {
         const graph::PathPoint* point = path.FindPoint(pointId);
         if (point == nullptr) {
@@ -1205,14 +1118,12 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
             viewProjection, worldOf(point->x, point->z, point->y), viewportMin,
             size);
         const ProjectedPoint b = ProjectToViewport(
-            viewProjection, worldOf((path.worldSpace ? point->x + 0.01f : std::min(point->x + 0.01f, 1.0f)), point->z,
-                                    point->y),
-            viewportMin, size);
+            viewProjection, worldOf(point->x + 0.01f, point->z, point->y), viewportMin, size);
         if (!a.visible || !b.visible) {
             return 0.01f;
         }
-        const float pixelsPerUv = Distance(a.screen, b.screen) / 0.01f;
-        return (pixelsPerUv > 1e-3f) ? (ui::Scaled(kDetachPixels) / pixelsPerUv) : 0.01f;
+        const float pixelsPerMeter = Distance(a.screen, b.screen) / 0.01f;
+        return (pixelsPerMeter > 1e-3f) ? (ui::Scaled(kDetachPixels) / pixelsPerMeter) : 0.01f;
     };
 
     // --- 押した -----------------------------------------------------------------
@@ -1329,14 +1240,14 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
         float dy = 0.0f;
         bool haveDelta = false;
         if (state.gizmoAxis == 3) {
-            // 平面。掴んだ所と今のカーソルの地形上の差。地形の外では動かさない。
+            // 平面。掴んだ所と今のカーソルの作業面上の差。面の外では動かさない。
             if (onTerrain) {
                 du = terrainU - state.gizmoPressU;
                 dv = terrainV - state.gizmoPressV;
                 haveDelta = true;
             }
         } else if (state.gizmoAxis >= 0 && state.gizmoAxis < 3) {
-            // 軸。カーソルの動きを軸の向きへ落とし、画面上の距離を UV へ直す。
+            // 軸。カーソルの動きを軸の向きへ落とし、画面上の距離を実寸へ直す。
             const ImVec2 delta(mouse.x - state.gizmoPressPos.x, mouse.y - state.gizmoPressPos.y);
             const ImVec2 direction = state.gizmoAxisDirection;
             const float along = delta.x * direction.x + delta.y * direction.y;
@@ -1353,8 +1264,8 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
         if (haveDelta) {
             for (const PathEditState::GizmoStart& start : state.gizmoStart) {
                 if (graph::PathPoint* point = path.FindPoint(start.id)) {
-                    const float u = (path.worldSpace ? start.x + du : std::clamp(start.x + du, 0.0f, 1.0f));
-                    const float v = (path.worldSpace ? start.z + dv : std::clamp(start.z + dv, 0.0f, 1.0f));
+                    const float u = start.x + du;
+                    const float v = start.z + dv;
                     const float y = start.y + dy;
                     if (u != point->x || v != point->z || y != point->y) {
                         point->x = u;
@@ -1366,7 +1277,7 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
             }
         }
     } else if (state.gizmoDragging) {
-        // 離した。両端が動いたエッジの経路は、点のドラッグと同じく離した時点で作り直す。
+        // 離した。
         state.gizmoDragging = false;
         state.gizmoAxis = -1;
         state.gizmoStart.clear();
@@ -1433,8 +1344,8 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
                         m_pathClipboard.edges.size());
         }
     };
-    // 貼り付け。重心がカーソルの地形上の位置へ来るように置き、貼った点を選択にする
-    // （そのままギズモで動かせる）。カーソルが地形の外なら、元の位置から少しずらして置く。
+    // 貼り付け。重心がカーソルの作業面上の位置へ来るように置き、貼った点を選択にする
+    // （そのままギズモで動かせる）。カーソルが面の外なら、元の位置から少しずらして置く。
     const auto pasteClipboard = [&](bool atCursor, float atU, float atV) {
         if (m_pathClipboard.points.empty()) {
             return;
@@ -1457,8 +1368,6 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
             selectOnly(0);
             state.selected = pasted;
             changed = true;
-            // 貼った直後は「動かした」のと同じ扱い。経路探索の鎖は貼った所で計算し直す。
-            released = true;
         }
     };
 
@@ -1636,13 +1545,9 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
         m_graph.MarkDirty();
         MarkDocumentChanged();
     }
-    // 両端が動いたエッジの経路を作り直す。ドラッグ中は離すまで待つ（毎フレーム探索しない）。
-    // 離した時点の計算し直しは、ドラッグと同じアンドゥの段に畳む。
+    // 離した時点の変更（吸着による合体など）は、ドラッグと同じアンドゥの段に畳む。
     if (released) {
         m_documentJoinsEdit = true;
-    }
-    if ((changed || released) && !state.dragging && !state.gizmoDragging) {
-        RecomputePathRoutes(node, false, nullptr);
     }
 }
 
@@ -1668,7 +1573,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(viewportMin, viewportMax, true);
-    const bool profileMode = path.worldSpace && !path.surfaceSpace && state.profileMode != PathEditState::kProfilePoints;
+    const bool profileMode = !path.surfaceSpace && state.profileMode != PathEditState::kProfilePoints;
 
     // 色。ピンの色（水色）と同じ系統で、状態は明るさで分ける。
     const ImU32 lineColor = IM_COL32(120, 200, 240, 220);
@@ -1728,18 +1633,6 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
         }
     }
 
-    // --- 経路の内部点 -----------------------------------------------------------
-    // 経路探索が打った点。選べないので小さく、線と同じ色で。
-    for (const PathScreenEdge& edge : cache.edges) {
-        for (size_t i = 0; i < edge.waypoints.size(); ++i) {
-            if (!edge.waypointVisible[i]) {
-                continue;
-            }
-            drawList->AddCircleFilled(edge.waypoints[i], ui::Scaled(3.0f), lineShadow, 12);
-            drawList->AddCircleFilled(edge.waypoints[i], ui::Scaled(2.0f), lineColor, 12);
-        }
-    }
-
     // --- 曲線（本線） -----------------------------------------------------------
     for (size_t s = 0; s < cache.curves.size(); ++s) {
         const PathScreenCurve& curve = cache.curves[s];
@@ -1783,7 +1676,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
             float u = 0.0f;
             float v = 0.0f;
             if (PickTerrainUv(ImGui::GetIO().MousePos, viewportMin, viewportMax, u, v)) {
-                // 地形に沿わせて描く（空中を横切る直線だと距離感が狂う）。
+                // 面に沿わせて描く（面上のパスで空中を横切る直線だと距離感が狂う）。
                 const graph::PathPoint* from = path.FindPoint(anchor);
                 if (from != nullptr && tail != nullptr && tail->visible) {
                     constexpr int kSegments = 16;
@@ -1847,8 +1740,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
         const std::vector<graph::PathElementId> movable = PathMovablePoints(
             path, state.selected, state.selectedEdges, state.selectedStrandInterior);
         const PathGizmoScreen gizmo =
-            BuildPathGizmo(path, movable, path.worldSpace ? 1.0f : m_renderer.PlaneSize(), viewProjection, viewportMin,
-                           size, worldOf);
+            BuildPathGizmo(path, movable, viewProjection, viewportMin, size, worldOf);
         if (gizmo.valid) {
             const ImU32 axisColors[3] = {IM_COL32(226, 96, 96, 255), IM_COL32(96, 146, 226, 255), IM_COL32(96, 206, 116, 255)};
             const int active = state.gizmoDragging ? state.gizmoAxis : state.gizmoHover;
@@ -2001,65 +1893,7 @@ bool Application::DrawPathSettings(graph::Node& node) {
     ui::SectionHeader("パス");
     if (ui::BeginPropertyTable("graphPathRows")) {
         ui::PropertyValue("要素", "点 %zu / エッジ %zu", path.points.size(), path.edges.size());
-        ui::PropertyValue("座標", "%s", path.surfaceSpace ? "面上（横位置 / 実距離 m）" : (path.worldSpace ? "実寸（m）" : "旧地形UV"));
-        if (!path.worldSpace) {
-            ui::PropertyLabelEmpty("pathToWorld");
-            if (ui::Button("実寸カーブへ変換", ui::kWideButtonWidth)) {
-                // 経路の内部点を通常の制御点へ固定してから、全点を実寸へ変換する。
-                std::vector<graph::PathEdge> edges;
-                for (const auto& source : path.edges) {
-                    const auto controls = graph::PathEdgeControlPoints(path, source);
-                    auto from = source.from;
-                    for (size_t i = 1; i < controls.size(); ++i) {
-                        auto to = source.to;
-                        if (i + 1 < controls.size()) {
-                            auto point = controls[i];
-                            point.id = path.nextId++;
-                            to = point.id;
-                            path.points.push_back(point);
-                        }
-                        auto edge = source;
-                        edge.id = i == 1 ? source.id : path.nextId++;
-                        edge.from = from;
-                        edge.to = to;
-                        edge.route = graph::PathRoute::None;
-                        edge.routed = false;
-                        edge.waypoints.clear();
-                        edges.push_back(edge);
-                        from = to;
-                    }
-                }
-                path.edges = std::move(edges);
-                for (auto& point : path.points) {
-                    const auto world = PathWorldPosition(point.x, point.z, point.y);
-                    point.x = world.x;
-                    point.z = world.z;
-                    point.y = world.y;
-                }
-                path.worldSpace = true;
-                m_pathEdit = PathEditState{};
-                m_pathEdit.nodeId = node.id;
-                changed = true;
-            }
-            ui::PropertyEnd();
-        }
-        if (!path.worldSpace) {
-            // ここは**新しく置く点の初期値**。既にある点には効かない（点ごとの値か、鎖の上書きで決める）。
-            changed |= ui::PropertyFloat("幅（初期値）", &path.defaultWidthMeters, 0.5f, 2000.0f,
-                                         defaults.defaultWidthMeters,
-                                         "新しく置く点の幅（m）。既にある点には効かない。"
-                                         "マスクではこの幅の内側が 1 になる",
-                                         "%.1f m", ImGuiSliderFlags_Logarithmic);
-            changed |= ui::PropertyFloat("フェザー（初期値）", &path.defaultFeatherMeters, 0.0f,
-                                         2000.0f, defaults.defaultFeatherMeters,
-                                         "新しく置く点のフェザー（m）。既にある点には効かない。"
-                                         "幅の外側をこの距離で 0 へ落とす",
-                                         "%.1f m", ImGuiSliderFlags_Logarithmic);
-            changed |= ui::PropertyFloat("強さ（初期値）", &path.defaultIntensity, 0.0f, 1.0f,
-                                         defaults.defaultIntensity,
-                                         "新しく置く点のマスクの強さ。既にある点には効かない",
-                                         "%.2f");
-        }
+        ui::PropertyValue("座標", "%s", path.surfaceSpace ? "面上（横位置 / 実距離 m）" : "実寸（m）");
         ui::PropertyLabelEmpty("pathClear");
         ImGui::BeginDisabled(path.points.empty());
         if (ui::Button("全部消す", ui::kWideButtonWidth)) {
@@ -2071,27 +1905,11 @@ bool Application::DrawPathSettings(graph::Node& node) {
         }
         ImGui::EndDisabled();
         ui::PropertyEnd();
-        // 経路探索。上流の地形を変えても勝手には作り直さない（ここで指示する）。
-        size_t routedEdges = 0;
-        for (const graph::PathEdge& edge : path.edges) {
-            if (edge.route != graph::PathRoute::None) {
-                ++routedEdges;
-            }
-        }
-        if (routedEdges > 0) {
-            ui::PropertyValue("経路探索", "エッジ %zu 本（古い %zu 本）", routedEdges,
-                              graph::CountStalePathRoutes(path));
-            ui::PropertyLabelEmpty("pathRouteAll");
-            if (ui::Button("経路をすべて再計算", ui::kWideButtonWidth)) {
-                RecomputePathRoutes(node, true, nullptr);
-            }
-            ui::PropertyEnd();
-        }
         ui::EndPropertyTable();
     }
 
     // --- 道路線形（縦断曲線とバンク角） ------------------------------------------------
-    if (path.worldSpace && !path.surfaceSpace) {
+    if (!path.surfaceSpace) {
         if (m_pathEdit.nodeId != node.id) {
             m_pathEdit = PathEditState{};
             m_pathEdit.nodeId = node.id;
@@ -2188,7 +2006,7 @@ bool Application::DrawPathSettings(graph::Node& node) {
         graph::PathPoint edit = *selectedPoints.front();
         bool pointChanged = false;
         if (ui::BeginPropertyTable("graphPathPointRows")) {
-            if (path.worldSpace) {
+            {
                 float xyz[] = {edit.x, edit.y, edit.z};
                 constexpr float defaultXyz[] = {0.0f, 0.0f, 0.0f};
                 const unsigned axes = ui::PropertyFloat3Input(path.surfaceSpace ? "横位置/高さ/距離 (m)" : "位置 (m)", xyz, defaultXyz,
@@ -2201,7 +2019,7 @@ bool Application::DrawPathSettings(graph::Node& node) {
                 }
                 changed |= axes != 0;
             }
-            if (path.worldSpace && !path.surfaceSpace) {
+            if (!path.surfaceSpace) {
                 static const char* const kStopLineLabels[] = {"なし", "進行方向", "対向", "両方"};
                 int stop = static_cast<int>(edit.stopLine);
                 if (ui::PropertyCombo("停止線", &stop, kStopLineLabels, IM_ARRAYSIZE(kStopLineLabels), 0,
@@ -2211,29 +2029,11 @@ bool Application::DrawPathSettings(graph::Node& node) {
                     pointChanged = true;
                 }
             }
-            if (!path.worldSpace) {
-                pointChanged |= ui::PropertyFloat("幅", &edit.widthMeters, 0.5f, 2000.0f,
-                                                  path.defaultWidthMeters, "この点での幅（m）",
-                                                  "%.1f m", ImGuiSliderFlags_Logarithmic);
-                pointChanged |= ui::PropertyFloat("フェザー", &edit.featherMeters, 0.0f, 2000.0f,
-                                                  path.defaultFeatherMeters,
-                                                  "この点でのフェザー（m）", "%.1f m",
-                                                  ImGuiSliderFlags_Logarithmic);
-                pointChanged |= ui::PropertyFloat("強さ", &edit.intensity, 0.0f, 1.0f,
-                                                  path.defaultIntensity, "この点でのマスクの強さ",
-                                                  "%.2f");
-                pointChanged |= ui::PropertyFloat("高さのずれ", &edit.y, -200.0f, 200.0f, 0.0f,
-                    "地形からの高さのずれ（m）", "%.1f m");
-            }
             ui::EndPropertyTable();
         }
         if (pointChanged) {
             for (graph::PathPoint* point : selectedPoints) {
-                point->widthMeters = edit.widthMeters;
-                point->featherMeters = edit.featherMeters;
-                point->intensity = edit.intensity;
                 point->stopLine = edit.stopLine;
-                if (!path.worldSpace) point->y = edit.y;
             }
             changed = true;
         }
@@ -2254,21 +2054,10 @@ bool Application::DrawPathSettings(graph::Node& node) {
             graph::PathCurve curve = edges.front()->curve;
             float rounding = edges.front()->rounding;
             float clothoidRatio = edges.front()->clothoidRatio;
-            graph::PathRoute route = edges.front()->route;
-            float maxGrade = edges.front()->maxGradePercent;
-            bool overrideValues = edges.front()->overrideValues;
-            float edgeWidth = edges.front()->widthMeters;
-            float edgeFeather = edges.front()->featherMeters;
-            float edgeIntensity = edges.front()->intensity;
             bool mixed = false;
             for (const graph::PathEdge* edge : edges) {
                 if (edge->curve != curve || std::abs(edge->rounding - rounding) > 1e-4f ||
-                    std::abs(edge->clothoidRatio - clothoidRatio) > 1e-4f ||
-                    (!path.worldSpace && (edge->route != route || std::abs(edge->maxGradePercent - maxGrade) > 1e-4f ||
-                    edge->overrideValues != overrideValues ||
-                    std::abs(edge->widthMeters - edgeWidth) > 1e-4f ||
-                    std::abs(edge->featherMeters - edgeFeather) > 1e-4f ||
-                    std::abs(edge->intensity - edgeIntensity) > 1e-4f))) {
+                    std::abs(edge->clothoidRatio - clothoidRatio) > 1e-4f) {
                     mixed = true;
                 }
             }
@@ -2303,73 +2092,6 @@ bool Application::DrawPathSettings(graph::Node& node) {
                     }
                     changed = true;
                 }
-                if (!path.worldSpace) {
-                    // 幅の上書き。入れると鎖の上では点の値を補間せず、ここの値で一定になる。
-                    bool valuesChanged = ui::PropertyBool(
-                        "幅を鎖で決める", &overrideValues, false,
-                        "この鎖の上では点の幅 / フェザー / 強さを使わず、下の値で一定にする。"
-                        "点の値は残るので、切れば戻る。高さのずれは点ごとのまま");
-                    if (overrideValues) {
-                        valuesChanged |= ui::PropertyFloat(
-                            "幅", &edgeWidth, 0.5f, 2000.0f, path.defaultWidthMeters,
-                            "この鎖の幅（m）。マスクではこの幅の内側が 1 になる", "%.1f m",
-                            ImGuiSliderFlags_Logarithmic);
-                        valuesChanged |= ui::PropertyFloat(
-                            "フェザー", &edgeFeather, 0.0f, 2000.0f, path.defaultFeatherMeters,
-                            "この鎖のフェザー（m）。幅の外側をこの距離で 0 へ落とす", "%.1f m",
-                            ImGuiSliderFlags_Logarithmic);
-                        valuesChanged |= ui::PropertyFloat("強さ", &edgeIntensity, 0.0f, 1.0f,
-                                                           path.defaultIntensity,
-                                                           "この鎖のマスクの強さ", "%.2f");
-                    }
-                    if (valuesChanged) {
-                        for (graph::PathEdge* edge : edges) {
-                            edge->overrideValues = overrideValues;
-                            edge->widthMeters = edgeWidth;
-                            edge->featherMeters = edgeFeather;
-                            edge->intensity = edgeIntensity;
-                        }
-                        changed = true;
-                    }
-                }
-                if (!path.worldSpace) {
-                // 経路探索。鎖のエッジ全部に同じ設定を入れ、変えたらすぐ計算し直す。
-                static const char* const kRouteLabels[] = {"なし", "道路（許容勾配で探す）",
-                                                           "流れ（下る。川 / 氷河）"};
-                int routeIndex = static_cast<int>(route);
-                bool routeChanged = ui::PropertyCombo(
-                    "経路探索", &routeIndex, kRouteLabels, IM_ARRAYSIZE(kRouteLabels), 0,
-                    "両端の点の間の経路を Base に繋いだ地形から探し、内部の点を自動で打つ。"
-                    "置いた点は動かない。点を動かすと作り直す。上流の地形を変えたときは"
-                    "再計算のボタンで。道路は許容勾配を超えた分をペナルティにし、上りも下りも"
-                    "同じ扱い。流れは向き（from → to）に下り、上りを嫌って低い所（谷底）を好む");
-                route = static_cast<graph::PathRoute>(routeIndex);
-                if (route == graph::PathRoute::Road) {
-                    routeChanged |= ui::PropertyFloat(
-                        "許容勾配", &maxGrade, 0.5f, 60.0f, 10.0f,
-                        "これを超える勾配にペナルティ（%）。超えるほど遠回り（つづら折れ）を選ぶ",
-                        "%.1f %%", ImGuiSliderFlags_Logarithmic);
-                }
-                if (routeChanged) {
-                    for (graph::PathEdge* edge : edges) {
-                        edge->route = route;
-                        edge->maxGradePercent = maxGrade;
-                        edge->routed = false;
-                        if (route == graph::PathRoute::None) {
-                            edge->waypoints.clear();
-                        }
-                    }
-                    changed = true;
-                    RecomputePathRoutes(node, false, &m_pathEdit.selectedEdges);
-                }
-                if (route != graph::PathRoute::None) {
-                    ui::PropertyLabelEmpty("pathRouteStrand");
-                    if (ui::Button("この鎖を再計算", ui::kWideButtonWidth)) {
-                        RecomputePathRoutes(node, true, &m_pathEdit.selectedEdges);
-                    }
-                    ui::PropertyEnd();
-                }
-                }
                 ui::PropertyLabelEmpty("pathEdgeButtons");
                 if (ui::Button("向きを反転")) {
                     for (graph::PathEdge* edge : edges) {
@@ -2393,171 +2115,14 @@ bool Application::DrawPathSettings(graph::Node& node) {
                 ui::EndPropertyTable();
             }
             if (mixed) {
-                ui::HintText(path.worldSpace
-                    ? "鎖の中で曲線の設定が混在している。変えると全部に入る"
-                    : "鎖の中で曲線 / 幅 / 経路探索の設定が混在している。変えると全部に入る");
+                ui::HintText("鎖の中で曲線の設定が混在している。変えると全部に入る");
             }
         }
     }
 
     ui::HintText(path.surfaceSpace ? "面上のパス。路面の上で Ctrl＋クリックして点を置き、路面に沿ってドラッグする。Decal の Path へ繋ぐ。" :
-                 path.worldSpace ? "Ctrl＋クリックで点を追加。グリッド外にも配置できる。高さは選択した点のYで編集する。Surface に Road を繋ぐと面上のパスになる。" :
-                 "ビューポートで編集する（操作はビューポートの下に出る）。"
-                 "地形はプレビュー中のものに沿う。Base に繋いだ地形を見るには、"
-                 "このノードをダブルクリック");
+                 "Ctrl＋クリックで点を追加。グリッド外にも配置できる。高さは選択した点のYで編集する。Surface に Road を繋ぐと面上のパスになる。");
     return changed;
-}
-
-// --- 経路探索 -----------------------------------------------------------------
-
-bool Application::BakePathRouteTerrain(const graph::Node& node) {
-    PathRouteTerrainCache& cache = m_pathRouteTerrain;
-    cache.checkedRevision = m_graph.Revision();
-    if (cache.nodeId != node.id) {
-        cache.nodeId = node.id;
-        cache.valid = false;
-        cache.stackHash = 0;
-    }
-    // Base が繋がっていなければ焼かない（繋がっていないと出力のチェーンに落ちるが、
-    // そこには Path 自身の結果が入りうるので、自分の結果を読む循環になる）。
-    bool baseConnected = false;
-    for (const graph::Pin& pin : node.inputs) {
-        if (pin.valueType != graph::ValueType::Material) {
-            continue;
-        }
-        for (const graph::Link& link : m_graph.Links()) {
-            if (link.endPin == pin.id) {
-                baseConnected = true;
-            }
-        }
-    }
-    if (!baseConnected) {
-        cache.valid = false;
-        cache.stackHash = 0;
-        return false;
-    }
-    // Base のチェーンをレイヤー列へ落とす（プレビューと同じ経路）。実寸はプレビュー設定の
-    // ジオメトリの値。
-    graph::CompiledGraph compiled = m_graph.CompileLayersTo(node.id);
-    compositor::MaterialStack stack;
-    stack.Layers() = std::move(compiled.layers);
-    const float sizeMeters = m_renderer.PlaneSize();
-    const float heightMeters = m_renderer.DisplacementScale();
-    stack.SetTerrainScale(sizeMeters, heightMeters);
-    const uint64_t hash = compositor::HashStackHeightState(stack);
-    if (cache.valid && cache.stackHash == hash) {
-        return true;
-    }
-
-    // 経路探索用の解像度。プレビューの CPU 側のハイト（512²）と同じ。1 km の地形で 1 セル 2 m。
-    constexpr uint32_t kResolution = 512;
-    if (m_pathRouteEvaluator.Resolution() != kResolution) {
-        if (!m_pathRouteEvaluator.Create(m_device, kResolution)) {
-            TG_LOG_WARN("経路探索用の評価器を作れませんでした");
-            cache.valid = false;
-            return false;
-        }
-        m_pathRouteEvaluator.SetTileSize(kResolution);
-    }
-    std::vector<compositor::TileRect> tiles(1);
-    tiles[0].width = kResolution;
-    tiles[0].height = kResolution;
-    bool evaluated = false;
-    const bool submitted = m_device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
-        PIXBeginEvent(commandList, PIX_COLOR(120, 200, 240), "PathRouteTerrain");
-        evaluated = m_pathRouteEvaluator.Evaluate(m_device, m_pipelineCache, commandList, stack,
-                                                  m_textureLibrary, m_materialLibrary, tiles);
-        PIXEndEvent(commandList);
-    });
-    if (!submitted || !evaluated ||
-        !m_pathRouteEvaluator.ReadbackHeight(m_device, cache.heightfield)) {
-        TG_LOG_WARN("経路探索用の地形を焼けませんでした");
-        cache.valid = false;
-        return false;
-    }
-    cache.valid = true;
-    cache.stackHash = hash;
-    cache.sizeMeters = sizeMeters;
-    cache.heightMeters = heightMeters;
-    return true;
-}
-
-void Application::ProcessPendingPathRoutes() {
-    graph::Node* node = CurrentPathNode();
-    if (node == nullptr) {
-        // Path ノードを編集していない間は何もしない（写しは残しておく）。
-        return;
-    }
-    if (std::get<graph::PathNodeSettings>(node->settings).path.worldSpace) return;
-    // 上流が変わっていたら焼き直す。グラフの改版ごとに 1 回だけ確かめる
-    // （パスの編集でも改版は進むが、Height に効く状態のハッシュが同じなら焼かない）。
-    if (m_pathRouteTerrain.nodeId != node->id ||
-        m_pathRouteTerrain.checkedRevision != m_graph.Revision()) {
-        BakePathRouteTerrain(*node);
-    }
-    if (m_pathRouteRequest.pending && m_pathRouteRequest.nodeId == node->id) {
-        m_pathRouteRequest.pending = false;
-        if (m_pathRouteTerrain.valid) {
-            RecomputePathRoutes(*node, m_pathRouteRequest.force,
-                                m_pathRouteRequest.edges.empty() ? nullptr
-                                                                 : &m_pathRouteRequest.edges);
-        } else {
-            TG_LOG_WARN("経路探索には Base に地形を繋いでください");
-        }
-        m_pathRouteRequest.force = false;
-        m_pathRouteRequest.edges.clear();
-    }
-}
-
-void Application::RecomputePathRoutes(graph::Node& node, bool force,
-                                      const std::vector<graph::PathElementId>* edges) {
-    auto* settings = std::get_if<graph::PathNodeSettings>(&node.settings);
-    if (settings == nullptr) {
-        return;
-    }
-    graph::PathSettings& path = settings->path;
-    if (path.worldSpace) return;
-    bool anyRouted = false;
-    for (const graph::PathEdge& edge : path.edges) {
-        if (edge.route != graph::PathRoute::None) {
-            anyRouted = true;
-            break;
-        }
-    }
-    if (!anyRouted) {
-        return;
-    }
-    const PathRouteTerrainCache& cache = m_pathRouteTerrain;
-    if (!cache.valid || cache.nodeId != node.id) {
-        // 地形の写しがまだ無い。次のフレームの前に焼いてから計算する。
-        PathRouteRequest& request = m_pathRouteRequest;
-        if (request.pending && request.nodeId == node.id) {
-            request.force |= force;
-            // どちらかが「全部」なら全部。
-            if (edges == nullptr || request.edges.empty()) {
-                request.edges.clear();
-            } else {
-                request.edges.insert(request.edges.end(), edges->begin(), edges->end());
-            }
-        } else {
-            request.pending = true;
-            request.nodeId = node.id;
-            request.force = force;
-            request.edges = (edges != nullptr) ? *edges : std::vector<graph::PathElementId>{};
-        }
-        return;
-    }
-    graph::PathRouteTerrain terrain;
-    terrain.resolution = cache.heightfield.resolution;
-    terrain.heights = cache.heightfield.values.data();
-    terrain.sizeMeters = cache.sizeMeters;
-    terrain.heightMeters = cache.heightMeters;
-    const size_t routed = graph::RoutePathEdges(path, terrain, force, edges);
-    if (routed > 0) {
-        m_graph.MarkDirty();
-        MarkDocumentChanged();
-        TG_LOG_INFO("経路を計算しました: %zu 本", routed);
-    }
 }
 
 }  // namespace tg

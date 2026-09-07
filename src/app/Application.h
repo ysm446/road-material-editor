@@ -10,7 +10,6 @@
 #include "graph/Road.h"
 #include "app/UndoHistory.h"
 #include "io/AppSettings.h"
-#include "io/MaterialExport.h"
 #include "io/RecentFiles.h"
 #include "renderer/MaterialSphere.h"
 #include "renderer/PreviewRenderer.h"
@@ -44,9 +43,6 @@ struct StartupOptions {
     std::vector<std::filesystem::path> texturePaths;
     // 起動時に開くプロジェクト (.tgproj)。空なら既定のスタックで始める。
     std::filesystem::path projectPath;
-    // 指定すると、数フレーム描いてから合成結果を画像へ書き出して終了する。
-    // 対話せずに書き出しを確かめるための開発用オプション。
-    std::filesystem::path exportDirectory;
     // 指定すると、数フレーム描いてからプロジェクトを保存して終了する。
     // 保存と読み込みを対話なしで確かめるための開発用オプション。
     std::filesystem::path saveProjectPath;
@@ -100,8 +96,8 @@ private:
     void DrawLightingPanel();
     // 実行状況の情報ウィンドウ（ウィンドウ > 情報）。常設ドックには置かない。
     void DrawInfoWindow();
-    // ノードグラフパネル。サーフェス / シェイプ / 水面をノードとして繋ぎ、
-    // 出力ノードへ届いたチェーンをレイヤー列へコンパイルしてプレビューに使う。
+    // ノードグラフパネル。Path / Road / Surface などを繋ぎ、
+    // Mesh Output へ届いた鎖を道路メッシュにしてビューポートに出す。
     void DrawGraphPanel();
     // エディタのコンテキストを破棄する。Shutdown から呼ぶ。
     void DestroyGraphEditor();
@@ -113,12 +109,9 @@ private:
     void DrawGraphEditor();
     // グラフのノード 1 枚。カード・ピン・リンクの当たり判定を描く。
     void DrawGraphNode(const graph::Node& node);
-    // ノードに出す合成結果のサムネイル（そのノードのレイヤーまで合成した見た目）。
-    D3D12_GPU_DESCRIPTOR_HANDLE GraphLayerThumbnail(graph::GraphId nodeId) const;
     // グラフノードのレイヤー設定のプロパティ行。変更があれば true。
     bool DrawLayerSettings(compositor::MaterialLayer& layer);
-    // グラフの変更をコンパイル結果（m_graphStack）へ反映する。フレームの頭で呼ぶ。
-    void SyncGraphStack();
+    // グラフの変更をメッシュシーンへ反映する。フレームの頭（フレームの外）で呼ぶ。
     void SyncMeshGraph();
     uint64_t m_meshGraphRevision = 0;
     // 直近にメッシュシーンへ出した「途中のメッシュノード」。0 なら Mesh Output の鎖。
@@ -130,9 +123,9 @@ private:
     // 控えたノードを貼る。viewCenter は今のキャンバスの中央（キャンバス座標）で、
     // 貼った集合の中心をそこへ置く。相対の配置は保つ。
     void PasteGraphNodes(const ImVec2& viewCenter);
-    // ビューポートに出すノードを決める。出力ノードや無効な ID は
-    // 「出力ノードのチェーン」（0）に落とす。
-    // outputPin は**どの出力を見るか**。0 なら最初の出力（レイヤーなら Result）。
+    // ビューポートに出すノードを決める。メッシュノード以外や無効な ID は
+    // 「Mesh Output の鎖」（0）に落とす。
+    // outputPin は**どの出力を見るか**。0 なら最初の出力。
     void SetPreviewGraphNode(graph::GraphId nodeId, graph::GraphId outputPin = 0);
     // 材質スロット（座標・反復長・ブレンド幅）の行。Road と Shoulder で共通。変更があれば真。
     bool DrawMaterialSlotRows(const graph::Node& node, bool* layerWorldUv, float* layerUvRepeatMeters,
@@ -179,9 +172,7 @@ private:
     void DrawTexturePreviewWindow();
     // アプリの設定ウィンドウ（ウィンドウ > 設定）。プロジェクトに保存しない設定を置く。
     void DrawSettingsWindow();
-    // 合成結果を画像へ書き出すウィンドウ（ファイル > テクスチャを書き出す…）。
-    void DrawExportWindow();
-    // 開発用オプション（スクリーンショット / 書き出し / 保存）で動いているか。
+    // 開発用オプション（スクリーンショット / 保存）で動いているか。
     // 真のときはフレームレートを落とさない。
     bool Headless() const;
     // 設定から決まる UI の拡大率。追従なら Windows の表示スケール。
@@ -263,24 +254,11 @@ private:
                                 const ImVec2& viewportMin, const ImVec2& viewportMax);
     void DrawPathOverlay(const graph::Node& node, const ImVec2& viewportMin,
                          const ImVec2& viewportMax);
-    // カーソル位置を地形へ投影する。CPU 側のハイトへレイを飛ばして最初の交点を返す。
-    // 地形に当たらなければ偽。
+    // カーソル位置をパスの座標へ投影する。実寸のパスは選択した点の高さの水平面、
+    // 面上のパスは道路面との交点（横位置 / 実距離）。当たらなければ偽。
     bool PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin, const ImVec2& viewportMax,
                        float& outU, float& outV) const;
-    // --- 経路探索（ApplicationPathEdit.cpp） ---
-    // Path ノードの Base に繋いだチェーンを 512² で焼いて、経路探索用の地形の写しにする。
-    // 上流が前回と同じ（Height に効く状態のハッシュが同じ）なら焼かない。
-    // GPU 待機を伴うので**フレームの外で呼ぶ**。Base が繋がっていなければ偽。
-    bool BakePathRouteTerrain(const graph::Node& node);
-    // 編集中の Path ノードの地形の写しを上流に追従させ、先送りにした再計算を片付ける。
-    // フレームの外で呼ぶ。
-    void ProcessPendingPathRoutes();
-    // 経路探索が有効なエッジの経路を計算し直す。既定は経路が古い（両端が動いた / 未計算）
-    // エッジだけ。force で全部、edges で対象を絞る。地形の写しがまだ無ければ先送りにし、
-    // 次のフレームの前に焼いてから計算する。変更があれば文書の変更を記録する。
-    void RecomputePathRoutes(graph::Node& node, bool force,
-                             const std::vector<graph::PathElementId>* edges);
-    // 正規化 UV をワールド座標へ。高さは CPU 側のハイトから引く。
+    // パスの座標（x, z, y）をワールド座標へ。面上のパスは道路面から起こす。
     DirectX::XMFLOAT3 PathWorldPosition(float u, float v, float heightOffsetMeters) const;
     // Path ノードのプロパティ（グラフパネルのプロパティ欄から呼ぶ）。変更があれば true。
     bool DrawPathSettings(graph::Node& node);
@@ -295,23 +273,9 @@ private:
     // 天球プレビューの球。同じく窓を開いている間だけ描く。
     renderer::SkySphere m_skySphere;
     // --- ノードグラフ -------------------------------------------------------
-    // 合成はグラフが唯一の入口。グラフをレイヤー列へコンパイルして
-    // 既存の GPU 評価器で評価する。m_graphStack はそのコンパイル結果。
+    // 道路はグラフが唯一の入口。Mesh Output へ届いた鎖をメッシュシーンにして
+    // レンダラへ渡す（SyncMeshGraph）。材質の合成はメッシュごとにレンダラ側で評価する。
     graph::NodeGraph m_graph = graph::NodeGraph::CreateDefault();
-    compositor::MaterialStack m_graphStack;
-    uint64_t m_compiledGraphRevision = 0;
-    // 前回コンパイルしたプレビュー対象。選択が変わっても再コンパイルするために持つ。
-    graph::GraphId m_compiledGraphTarget = 0;
-    graph::GraphId m_compiledGraphTargetPin = 0;
-    // コンパイルしたレイヤーの出どころを、スタックの版ごとに控える。評価は非同期なので、
-    // 表側にある結果はいまのコンパイルより古いことがある。ノードのサムネイルは
-    // 「表側の結果の版」に合う対応で引かないと、別のノードの模様が出る。
-    struct GraphLayerSources {
-        uint64_t revision = 0;
-        // レイヤーごとの元ノード（添字はレイヤーの添字）。結果サムネイル用。
-        std::vector<graph::GraphId> layers;
-    };
-    std::vector<GraphLayerSources> m_graphLayerSources;
     graph::GraphId m_selectedGraphNode = 0;
     // エディタで選ばれているノード全部。コピーはこれを見る
     // （プロパティに出すのは先頭の 1 つ = m_selectedGraphNode）。
@@ -339,12 +303,10 @@ private:
     std::vector<GraphClipboardNode> m_graphClipboard;
     // 貼るたびに位置をずらす回数。コピーし直すと 0 に戻す。
     int m_graphPasteCount = 0;
-    // ビューポートに出しているノード。**選択とは別に持つ。**
-    // 結果を見ながら別のノードのプロパティをいじれるようにするため
-    // （terrain-editor と同じ作法）。0 は出力ノードのチェーン。
+    // ビューポートに出しているメッシュノード。**選択とは別に持つ。**
+    // 結果を見ながら別のノードのプロパティをいじれるようにするため。0 は Mesh Output の鎖。
     graph::GraphId m_previewGraphNode = 0;
     // プレビューしている出力ピン。0 なら最初の出力。
-    // **堆積は Result と Mask を出す**ので、ノードだけでは決まらない。
     graph::GraphId m_previewGraphPin = 0;
     // 出力ピンの「クリック」を拾うための押した位置。ドラッグ（リンク作成）と
     // 区別するために、押した / 離したが同じピンで、ほとんど動いていないときだけ
@@ -417,7 +379,7 @@ private:
         ImVec2 gizmoPressPos{};
         ImVec2 gizmoAxisDirection{};
         float gizmoUnitsPerPixel = 0.0f;
-        // 平面ハンドルで掴んだときの地形上の UV。動かす量はここからの差。
+        // 平面ハンドルで掴んだときの作業面上の位置。動かす量はここからの差。
         float gizmoPressU = 0.0f;
         float gizmoPressV = 0.0f;
         // 掴んだときの各点の位置。差分を足すのではなく、ここから置き直す（丸め誤差を溜めない）。
@@ -469,30 +431,6 @@ private:
     // パスのクリップボード（アプリ内）。鎖や点の集合をコピーして、カーソルの所へ貼る。
     // 別の Path ノードへも貼れる。
     graph::PathClip m_pathClipboard;
-    // 経路探索が読む地形。**Path ノードの Base に繋いだチェーン**を、プレビューとは別に
-    // 焼いた Height の写し（プレビューが別の地形を見ていても Base を使う）。
-    // 上流を変えても経路は勝手に作り直さないが、写し自体は編集中に追従させておく
-    // （次の編集や再計算のボタンが今の地形を使えるように）。
-    struct PathRouteTerrainCache {
-        graph::GraphId nodeId = 0;
-        uint64_t stackHash = 0;        // 焼いたときの上流の Height に効く状態
-        uint64_t checkedRevision = 0;  // この改版で上流を確かめた（改版ごとに 1 回）
-        bool valid = false;
-        compositor::CpuHeightfield heightfield;
-        float sizeMeters = 1024.0f;
-        float heightMeters = 200.0f;
-    };
-    PathRouteTerrainCache m_pathRouteTerrain;
-    // 経路探索用の評価器（512²、同期）。最初に使うときに作る。
-    compositor::MaterialEvaluator m_pathRouteEvaluator;
-    // フレームの中で要求されたが、地形の写しが無くて先送りにした再計算。
-    struct PathRouteRequest {
-        bool pending = false;
-        graph::GraphId nodeId = 0;
-        bool force = false;
-        std::vector<graph::PathElementId> edges;  // 空なら全部
-    };
-    PathRouteRequest m_pathRouteRequest;
     int m_selectedTexture = 0;
     // 拡大プレビューで出すチャンネル。0 = RGB、1..4 = R / G / B / A。
     // ORD のように 1 枚へ複数のマップを詰めたテクスチャの中身を確かめるためのもの。
@@ -538,11 +476,6 @@ private:
     // その窓の中身をこのフレームに描いたか。**折りたたまれていれば球も描かない。**
     // UI（DrawUi）はフレームの記録より前に走るので、その結果をここへ残して使う。
     bool m_materialSphereVisible = false;
-    // 書き出しウィンドウ。設定ウィンドウと同じくドックへは収めない。
-    bool m_showExport = false;
-    io::ExportSettings m_exportSettings;
-    // 書き出しの実行要求。**GPU 待機とファイル入出力を伴うのでフレームの外で処理する。**
-    bool m_pendingExport = false;
     std::filesystem::path m_pendingProjectSave;
     std::filesystem::path m_pendingProjectOpen;
     std::filesystem::path m_pendingMaterialExport;
@@ -573,7 +506,7 @@ private:
     // このフレームでレイヤーかマテリアルが変わったか。フレームの終わりに畳む。
     bool m_documentDirty = false;
     // このフレームの変更が「直前の編集の続き」であることの印。アンドゥの段を直前の
-    // 段に畳む（ドラッグを離した時点で走る経路の計算し直しが、別の段にならないように）。
+    // 段に畳む（ドラッグを離した時点の合体などが、別の段にならないように）。
     bool m_documentJoinsEdit = false;
     // -1 でアンドゥ、+1 でリドゥ。マテリアルの破棄を伴うのでフレームの外で処理する。
     int m_pendingHistoryStep = 0;

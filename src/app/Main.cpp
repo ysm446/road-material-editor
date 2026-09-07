@@ -20,7 +20,6 @@ namespace {
 // 使い方:
 //   road_editor.exe [--project <path>] [--save-project <path>]
 //                       [--hdri <path>] [--texture <path>]...
-//                       [--export <dir>]
 //                       [--screenshot <path>] [--screenshot-ui <path>]
 //                       [--screenshot-frame <n>]
 tg::StartupOptions ParseCommandLine() {
@@ -64,9 +63,6 @@ tg::StartupOptions ParseCommandLine() {
             ++i;
         } else if (argument == L"--screenshot" && (i + 1) < argc) {
             options.screenshotPath = argv[i + 1];
-            ++i;
-        } else if (argument == L"--export" && (i + 1) < argc) {
-            options.exportDirectory = argv[i + 1];
             ++i;
         } else if (argument == L"--screenshot-ui" && (i + 1) < argc) {
             options.uiScreenshotPath = argv[i + 1];

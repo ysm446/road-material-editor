@@ -147,7 +147,6 @@ bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t inn
         built.settings.layerBlendMode[slot] = settings.layerBlendMode[slot];
     }
     built.rowDistances = source.rowDistances;
-    built.left.worldSpace = built.right.worldSpace = true;
     const float drop = settings.crossSlopePercent * 0.01f;
     for (size_t row = 0; row < rows; ++row) {
         const XMFLOAT3& edge = sv[row * source.stride + edgeColumn].position;
@@ -228,7 +227,6 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
     result = {};
     error.clear();
     const auto fail = [&](const char* message) { error = message; return false; };
-    if (!path.worldSpace) return fail("旧地形Pathを実寸カーブへ変換してください");
     if (!std::isfinite(settings.widthMeters) || settings.widthMeters < 0.1f ||
         settings.widthMeters > 50.0f || !std::isfinite(settings.uvRepeatMeters) ||
         settings.uvRepeatMeters < 0.1f || settings.uvRepeatMeters > 100.0f)
@@ -294,7 +292,6 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
     RoadGeometry built;
     built.stride = stride;
     built.settings = settings;
-    built.left.worldSpace = built.right.worldSpace = true;
     float distance = 0.0f;
     for (size_t i = 0; i < centers.size(); ++i) {
         XMVECTOR right = Load(rights[std::min(i, rights.size()-1)]);
@@ -1191,7 +1188,7 @@ bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const
     error.clear();
     const auto fail = [&](const char* message) { error = message; return false; };
     if (road.stride < 2 || road.surface.vertices.size() < road.stride * 2) return fail("道路面が生成されていません");
-    if (!surfacePath.worldSpace || !surfacePath.surfaceSpace) return fail("Path の Surface に道路の RoadSurface を繋いでください");
+    if (!surfacePath.surfaceSpace) return fail("Path の Surface に道路の RoadSurface を繋いでください");
     if (!std::isfinite(settings.widthMeters) || settings.widthMeters < 0.05f || settings.widthMeters > 50.0f ||
         !std::isfinite(settings.liftMeters) || settings.liftMeters < 0.0f || settings.liftMeters > 0.1f ||
         !std::isfinite(settings.uvRepeatMeters) || settings.uvRepeatMeters < 0.05f || settings.uvRepeatMeters > 100.0f)

@@ -84,7 +84,6 @@ set(tg_sources
     src/app/Application.cpp
     src/app/Application.h
     src/app/ApplicationDocument.cpp
-    src/app/ApplicationExport.cpp
     src/app/ApplicationFileWork.cpp
     src/app/ApplicationGraphPanel.cpp
     src/app/ApplicationLayerPanel.cpp
@@ -106,7 +105,6 @@ set(tg_sources
     src/graph/NodeGraph.cpp
     src/graph/NodeGraph.h
     src/graph/Path.cpp
-    src/graph/PathRoute.cpp
     src/graph/Path.h
     src/compositor/MaterialEvaluator.cpp
     src/compositor/MaterialEvaluator.h
@@ -132,10 +130,6 @@ set(tg_sources
     src/core/Window.h
     src/io/AppSettings.cpp
     src/io/AppSettings.h
-    src/io/MaterialExport.cpp
-    src/io/MaterialExport.h
-    src/io/MeshSceneIo.cpp
-    src/io/MeshSceneIo.h
     src/io/ProjectIo.cpp
     src/io/ProjectIo.h
     src/io/RecentFiles.cpp
@@ -277,7 +271,6 @@ add_executable(road_editor_tests
     src/graph/RoadMask.cpp
     tests/MeshSceneTests.cpp
     src/renderer/MeshData.cpp
-    src/io/MeshSceneIo.cpp
     tests/TestSupport.h
     tests/FrameLimiterTests.cpp
     tests/NodeGraphTests.cpp

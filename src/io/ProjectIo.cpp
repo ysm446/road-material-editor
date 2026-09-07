@@ -1,5 +1,4 @@
 #include "io/ProjectIo.h"
-#include "io/MeshSceneIo.h"
 
 #include "core/PathUtf8.h"
 
@@ -36,7 +35,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 //    kind の無い旧ファイルは全レイヤーをサーフェスとして読む。
 // プロジェクトの版。4 で `layers` 節を廃止し、グラフ (`graph`) を唯一の合成にした
 // （旧ファイルの layers はグラフへ移行して読む）。
-// 5: 任意のメッシュシーン。旧ビルドが scene を無視して地形を表示することを防ぐ。
+// 5: 任意のメッシュシーン（手入力の scene。現在は読み飛ばす）。
 // 8: road / meshOutput ノード。9: Road の Material 入力。10: roadMarking ノード。
 // 11: Path の縦断ポイント・バンクポイント。旧ビルドが線形を平坦・水平に読むことを防ぐ。
 // 12: Road の材質スロット 2〜4 と roadMask ノード。旧ビルドがスロット 2〜4 のリンクを捨てて下地だけを出すことを防ぐ。
@@ -338,26 +337,21 @@ uint32_t ReadChannelMask(const json& node, const char* key, uint32_t fallback) {
     return mask;
 }
 
-// パス。実寸座標はposition:[X,Y,Z]。旧地形PathだけはUVと相対高さを維持する。
+// パス。座標は position:[X,Y,Z]（m）。worldSpace は旧ビルドとの互換のために常に真で書く
+// （旧地形 UV のパスは読まない）。
 json WritePath(const graph::PathSettings& path) {
     json node;
-    node["worldSpace"] = path.worldSpace;
+    node["worldSpace"] = true;
     if (path.surfaceSpace) node["surfaceSpace"] = true;
     json points = json::array();
     for (const graph::PathPoint& point : path.points) {
         json item;
         item["id"] = point.id;
-        if (path.worldSpace) {
-            item["position"] = json::array({point.x, point.y, point.z});
-        } else {
-            item["u"] = point.x;
-            item["v"] = point.z;
-        }
+        item["position"] = json::array({point.x, point.y, point.z});
         item["width"] = point.widthMeters;
         item["feather"] = point.featherMeters;
         item["intensity"] = point.intensity;
         if (point.stopLine != graph::PathStopLine::None) item["stopLine"] = static_cast<int>(point.stopLine);
-        if (!path.worldSpace) item["heightOffset"] = point.y;
         points.push_back(std::move(item));
     }
     node["points"] = std::move(points);
@@ -378,30 +372,14 @@ json WritePath(const graph::PathSettings& path) {
             item["feather"] = edge.featherMeters;
             item["intensity"] = edge.intensity;
         }
-        // 経路探索。内部点は導出したものだが保存する（地形を評価しないと作れないため）。
-        if (edge.route != graph::PathRoute::None) {
-            static const char* const kPathRouteNames[] = {"none", "road", "flow"};
-            item["route"] = EnumName(kPathRouteNames, static_cast<uint32_t>(edge.route));
-            item["maxGrade"] = edge.maxGradePercent;
-            if (edge.routed) {
-                item["routedFrom"] = json::array({edge.routedFromU, edge.routedFromV});
-                item["routedTo"] = json::array({edge.routedToU, edge.routedToV});
-                json waypoints = json::array();
-                for (const graph::PathRouteWaypoint& waypoint : edge.waypoints) {
-                    waypoints.push_back(waypoint.x);
-                    waypoints.push_back(waypoint.z);
-                }
-                item["waypoints"] = std::move(waypoints);
-            }
-        }
         edges.push_back(std::move(item));
     }
     node["edges"] = std::move(edges);
     node["defaultWidth"] = path.defaultWidthMeters;
     node["defaultFeather"] = path.defaultFeatherMeters;
     node["defaultIntensity"] = path.defaultIntensity;
-    // 道路線形。縦断ポイントとバンクポイントは実寸 Path だけが持つ（無ければ書かない）。
-    if (path.worldSpace) {
+    // 道路線形。縦断ポイントとバンクポイントは無ければ書かない。
+    {
         if (!path.verticalPoints.empty()) {
             json vertical = json::array();
             for (const graph::PathVerticalPoint& point : path.verticalPoints) {
@@ -434,8 +412,13 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
     if (node == nullptr || !node->is_object()) {
         return path;
     }
-    path.worldSpace = ReadBool(*node, "worldSpace", false);
-    path.surfaceSpace = path.worldSpace && ReadBool(*node, "surfaceSpace", false);
+    // 旧地形 UV のパス（worldSpace が偽）は読まない。地形の平面が無くなったので実寸へ直せない。
+    // キーは読んで判定だけに使い、点とエッジを捨てて空の実寸パスにする。
+    if (!ReadBool(*node, "worldSpace", false)) {
+        TG_LOG_WARN("旧地形 UV の Path は読み込めないため、空の Path にしました");
+        return path;
+    }
+    path.surfaceSpace = ReadBool(*node, "surfaceSpace", false);
     const graph::PathSettings defaults;
     path.defaultWidthMeters = ReadFloat(*node, "defaultWidth", defaults.defaultWidthMeters);
     path.defaultFeatherMeters = ReadFloat(*node, "defaultFeather", defaults.defaultFeatherMeters);
@@ -451,19 +434,14 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
             if (point.id <= 0) {
                 continue;
             }
-            point.x = (path.worldSpace ? ReadFloat(item, "u", 0.0f) : std::clamp(ReadFloat(item, "u", 0.5f), 0.0f, 1.0f));
-            point.z = (path.worldSpace ? ReadFloat(item, "v", 0.0f) : std::clamp(ReadFloat(item, "v", 0.5f), 0.0f, 1.0f));
             point.widthMeters = ReadFloat(item, "width", path.defaultWidthMeters);
             point.featherMeters = ReadFloat(item, "feather", path.defaultFeatherMeters);
             point.intensity = ReadFloat(item, "intensity", path.defaultIntensity);
             point.stopLine = static_cast<graph::PathStopLine>(std::clamp(ReadInt(item, "stopLine", 0), 0, 3));
-            point.y = ReadFloat(item, "heightOffset", 0.0f);
-            if (path.worldSpace) {
-                const auto position = ReadFloat3(item, "position", {point.x, point.y, point.z});
-                point.x = position.x;
-                point.y = position.y;
-                point.z = position.z;
-            }
+            const auto position = ReadFloat3(item, "position", {0.0f, 0.0f, 0.0f});
+            point.x = position.x;
+            point.y = position.y;
+            point.z = position.z;
             maxId = std::max(maxId, point.id);
             path.points.push_back(point);
         }
@@ -490,36 +468,7 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
                 edge.featherMeters = ReadFloat(item, "feather", path.defaultFeatherMeters);
                 edge.intensity = ReadFloat(item, "intensity", path.defaultIntensity);
             }
-            static const char* const kPathRouteNames[] = {"none", "road", "flow"};
-            edge.route = static_cast<graph::PathRoute>(EnumValue(
-                kPathRouteNames, item, "route", static_cast<uint32_t>(graph::PathRoute::None)));
-            edge.maxGradePercent = std::clamp(ReadFloat(item, "maxGrade", 10.0f), 0.1f, 100.0f);
-            // 内部点は「計算時の両端」が揃っているときだけ生かす。
-            const json* routedFrom = FindMember(item, "routedFrom");
-            const json* routedTo = FindMember(item, "routedTo");
-            const json* waypoints = FindMember(item, "waypoints");
-            const auto isPair = [](const json* value) {
-                return value != nullptr && value->is_array() && value->size() == 2 &&
-                       (*value)[0].is_number() && (*value)[1].is_number();
-            };
-            if (edge.route != graph::PathRoute::None && isPair(routedFrom) && isPair(routedTo)) {
-                edge.routed = true;
-                edge.routedFromU = (*routedFrom)[0].get<float>();
-                edge.routedFromV = (*routedFrom)[1].get<float>();
-                edge.routedToU = (*routedTo)[0].get<float>();
-                edge.routedToV = (*routedTo)[1].get<float>();
-                if (waypoints != nullptr && waypoints->is_array()) {
-                    for (size_t i = 0; i + 1 < waypoints->size(); i += 2) {
-                        const json& u = (*waypoints)[i];
-                        const json& v = (*waypoints)[i + 1];
-                        if (!u.is_number() || !v.is_number()) {
-                            continue;
-                        }
-                        edge.waypoints.push_back({(path.worldSpace ? u.get<float>() : std::clamp(u.get<float>(), 0.0f, 1.0f)),
-                                                  (path.worldSpace ? v.get<float>() : std::clamp(v.get<float>(), 0.0f, 1.0f))});
-                    }
-                }
-            }
+            // 旧ファイルの経路探索（route / waypoints）は読まない（地形が無くなったため）。
             // 端点が無い / 自分へ戻るエッジは捨てる（壊れたファイルの安全網）。
             if (edge.id <= 0 || edge.from == edge.to || path.FindPoint(edge.from) == nullptr ||
                 path.FindPoint(edge.to) == nullptr) {
@@ -529,7 +478,7 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
             path.edges.push_back(edge);
         }
     }
-    if (path.worldSpace) {
+    {
         path.bankEnabled = ReadBool(*node, "bankEnabled", defaults.bankEnabled);
         path.designSpeedKmh = std::clamp(ReadFloat(*node, "designSpeed", defaults.designSpeedKmh), 0.0f, 300.0f);
         path.frictionCoefficient = std::clamp(ReadFloat(*node, "friction", defaults.frictionCoefficient), 0.0f, 1.0f);
@@ -1127,14 +1076,10 @@ graph::NodeGraph MigrateLayersToGraph(std::vector<compositor::MaterialLayer> lay
 json WritePreview(renderer::PreviewRenderer& renderer) {
     json node;
     node["tonemap"] = EnumName(kTonemapNames, static_cast<uint32_t>(renderer.Tonemap()));
-    node["useMaterialTextures"] = renderer.UseMaterialTextures();
-    node["displacementScale"] = renderer.DisplacementScale();
-    node["planeSize"] = renderer.PlaneSize();
     node["tessellation"] = renderer.TessellationEnabled();
     node["tessellationFactor"] = renderer.TessellationFactor();
     node["tessellationTargetPixels"] = renderer.TessellationTargetPixels();
     node["materialResolution"] = renderer.MaterialResolution();
-    node["meshSubdivisions"] = renderer.MeshSubdivisions();
     node["showSkybox"] = renderer.ShowSkybox();
     node["skyboxBlur"] = renderer.SkyboxBlur();
     node["shadow"] = renderer.ShadowEnabled();
@@ -1179,13 +1124,6 @@ json WritePreview(renderer::PreviewRenderer& renderer) {
     exposureNode["shutterSpeed"] = exposure.shutterSpeed;
     exposureNode["iso"] = exposure.iso;
     node["exposure"] = std::move(exposureNode);
-
-    const renderer::MaterialSettings& material = renderer.Material();
-    json materialNode;
-    materialNode["baseColor"] = WriteFloat3(material.baseColor);
-    materialNode["roughness"] = material.roughness;
-    materialNode["metallic"] = material.metallic;
-    node["flatMaterial"] = std::move(materialNode);
     return node;
 }
 
@@ -1195,13 +1133,8 @@ void ReadPreview(const json& node, renderer::PreviewRenderer& renderer) {
     const renderer::PreviewDefaults& previewDefaults = renderer::kPreviewDefaults;
     renderer.Tonemap() = static_cast<renderer::TonemapMode>(
         EnumValue(kTonemapNames, node, "tonemap", static_cast<uint32_t>(previewDefaults.tonemap)));
-    renderer.UseMaterialTextures() =
-        ReadBool(node, "useMaterialTextures", previewDefaults.useMaterialTextures);
-    renderer.DisplacementScale() =
-        ReadFloat(node, "displacementScale", previewDefaults.displacementScale);
-    // 平面のサイズ（m）。**カメラより先に読む。** 軌道の距離の範囲がこれで決まるので、
-    // 後に読むと地形スケールのカメラ位置が素材スケールの範囲へ丸められる。
-    renderer.PlaneSize() = ReadFloat(node, "planeSize", previewDefaults.planeSize);
+    // 旧ファイルの平面プレビューの設定（useMaterialTextures / displacementScale / planeSize /
+    // meshSubdivisions / flatMaterial）は読まない（平面のプレビューは無くなった）。
     renderer.TessellationEnabled() =
         ReadBool(node, "tessellation", previewDefaults.tessellationEnabled);
     renderer.TessellationFactor() =
@@ -1210,8 +1143,6 @@ void ReadPreview(const json& node, renderer::PreviewRenderer& renderer) {
         ReadFloat(node, "tessellationTargetPixels", previewDefaults.tessellationTargetPixels), 2.0f, 64.0f);
     renderer.RequestMaterialResolution(
         ReadUInt(node, "materialResolution", previewDefaults.materialResolution));
-    renderer.RequestMeshSubdivisions(
-        ReadUInt(node, "meshSubdivisions", previewDefaults.meshSubdivisions));
     renderer.ShowSkybox() = ReadBool(node, "showSkybox", previewDefaults.showSkybox);
     renderer.SkyboxBlur() = ReadBool(node, "skyboxBlur", previewDefaults.skyboxBlur);
     renderer.ShadowEnabled() = ReadBool(node, "shadow", previewDefaults.shadowEnabled);
@@ -1271,15 +1202,6 @@ void ReadPreview(const json& node, renderer::PreviewRenderer& renderer) {
             kApertureShapeNames, dofNode, "shape", static_cast<uint32_t>(defaults.shape)));
         target.rotationDegrees =
             ReadFloat(dofNode, "rotationDegrees", defaults.rotationDegrees);
-    }
-
-    {
-        const json& flat = section("flatMaterial");
-        renderer::MaterialSettings& target = renderer.Material();
-        const renderer::MaterialSettings defaults;
-        target.baseColor = ReadFloat3(flat, "baseColor", defaults.baseColor);
-        target.roughness = ReadFloat(flat, "roughness", defaults.roughness);
-        target.metallic = ReadFloat(flat, "metallic", defaults.metallic);
     }
 }
 
@@ -1515,7 +1437,6 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs) {
     document["activeSky"] = activeSkyIndex;
 
     document["preview"] = WritePreview(refs.renderer);
-    if (refs.renderer.HasAuthoredMeshScene()) document["scene"] = WriteMeshScene(refs.renderer.AuthoredScene());
 
     if (!WriteJsonFile(savePath, document)) {
         return false;
@@ -1533,16 +1454,12 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
 
     const fs::path baseDir = path.parent_path();
 
-    // 現在の文書を破棄する前にシーン全体を検証・アップロードする。
-    if (const json* sceneNode = FindMember(document, "scene")) {
-        renderer::MeshScene scene;
-        if (!ReadMeshScene(*sceneNode, scene) || !refs.renderer.SetMeshScene(device, scene)) {
-            TG_LOG_ERROR("メッシュシーンを読み込めませんでした");
-            return false;
-        }
-    } else {
-        refs.renderer.ClearMeshScene(device);
+    // 旧ファイルの手入力メッシュシーン（scene）は読まない。表示するメッシュは
+    // グラフの Mesh Output から生成する。
+    if (FindMember(document, "scene") != nullptr) {
+        TG_LOG_WARN("旧形式の手入力メッシュシーン（scene）は読み飛ばしました");
     }
+    refs.renderer.ClearMeshScene(device);
 
     // ここから先は現在の中身を捨てて入れ替える。読み込みは GPU 待機を伴うため、
     // 呼び出し側がフレームの外で呼んでいること。

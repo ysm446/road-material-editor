@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--gravel", type=int, required=True, help="既存の材質 ID")
     parser.add_argument("--layered", action="store_true", help="道路4層＋接続先4層＋歩道の検証構成を作る")
     parser.add_argument("--length", type=float, default=24.0, help="検証道路の長さ（m、0より大きく50以下）")
-    parser.add_argument("--layout-description", action="store_true", help="版17のプリセット・配置記述を追加（描画への適用は未対応）")
+    parser.add_argument("--layout-description", action="store_true", help="版17のプリセット・配置記述を追加（道路本体の開発用プレビューに対応）")
     args = parser.parse_args()
     if not math.isfinite(args.length) or not 0 < args.length <= 50:
         parser.error("長さは0より大きく50 m以下にしてください")
@@ -115,7 +115,8 @@ def main():
                 preset = data["presets"][side * 3 + index]
                 band["spans"].append({"id": allocate(), "preset": preset["id"],
                                       "start": cuts[index] * args.length, "end": cuts[index + 1] * args.length,
-                                      "blendIn": 0, "blendOut": 0, "seed": 17,
+                                      "blendIn": min(2, (cuts[index + 1] - cuts[index]) * args.length / 2) if index else 0,
+                                      "blendOut": min(2, (cuts[index + 1] - cuts[index]) * args.length / 2) if index < 2 else 0, "seed": 17,
                                       "parameters": [{"parameter": preset["parameters"][0]["id"], "start": 0.2, "end": 0.8}]})
             layout["bands"].append(band)
         data["layouts"].append(layout)
@@ -133,7 +134,7 @@ def main():
     args.output.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"作成: {args.output}\n起動オプション: --project {args.output} --connection-prototype 10 {gravel_node} 5")
     if args.layout_description:
-        print("配置記述は保存・読み込みの検証用です。描画への適用は未対応です。")
+        print(f"道路配置の確認: --project {args.output} --surface-layout-preview 10（沿道・公開値の結線は未対応）")
 
 
 if __name__ == "__main__":

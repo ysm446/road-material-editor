@@ -1,5 +1,6 @@
 #include "graph/Road.h"
 #include "graph/ConnectionPrototype.h"
+#include "graph/SurfaceLayoutEvaluation.h"
 #include "core/Log.h"
 #include <chrono>
 // ノードグラフパネル。imgui-node-editor によるエディタと、
@@ -296,11 +297,13 @@ void Application::SyncMeshGraph() {
     }
     if (m_meshGraphRevision == m_graph.Revision() && m_meshGraphPreviewNode == previewMeshNode) return;
     const auto compileStart = std::chrono::steady_clock::now();
-    auto compiled = m_options.prototypeRoad != 0
+    auto compiled = m_options.surfaceLayoutRoad != 0
+        ? graph::CompileSurfaceLayoutPreview(m_graph, m_surfaceLayouts, m_options.surfaceLayoutRoad)
+        : m_options.prototypeRoad != 0
         ? graph::CompileConnectionPrototype(m_graph, m_options.prototypeRoad, m_options.prototypeGravel,
                                             m_options.prototypeSidewalk, m_options.prototypeDisplacement)
         : graph::CompileMeshGraph(m_graph, previewMeshNode);
-    if (m_options.prototypeRoad != 0 || m_options.measurePreview) {
+    if (m_options.prototypeRoad != 0 || m_options.surfaceLayoutRoad != 0 || m_options.measurePreview) {
         const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - compileStart).count();
         size_t vertices = 0, triangles = 0, maskBytes = 0;
         for (const auto& mesh : compiled.scene.meshes) {
@@ -309,8 +312,8 @@ void Application::SyncMeshGraph() {
             maskBytes += mesh.roadMask.rgba.size();
         }
         TG_LOG_INFO("道路生成 (%s): %.2f ms, %zu 頂点, %zu 三角形, マスク %zu bytes",
-                    m_options.prototypeRoad != 0 ? "connection" : "ordinary", elapsed, vertices, triangles, maskBytes);
-        if (!compiled.error.empty()) TG_LOG_ERROR("接続試作: %s", compiled.error.c_str());
+                    m_options.surfaceLayoutRoad != 0 ? "layout" : m_options.prototypeRoad != 0 ? "connection" : "ordinary", elapsed, vertices, triangles, maskBytes);
+        if (!compiled.error.empty()) TG_LOG_ERROR("道路生成: %s", compiled.error.c_str());
     }
     // 鎖が無くなったらシーンを空にする（グリッドと背景だけになる）。
     bool uploaded = true;

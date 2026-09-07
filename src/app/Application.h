@@ -56,6 +56,7 @@ struct StartupOptions {
     uint32_t screenshotFrame = 8;
     // P0: Road / 砂利Surface / 歩道Surface の ID。通常のグラフ評価は変更しない。
     graph::GraphId prototypeRoad = 0;
+    graph::GraphId surfaceLayoutRoad = 0;
     graph::GraphId prototypeGravel = 0;
     graph::GraphId prototypeSidewalk = 0;
     bool prototypeDisplacement = true;

@@ -40,6 +40,8 @@ tg::StartupOptions ParseCommandLine() {
             options.prototypeRoad = ::_wtoi(argv[++i]);
             options.prototypeGravel = ::_wtoi(argv[++i]);
             options.prototypeSidewalk = ::_wtoi(argv[++i]);
+        } else if (argument == L"--surface-layout-preview" && (i + 1) < argc) {
+            options.surfaceLayoutRoad = ::_wtoi(argv[++i]);
         } else if (argument == L"--measure-preview") {
             options.measurePreview = true;
         } else if (argument == L"--connection-prototype-flat") {

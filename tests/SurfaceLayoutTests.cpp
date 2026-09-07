@@ -1,9 +1,11 @@
 #include "TestSupport.h"
 #include "graph/SurfaceLayout.h"
+#include "graph/SurfaceLayoutEvaluation.h"
 #include "io/SurfaceLayoutIo.h"
 #include "app/UndoHistory.h"
 #include <nlohmann/json.hpp>
 #include <limits>
+#include <cmath>
 
 void RunSurfaceLayoutTests() {
     using namespace tg;
@@ -88,4 +90,61 @@ void RunSurfaceLayoutTests() {
     Check(io::WriteSurfaceLayouts(undone.surfaceLayouts) == encoded, "区間と断面の編集をIDごとUndoする");
     const auto redone = history.Redo(undone);
     Check(io::WriteSurfaceLayouts(redone.surfaceLayouts) == io::WriteSurfaceLayouts(after.surfaceLayouts), "Redoで公開値と断面を復元する");
+
+    const auto& roadBand = document.layouts[0].bands[0];
+    const auto midpoint = graph::SampleSurfaceBand(document, roadBand, 6);
+    Check(midpoint.size() == 1 && midpoint[0].preset == presets[0] && std::abs(midpoint[0].parameters[0].value - 0.5f) < 1e-6f,
+          "実距離から区間の公開値を補間する");
+    const auto blend = graph::SampleSurfaceBand(document, roadBand, 11.5f);
+    Check(blend.size() == 2 && std::abs(blend[0].weight - 0.5f) < 1e-6f && blend[1].weight == blend[0].weight,
+          "前区間の終端3mと次区間の始端2mで連続移行する");
+    const auto side = graph::SampleSurfaceBand(document, document.layouts[0].bands[1], 11.5f);
+    Check(side.size() == 1 && side[0].preset == presets[3], "道路の切り替えは沿道の区切りへ影響しない");
+    auto shortBand = roadBand;
+    shortBand.spans[0].endMeters = shortBand.spans[1].startMeters = 1;
+    shortBand.spans[1].endMeters = shortBand.spans[2].startMeters = 2;
+    bool partition = true;
+    for (int step = 0; step <= 5000; ++step) {
+        const auto samples = graph::SampleSurfaceBand(document, shortBand, static_cast<float>(step) / 100);
+        float sum = 0;
+        for (const auto& sample : samples) { sum += sample.weight; partition &= sample.weight >= 0 && sample.weight <= 1; }
+        partition &= samples.size() <= 2 && std::abs(sum - 1) < 1e-6f;
+    }
+    Check(partition, "短い区間の前後に長い移行を指定しても被覆率の和が1で二重合成しない");
+    auto gapBand = roadBand;
+    gapBand.spans[1].startMeters = 14;
+    Check(graph::SampleSurfaceBand(document, gapBand, 13).empty() &&
+          graph::SampleSurfaceBand(document, roadBand, -1).empty() &&
+          graph::SampleSurfaceBand(document, roadBand, std::numeric_limits<float>::quiet_NaN()).empty(),
+          "空白区間・範囲外・非有限値を隣の素材で埋めない");
+    auto hardBand = roadBand;
+    hardBand.spans[0].blendOutMeters = hardBand.spans[1].blendInMeters = 0;
+    const auto hard = graph::SampleSurfaceBand(document, hardBand, 12);
+    Check(hard.size() == 1 && hard[0].preset == presets[1], "移行距離0の境界は次区間に属する");
+    auto defaultsBand = roadBand;
+    defaultsBand.spans[0].parameters.clear();
+    Check(graph::SampleSurfaceBand(document, defaultsBand, 0)[0].parameters[0].value == 0.5f,
+          "公開値を指定しない区間はプリセットの既定値を使う");
+
+    const auto pathId = sceneGraph.CreateNode(graph::NodeKind::Path);
+    graph::PathSettings path;
+    const auto first = graph::AddPathPoint(path, 0, 0, 0);
+    graph::AddPathPoint(path, 0, 50, first);
+    std::get<graph::PathNodeSettings>(sceneGraph.FindMutableNode(pathId)->settings).path = path;
+    sceneGraph.CreateLink(sceneGraph.FindNode(pathId)->outputs[0].id, sceneGraph.FindNode(linked.layouts[0].roadNode)->inputs[0].id);
+    const auto preview = graph::CompileSurfaceLayoutPreview(sceneGraph, linked, linked.layouts[0].roadNode);
+    Check(preview.error.empty() && preview.scene.meshes.size() == 4 && renderer::ValidateMeshScene(preview.scene),
+          "配置から道路と3素材の評価コンテキストを生成する");
+    if (preview.scene.meshes.size() == 4) {
+        const auto& mask = preview.scene.meshes[0].roadMask;
+        Check(mask.IsValid() && mask.rgba[0] == 0 && mask.rgba[1] == 0 && mask.rgba[mask.rgba.size() - 3] == 255,
+              "道路始端は第1素材、終端は第3素材の共通マスクになる");
+        Check(preview.scene.meshes[3].materialStack->Layers()[0].material == 3 &&
+              preview.scene.meshes[3].displacementMeters == linked.presets[2].displacementMeters,
+              "プリセットの素材参照と変位量を既存評価器へ渡す");
+    }
+    auto unsupported = linked;
+    unsupported.presets[0].materials.push_back({});
+    Check(!graph::CompileSurfaceLayoutPreview(sceneGraph, unsupported, linked.layouts[0].roadNode).error.empty(),
+          "未対応の多層プリセットを黙って単層にしない");
 }

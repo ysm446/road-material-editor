@@ -300,6 +300,75 @@ void RunSurfaceLayoutTests() {
           io::WriteSurfaceLayouts(roadside) == roadsideJson, "既存の沿道は上書きしない");
     graph::RoadGeometry bandRoad;
     graph::EvaluateRoad(sceneGraph, roadId, bandRoad, error);
+    auto following = roadside;
+    Check(graph::CreateRoadsideExample(following, sceneGraph, roadId, graph::SurfaceSide::Right, error) &&
+          graph::CreateRoadLayout(following, sceneGraph, roadId, error), "追従検証用の路面と左右沿道を作る");
+    auto shortenedGraph = sceneGraph;
+    graph::PathSettings shorterPath;
+    const auto shorterFirst = graph::AddPathPoint(shorterPath, 0, 0, 0);
+    graph::AddPathPoint(shorterPath, 0, 24, shorterFirst);
+    std::get<graph::PathNodeSettings>(shortenedGraph.FindMutableNode(pathId)->settings).path = shorterPath;
+    graph::RoadGeometry shorterRoad;
+    graph::EvaluateRoad(shortenedGraph, roadId, shorterRoad, error);
+    renderer::MeshData followingMesh;
+    Check(!graph::BuildSurfaceBandGeometry(shorterRoad, following, following.layouts[0].bands[1], followingMesh, error),
+          "パス短縮後の未追従沿道が消える条件を再現する");
+    DocumentSnapshot followBefore, followAfter;
+    followBefore.surfaceLayouts = following;
+    Check(graph::FitSurfaceLayoutsToRoads(following, shortenedGraph), "パス変更へ全帯を自動追従する");
+    for (const auto& followingBand : following.layouts[0].bands) {
+        Check(followingBand.spans.back().endMeters == 24, "路面と左右沿道が同じ全長へ追従する");
+        if (followingBand.side != graph::SurfaceSide::Road)
+            Check(followingBand.spans[0].endMeters == 12 &&
+                  graph::BuildSurfaceBandGeometry(shorterRoad, following, followingBand, followingMesh, error),
+                  "左右の区間割合と沿道表示を保持する");
+    }
+    Check(!graph::FitSurfaceLayoutsToRoads(following, shortenedGraph), "道路長が同じなら追従処理は変更しない");
+    followAfter.surfaceLayouts = following;
+    history.Clear(); history.Push(followBefore, 0);
+    const auto followUndo = history.Undo(followAfter);
+    Check(io::WriteSurfaceLayouts(followUndo.surfaceLayouts) == io::WriteSurfaceLayouts(followBefore.surfaceLayouts) &&
+          io::WriteSurfaceLayouts(history.Redo(followUndo).surfaceLayouts) == io::WriteSurfaceLayouts(followAfter.surfaceLayouts),
+          "追従した左右沿道と路面の全区間をUndo・Redoで復元する");
+    Check(graph::FitSurfaceLayoutsToRoads(following, sceneGraph), "パスを伸ばす方向にも追従する");
+    auto splitSide = roadside;
+    auto& splitBand = splitSide.layouts[0].bands[1];
+    const auto firstSideId = splitBand.spans.front().id;
+    renderer::MeshData editedSideMesh;
+    Check(graph::SplitSurfaceSpan(splitSide, splitBand, 0) && splitBand.spans.size() == 3 &&
+          splitBand.spans[0].id == firstSideId && splitBand.spans[1].id != firstSideId &&
+          graph::BuildSurfaceBandGeometry(bandRoad, splitSide, splitBand, editedSideMesh, error),
+          "沿道を同じプリセットで分割し、元のIDと連続形状を保持する");
+    splitBand.spans[1].preset = splitBand.spans[2].preset;
+    splitBand.spans[1].parameters.clear();
+    graph::EnsureRoadsideTransitions(splitBand);
+    Check(splitBand.spans[0].blendOutMeters > 0 && splitBand.spans[1].blendInMeters > 0 &&
+          graph::BuildSurfaceBandGeometry(bandRoad, splitSide, splitBand, editedSideMesh, error),
+          "分割後の歩道割当で移行距離を自動補完する");
+    for (size_t removed = 0; removed < 3; ++removed) {
+        auto deletedSide = splitSide;
+        auto& deletedBand = deletedSide.layouts[0].bands[1];
+        Check(graph::RemoveSurfaceSpan(deletedBand, removed), "先頭・中間・末尾の沿道区間を削除できる");
+        graph::EnsureRoadsideTransitions(deletedBand);
+        Check(deletedBand.spans.front().startMeters == 0 &&
+              deletedBand.spans.back().endMeters == bandRoad.rowDistances.back() &&
+              graph::BuildSurfaceBandGeometry(bandRoad, deletedSide, deletedBand, editedSideMesh, error),
+              "削除した範囲を隣接区間で埋めて連続形状を保つ");
+        graph::RemoveSurfaceSpan(deletedBand, 0);
+        Check(!graph::RemoveSurfaceSpan(deletedBand, 0), "最後の沿道区間は削除しない");
+    }
+    const auto beforeResize = io::WriteSurfaceLayouts(splitSide);
+    const float originalLength = splitBand.spans.back().endMeters;
+    const float originalCut = splitBand.spans.front().endMeters;
+    Check(graph::ResizeSurfaceBand(splitBand, originalLength * 0.5f) &&
+          splitBand.spans.front().endMeters == originalCut * 0.5f &&
+          graph::ResizeSurfaceBand(splitBand, originalLength) &&
+          io::WriteSurfaceLayouts(splitSide) == beforeResize,
+          "道路長への伸縮で区間割合・移行距離・IDを保持する");
+    graph::SurfaceLayoutDocument splitReload;
+    Check(io::ReadSurfaceLayouts(beforeResize, splitReload, error) &&
+          graph::BuildSurfaceBandGeometry(bandRoad, splitReload, splitReload.layouts[0].bands[1], editedSideMesh, error),
+          "編集した沿道を保存往復して再生成する");
     renderer::MeshData bandMesh;
     Check(graph::BuildSurfaceBandGeometry(bandRoad, roadside, roadside.layouts[0].bands[1], bandMesh, error),
           "路肩から歩道の連続した断面を生成する");

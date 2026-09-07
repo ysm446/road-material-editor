@@ -50,37 +50,16 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
     } else {
         auto roadsideEdit = m_surfaceLayouts;
         for (auto& layout : roadsideEdit.layouts) if (layout.roadNode == roadId) {
-            for (auto& candidate : layout.bands) if (candidate.side == side && candidate.spans.size() == 2) {
-                auto& first = candidate.spans[0]; auto& second = candidate.spans[1];
-                const float length = second.endMeters;
-                bool changed = false;
-                if (length > 0.1f && ui::BeginPropertyTable("roadsideSpanRows")) {
-                    if (ui::PropertyFloat("切替位置", &first.endMeters, 0.05f, length - 0.05f, length * 0.5f,
-                        "道路の始点から、路肩と歩道が切り替わる位置", "%.2f m")) {
-                        second.startMeters = first.endMeters;
-                        graph::ClampSpanBlends(first); graph::ClampSpanBlends(second); changed = true;
-                    }
-                    float transition = std::min(first.blendOutMeters, second.blendInMeters);
-                    const float limit = std::min(first.endMeters - first.startMeters, second.endMeters - second.startMeters) * 0.5f;
-                    if (limit >= 0.01f && ui::PropertyFloat("移行距離", &transition, 0.01f, limit, std::min(2.0f, limit),
-                        "切替位置の前後それぞれで断面を変える距離", "%.2f m")) {
-                        first.blendOutMeters = second.blendInMeters = transition; changed = true;
-                    }
-                    ui::EndPropertyTable();
-                }
-                if (changed) {
-                    graph::RoadGeometry road; renderer::MeshData mesh; std::string error;
-                    if (graph::EvaluateRoad(m_graph, roadId, road, error) &&
-                        graph::BuildSurfaceBandGeometry(road, roadsideEdit, candidate, mesh, error)) {
-                        m_surfaceLayouts = std::move(roadsideEdit); return true;
-                    }
-                    TG_LOG_ERROR("沿道形状: %s", error.c_str());
-                }
-            }
-        }
-        for (auto& layout : roadsideEdit.layouts) if (layout.roadNode == roadId) {
             for (auto& candidate : layout.bands) if (candidate.side == side && !candidate.spans.empty()) {
+                graph::RoadGeometry road; std::string error;
+                if (!graph::EvaluateRoad(m_graph, roadId, road, error)) continue;
+                const float length = road.rowDistances.back();
+                bool changed = false;
                 m_surfaceBandSpan = std::clamp(m_surfaceBandSpan, 0, static_cast<int>(candidate.spans.size()) - 1);
+                if (std::abs(candidate.spans.back().endMeters - length) > 0.001f) {
+                    ui::HintText("沿道の範囲と道路長が異なります。区間の割合を保って合わせます");
+                    if (ui::Button("道路長に合わせる##roadside", ui::kWideButtonWidth)) changed = graph::ResizeSurfaceBand(candidate, length);
+                }
                 std::vector<std::string> labels;
                 for (const auto& span : candidate.spans) {
                     char label[96]; std::snprintf(label, sizeof(label), "%.2f ～ %.2f m", span.startMeters, span.endMeters);
@@ -88,10 +67,50 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 }
                 std::vector<const char*> items;
                 for (const auto& label : labels) items.push_back(label.c_str());
+                if (ui::BeginPropertyTable("roadsideSpanRows")) {
+                    ui::PropertyCombo("編集する区間", &m_surfaceBandSpan, items.data(), static_cast<int>(items.size()), 0, "分割・削除・プリセット編集の対象区間");
+                    auto& current = candidate.spans[m_surfaceBandSpan];
+                    ui::PropertyValue("始点", "%.2f m", current.startMeters);
+                    if (static_cast<size_t>(m_surfaceBandSpan + 1) < candidate.spans.size()) {
+                        auto& next = candidate.spans[m_surfaceBandSpan + 1];
+                        if (next.endMeters - current.startMeters > 0.1f && ui::PropertyFloat("切替位置", &current.endMeters,
+                            current.startMeters + 0.05f, next.endMeters - 0.05f, (current.startMeters + next.endMeters) * 0.5f,
+                            "次の沿道区間との境界。両区間を隙間なく動かす", "%.2f m")) {
+                            next.startMeters = current.endMeters; graph::ClampSpanBlends(current); graph::ClampSpanBlends(next); changed = true;
+                        }
+                        float transition = std::min(current.blendOutMeters, next.blendInMeters);
+                        const float limit = std::min(current.endMeters - current.startMeters, next.endMeters - next.startMeters) * 0.5f;
+                        if (limit >= 0.01f && ui::PropertyFloat("移行距離", &transition, 0.01f, limit, std::min(2.0f, limit),
+                            "次の区間との境界の前後で形状と材質を変える距離", "%.2f m")) {
+                            current.blendOutMeters = next.blendInMeters = transition; changed = true;
+                        }
+                    } else ui::PropertyValue("終点", "%.2f m", current.endMeters);
+                    ui::EndPropertyTable();
+                }
+                if (ui::Button("沿道区間を分割", ui::kWideButtonWidth)) changed |= graph::SplitSurfaceSpan(roadsideEdit, candidate, static_cast<size_t>(m_surfaceBandSpan));
+                ImGui::SameLine();
+                ImGui::BeginDisabled(candidate.spans.size() < 2);
+                if (ui::Button("沿道区間を削除", ui::kWideButtonWidth)) {
+                    changed |= graph::RemoveSurfaceSpan(candidate, static_cast<size_t>(m_surfaceBandSpan));
+                    m_surfaceBandSpan = std::clamp(m_surfaceBandSpan, 0, static_cast<int>(candidate.spans.size()) - 1);
+                }
+                ImGui::EndDisabled();
+                if (changed) {
+                    graph::EnsureRoadsideTransitions(candidate);
+                    renderer::MeshData mesh;
+                    if (graph::BuildSurfaceBandGeometry(road, roadsideEdit, candidate, mesh, error)) {
+                        m_surfaceLayouts = std::move(roadsideEdit); m_previewSurfaceBands = true; return true;
+                    }
+                    TG_LOG_ERROR("沿道区間: %s", error.c_str());
+                }
+            }
+        }
+        for (auto& layout : roadsideEdit.layouts) if (layout.roadNode == roadId) {
+            for (auto& candidate : layout.bands) if (candidate.side == side && !candidate.spans.empty()) {
+                m_surfaceBandSpan = std::clamp(m_surfaceBandSpan, 0, static_cast<int>(candidate.spans.size()) - 1);
                 bool changed = false;
                 ui::SectionHeader("沿道プリセット");
                 if (ui::BeginPropertyTable("roadsideMaterialRows")) {
-                    ui::PropertyCombo("編集する区間", &m_surfaceBandSpan, items.data(), static_cast<int>(items.size()), 0, "形状と材質を編集する沿道の区間");
                     auto& span = candidate.spans[m_surfaceBandSpan];
                     std::vector<graph::SurfaceId> presetIds;
                     std::vector<const char*> presetNames;
@@ -143,6 +162,7 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 if (ui::Button("沿道プリセットを複製", ui::kWideButtonWidth))
                     changed |= graph::DuplicateSurfacePreset(roadsideEdit, candidate, static_cast<size_t>(m_surfaceBandSpan));
                 if (changed) {
+                    graph::EnsureRoadsideTransitions(candidate);
                     // 共有プリセットの変更が別の道路・沿道を壊さないことも確認する。
                     std::string error;
                     for (const auto& checkLayout : roadsideEdit.layouts) for (const auto& checkBand : checkLayout.bands) {

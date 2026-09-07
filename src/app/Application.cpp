@@ -8,6 +8,7 @@
 #include "core/FileDialog.h"
 #include "core/Log.h"
 #include "io/ProjectIo.h"
+#include "graph/SurfaceLayoutEditing.h"
 #include "ui/UiStyle.h"
 
 #include <imgui.h>
@@ -549,6 +550,8 @@ void Application::DrawUi() {
     // 掴んでいるウィジェットの ID を渡すことで、スライダーのドラッグが
     // 1 段に収まる（毎フレーム変更が来ても ID は変わらない）。
     if (m_documentDirty) {
+        // パス編集で変わった全長へ路面・左右沿道を追従させ、同じ履歴へ保存する。
+        if (graph::FitSurfaceLayoutsToRoads(m_surfaceLayouts, m_graph)) m_graph.MarkDirty();
         m_documentDirty = false;
         // 直前の編集の続き（ドラッグを離した時点の経路の計算し直しなど）は、
         // 直前の段の ID を渡して同じ段に畳む。

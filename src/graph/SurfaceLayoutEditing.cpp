@@ -117,6 +117,19 @@ bool ResizeSurfaceBand(SurfaceBand& band, float length) {
     band.spans.back().endMeters = length;
     return true;
 }
+bool FitSurfaceLayoutsToRoads(SurfaceLayoutDocument& document, const NodeGraph& graph) {
+    bool changed = false;
+    for (auto& layout : document.layouts) {
+        RoadGeometry road; std::string error;
+        if (!EvaluateRoad(graph, layout.roadNode, road, error) || road.rowDistances.empty()) continue;
+        const float length = road.rowDistances.back();
+        for (auto& band : layout.bands) {
+            if (band.spans.empty() || std::abs(band.spans.back().endMeters - length) <= 0.00001f) continue;
+            changed |= ResizeSurfaceBand(band, length);
+        }
+    }
+    return changed;
+}
 bool DuplicateSurfacePreset(SurfaceLayoutDocument& document, SurfaceBand& band, size_t index) {
     if (index >= band.spans.size()) return false;
     auto& span = band.spans[index];
@@ -134,6 +147,17 @@ bool DuplicateSurfacePreset(SurfaceLayoutDocument& document, SurfaceBand& band, 
     span.preset = preset.id;
     document.presets.push_back(std::move(preset));
     return true;
+}
+void EnsureRoadsideTransitions(SurfaceBand& band) {
+    if (band.side == SurfaceSide::Road) return;
+    for (auto& span : band.spans) ClampSpanBlends(span);
+    for (size_t i = 1; i < band.spans.size(); ++i) {
+        auto& left = band.spans[i - 1]; auto& right = band.spans[i];
+        if (left.preset == right.preset || left.blendOutMeters + right.blendInMeters > 0) continue;
+        const BoundaryContract defaults;
+        left.blendOutMeters = right.blendInMeters = std::min({defaults.transitionMeters,
+            (left.endMeters - left.startMeters) * 0.5f, (right.endMeters - right.startMeters) * 0.5f});
+    }
 }
 bool GetSimpleRoadsideDimensions(const SurfacePreset& preset, float& width, float& height) {
     const auto& points = preset.section;

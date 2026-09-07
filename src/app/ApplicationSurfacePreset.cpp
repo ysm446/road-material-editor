@@ -306,6 +306,7 @@ void Application::ProcessLayerPreview() {
         m_layerPreview.RequestShadowResolution(1024);
         if (!m_layerPreview.Initialize(m_device, m_pipelineCache)) { m_layerPreview.Shutdown(m_device); return; }
         m_layerPreviewInitialized = true;
+        m_layerPreview.Light() = m_renderer.Light();
         m_layerPreview.ShowSkybox() = false;
         m_layerPreview.ShowReferenceGrid() = false;
         m_layerPreview.TessellationEnabled() = true;
@@ -328,7 +329,6 @@ void Application::ProcessLayerPreview() {
     }
     m_layerPreview.Debug() = m_layerPreviewView == 1 ? renderer::DebugView::Height : renderer::DebugView::Shaded;
     m_layerPreview.SetActiveSky(m_renderer.ActiveSky());
-    m_layerPreview.Light() = m_renderer.Light();
     m_layerPreview.Exposure() = m_renderer.Exposure();
     m_layerPreview.Tonemap() = m_renderer.Tonemap();
     m_layerPreview.ProcessPendingWork(m_device, m_pipelineCache);
@@ -469,7 +469,8 @@ void Application::DrawLayerMaterialLibrary() {
 void Application::DrawSurfacePresetEditor() {
     ImGui::SetNextWindowSize(ImVec2(ui::Scaled(1100), ui::Scaled(760)), ImGuiCond_FirstUseEver);
     bool open = true;
-    if (!ImGui::Begin("レイヤーマテリアル編集", &open)) {
+    if (!ImGui::Begin("レイヤーマテリアル編集", &open,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         ImGui::End(); if (!open) m_editSurfacePreset = 0; return;
     }
     auto edited = m_surfaceLayouts;
@@ -478,7 +479,8 @@ void Application::DrawSurfacePresetEditor() {
     auto& preset = *found;
     bool changed = false;
     const float previewWidth = std::max(ui::Scaled(220), ImGui::GetContentRegionAvail().x * 0.52f);
-    ImGui::BeginChild("layerPreview", ImVec2(previewWidth, 0));
+    ImGui::BeginChild("layerPreview", ImVec2(previewWidth, 0), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     if (ui::BeginPropertyTable("layerPreviewSettings")) {
         if (ui::PropertyFloat("表示範囲", &m_layerPreviewMeters, 1, 16, 4, "正方形の一辺の実寸", "%.1f m")) m_layerPreviewDirty = true;
         if (ui::PropertyBool("変位を表示", &m_layerPreviewDisplacement, true, "合成後のハイトで平面を変位する")) m_layerPreviewDirty = true;
@@ -487,16 +489,24 @@ void Application::DrawSurfacePresetEditor() {
         ui::EndPropertyTable();
     }
     if (ui::Button("視点を戻す", 120)) m_layerPreviewPreset = 0;
-    const float imageSize = std::max(1.0f, std::min(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - ui::Scaled(30)));
+    const float hintHeight = ImGui::GetTextLineHeightWithSpacing() * 2 + ImGui::GetStyle().ItemSpacing.y;
+    const float imageSize = std::max(1.0f, std::min(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - hintHeight));
     if (m_layerPreview.HasOutput()) {
+        const ImVec2 imageOrigin = ImGui::GetCursorScreenPos();
         ImGui::Image(static_cast<ImTextureID>(m_layerPreview.OutputHandle().ptr), ImVec2(imageSize, imageSize));
-        if (ImGui::IsItemHovered()) {
-            auto& camera = m_layerPreview.GetCamera(); const auto& io = ImGui::GetIO();
-            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) camera.Orbit(io.MouseDelta.x, io.MouseDelta.y);
-            if (io.MouseWheel) camera.Zoom(io.MouseWheel);
-        }
+        // 画像上で開始したドラッグを保持し、編集ウインドウの移動と競合させない。
+        ImGui::SetCursorScreenPos(imageOrigin);
+        ImGui::InvisibleButton("##layerViewportInput", ImVec2(imageSize, imageSize),
+                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle |
+                               ImGuiButtonFlags_MouseButtonRight);
+        const bool itemActive = ImGui::IsItemActive();
+        const bool itemHovered = ImGui::IsItemHovered();
+        HandleLightDrag(m_layerPreview.Light(), m_layerLightInteraction, itemActive);
+        HandleCameraInput(m_layerPreview, itemActive, itemHovered);
+        const ImVec2 imageMax(imageOrigin.x + imageSize, imageOrigin.y + imageSize);
+        DrawLightGizmo(m_layerPreview.Light(), m_layerLightInteraction, m_layerPreview.GetCamera(), imageOrigin, imageMax);
     }
-    ui::HintText("ドラッグで回転・ホイールで拡大縮小");
+    ui::HintText("Alt＋左: 回転 / 中: 平行移動 / 右: ズーム\nホイール: ズーム / F: 中心 / A: 全体 / L＋左: ライト");
     ImGui::EndChild(); ImGui::SameLine();
     ImGui::BeginChild("layerEditor", ImVec2(0, 0));
     if (preset.materialGraph) {

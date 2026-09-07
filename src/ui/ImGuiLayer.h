@@ -35,6 +35,10 @@ public:
         bool deleteKey = false;
         ImVec2 mouse;
         bool leftDown = false;
+        bool middleDown = false;
+        bool rightDown = false;
+        bool alt = false;
+        bool lightKey = false;
         bool shift = false;
         bool escape = false;
     };

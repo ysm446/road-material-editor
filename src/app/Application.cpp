@@ -362,6 +362,11 @@ int Application::Run() {
             testInput.mouse = m_frameCounter < 13 ? m_options.testDragStart : m_options.testDragEnd;
             testInput.leftDown = m_frameCounter >= 11 && m_frameCounter < 16;
             if (m_options.testDoubleClick) testInput.leftDown = m_frameCounter == 60 || m_frameCounter == 62;
+            const int gesture = m_options.testViewportGesture;
+            testInput.alt = gesture >= 1 && gesture <= 3 && m_frameCounter < 17;
+            testInput.lightKey = gesture == 4 && m_frameCounter < 17;
+            if (gesture == 2) { testInput.middleDown = testInput.leftDown; testInput.leftDown = false; }
+            if (gesture == 3) { testInput.rightDown = testInput.leftDown; testInput.leftDown = false; }
             testInput.deleteKey = m_options.testDelete && m_frameCounter == 18;
             testInput.shift = m_options.testDragShift && m_frameCounter < 17;
             testInput.escape = m_options.testDragCancel && m_frameCounter == 15;
@@ -371,6 +376,13 @@ int Application::Run() {
         if (testDrag && m_frameCounter == 18) {
             TG_LOG_INFO("SelectionTest: points=%zu meshes=%zu dirty=%d", m_pathEdit.selected.size(),
                         m_meshSelection.selected.size(), m_documentDirty ? 1 : 0);
+            TG_LOG_INFO("IndependentLightTest: road=%.4f,%.4f layer=%.4f,%.4f",
+                        m_renderer.Light().azimuth, m_renderer.Light().elevation,
+                        m_layerPreview.Light().azimuth, m_layerPreview.Light().elevation);
+            const auto camera = m_layerPreview.GetCamera().State();
+            TG_LOG_INFO("LayerViewportTest: yaw=%.4f pitch=%.4f distance=%.4f target=%.4f,%.4f,%.4f light=%.4f,%.4f",
+                        camera.yaw, camera.pitch, camera.distance, camera.target.x, camera.target.y, camera.target.z,
+                        m_renderer.Light().azimuth, m_renderer.Light().elevation);
             size_t spans = 0;
             for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands) spans += band.spans.size();
             TG_LOG_INFO("LayoutUiTest: layouts=%zu spans=%zu presets=%zu undo=%zu", m_surfaceLayouts.layouts.size(),

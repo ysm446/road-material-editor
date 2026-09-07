@@ -69,6 +69,7 @@ struct StartupOptions {
     int profileMode = 0;
     bool testDrag = false;
     bool testDragShift = false;
+    int testViewportGesture = 0;
     bool testDragCancel = false;
     bool testDoubleClick = false;
     bool testDelete = false;
@@ -249,11 +250,17 @@ private:
     void DrawViewportOverlay(const ImVec2& viewportMin, const ImVec2& viewportMax);
     // ビューポート上の L + 左ドラッグでライトの向きを変える。
     // 掴んでいる間は true を返す（軌道やパス編集へ渡さない）。
-    bool HandleLightDrag(bool itemActive);
+    struct LightInteraction {
+        bool dragging = false;
+        double gizmoUntil = 0.0;
+    };
+    bool HandleLightDrag(renderer::LightSettings& light, LightInteraction& interaction, bool itemActive);
     // ビューポート上の F / A キーで視点をメッシュへ戻す。
-    void HandleCameraShortcuts(bool itemHovered);
+    void HandleCameraInput(renderer::PreviewRenderer& preview, bool itemActive, bool itemHovered,
+                           bool includeReferenceGrid = false);
     // ライトの向きを示すギズモ。動かしている間と、その直後だけ出す。
-    void DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewportMax);
+    void DrawLightGizmo(const renderer::LightSettings& light, const LightInteraction& interaction,
+                        const renderer::Camera& camera, const ImVec2& viewportMin, const ImVec2& viewportMax);
 
     // --- パスの編集（ApplicationPathEdit.cpp） --------------------------------
     // 編集の対象になる Path ノード。グラフで Path ノードを選んでいるときだけ返す
@@ -394,8 +401,8 @@ private:
     // ORD をまとめて割り当てるときに選ぶテクスチャ（UI の一時状態）。
     compositor::TextureId m_ordTexture = compositor::kNoTexture;
     // ライトの向きを掴んでいる間。ギズモは離してからも少しの間だけ残す。
-    bool m_lightDragActive = false;
-    double m_lightGizmoUntil = 0.0;
+    LightInteraction m_viewportLightInteraction;
+    LightInteraction m_layerLightInteraction;
 
     // パスの編集の状態。ノードが変わったら捨てる。
     // 点 / エッジの ID はそのパスの中でしか意味を持たないので、毎フレーム実在を確かめる。

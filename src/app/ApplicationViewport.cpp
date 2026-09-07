@@ -242,19 +242,18 @@ void Application::DrawViewportOverlay(const ImVec2& viewportMin, const ImVec2& v
 //
 // 修飾キー（Ctrl / Shift / Alt）は付けない。Alt は軌道、Ctrl は数値の直接入力に
 // 使っているので、それらと重ならないようにする。
-bool Application::HandleLightDrag(bool itemActive) {
+bool Application::HandleLightDrag(renderer::LightSettings& light, LightInteraction& interaction, bool itemActive) {
     const ImGuiIO& io = ImGui::GetIO();
     const bool shortcut =
-        ImGui::IsKeyDown(ImGuiKey_L) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
+        ImGui::IsKeyDown(ImGuiKey_L) && !io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt;
     if (!shortcut || !itemActive || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        m_lightDragActive = false;
+        interaction.dragging = false;
         return false;
     }
 
-    m_lightDragActive = true;
-    m_lightGizmoUntil = ImGui::GetTime() + kLightGizmoFadeSeconds;
+    interaction.dragging = true;
+    interaction.gizmoUntil = ImGui::GetTime() + kLightGizmoFadeSeconds;
 
-    renderer::LightSettings& light = m_renderer.Light();
     const float step = DegreesToRadians(kLightDegreesPerPixel);
     // 方位角は一周させる。仰角は UI のスライダーと同じ範囲に収める。
     light.azimuth = WrapAngle(light.azimuth + io.MouseDelta.x * step);
@@ -270,51 +269,66 @@ bool Application::HandleLightDrag(bool itemActive) {
 // 修飾キーは付けない（Ctrl は数値の直接入力、Alt は軌道に使っている）。
 // カーソルがビューポートの上にあるときだけ効かせ、
 // **テキスト入力中は無視する**。レイヤー名を打っている最中に視点が飛ぶのを防ぐ。
-void Application::HandleCameraShortcuts(bool itemHovered) {
+void Application::HandleCameraInput(renderer::PreviewRenderer& preview, bool itemActive, bool itemHovered,
+                                    bool includeReferenceGrid) {
     const ImGuiIO& io = ImGui::GetIO();
+    renderer::Camera& camera = preview.GetCamera();
+    if (itemActive && io.KeyAlt) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            camera.Orbit(io.MouseDelta.x * 0.006f, io.MouseDelta.y * 0.006f);
+        } else if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+            camera.Pan(io.MouseDelta.x, io.MouseDelta.y);
+        } else if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+            // 右へ引くと寄る。縦は見ない（斜めに引いたときに暴れるため）。
+            camera.Dolly(io.MouseDelta.x);
+        }
+    }
+
+    if (itemHovered && io.MouseWheel != 0.0f) {
+        camera.Zoom(io.MouseWheel);
+    }
+
     if (!itemHovered || io.WantTextInput || io.KeyCtrl || io.KeyShift || io.KeyAlt) {
         return;
     }
 
     // プレビューのメッシュはどれも原点中心（モデル行列は単位行列）。
     constexpr DirectX::XMFLOAT3 kMeshCenter{0.0f, 0.0f, 0.0f};
-    renderer::Camera& camera = m_renderer.GetCamera();
 
     if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
         camera.Focus(kMeshCenter);
     } else if (ImGui::IsKeyPressed(ImGuiKey_A, false)) {
-        camera.Frame(kMeshCenter, m_settings.Display().showReferenceGrid
-            ? std::max(m_renderer.BoundingRadius(), renderer::PreviewRenderer::kReferenceGridRadius)
-            : m_renderer.BoundingRadius());
+        camera.Frame(kMeshCenter, includeReferenceGrid
+            ? std::max(preview.BoundingRadius(), renderer::PreviewRenderer::kReferenceGridRadius)
+            : preview.BoundingRadius());
     }
 }
 
 // ライトの向きを示すギズモ。地面のリング、水平方向、仰角の弧、光が来る向きの矢印。
 //
 // 色はテーマから引かない。座標軸ギズモと同じく「意味を持つ色」として固定する。
-void Application::DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewportMax) {
+void Application::DrawLightGizmo(const renderer::LightSettings& light, const LightInteraction& interaction,
+                                const renderer::Camera& camera, const ImVec2& viewportMin, const ImVec2& viewportMax) {
     const double now = ImGui::GetTime();
-    if (!m_lightDragActive && now >= m_lightGizmoUntil) {
+    if (!interaction.dragging && now >= interaction.gizmoUntil) {
         return;
     }
     const float fade =
-        m_lightDragActive
+        interaction.dragging
             ? 1.0f
-            : static_cast<float>(std::clamp((m_lightGizmoUntil - now) / kLightGizmoFadeSeconds,
+            : static_cast<float>(std::clamp((interaction.gizmoUntil - now) / kLightGizmoFadeSeconds,
                                             0.0, 1.0));
     if (fade <= 0.001f) {
         return;
     }
 
     using namespace DirectX;
-    const renderer::Camera& camera = m_renderer.GetCamera();
     const XMMATRIX viewProjection = camera.ViewMatrix() * camera.ProjectionMatrix();
     const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
     if (size.x <= 0.0f || size.y <= 0.0f) {
         return;
     }
 
-    const renderer::LightSettings& light = m_renderer.Light();
     const XMFLOAT3 direction = light.Direction();
     // **カメラの注視点に、画面へ収まる大きさで置く。** 原点固定・実寸固定だと、
     // パンやズームで注視点を移した先で見えなくなったり、画面からはみ出したりする。
@@ -468,7 +482,7 @@ void Application::DrawViewportPanel() {
             const bool itemHovered = ImGui::IsItemHovered();
 
             // L + 左ドラッグはライトの向き。軌道より先に見る。
-            const bool lightDragging = HandleLightDrag(itemActive);
+            const bool lightDragging = HandleLightDrag(m_renderer.Light(), m_viewportLightInteraction, itemActive);
 
             // Path ノードを選んでいる間は、左クリック / ドラッグと右クリックがパスの編集。
             // 視点は Alt を押している間だけ動く。
@@ -494,25 +508,10 @@ void Application::DrawViewportPanel() {
             // Alt なしのドラッグは、将来の選択や範囲選択のために空けてある。
             // Alt を押している間はライトも無効になる（HandleLightDrag が !io.KeyAlt を見る）ので、
             // ここで競合は起きない。
-            if (itemActive && io.KeyAlt) {
-                if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    camera.Orbit(io.MouseDelta.x * 0.006f, io.MouseDelta.y * 0.006f);
-                } else if (ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
-                    camera.Pan(io.MouseDelta.x, io.MouseDelta.y);
-                } else if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-                    // 右へ引くと寄る。縦は見ない（斜めに引いたときに暴れるため）。
-                    camera.Dolly(io.MouseDelta.x);
-                }
-            }
-
-            if (itemHovered && io.MouseWheel != 0.0f) {
-                camera.Zoom(io.MouseWheel);
-            }
-
-            HandleCameraShortcuts(itemHovered);
+            HandleCameraInput(m_renderer, itemActive, itemHovered, m_settings.Display().showReferenceGrid);
 
             DrawAxisGizmo(camera, imageOrigin, imageMax);
-            DrawLightGizmo(imageOrigin, imageMax);
+            DrawLightGizmo(m_renderer.Light(), m_viewportLightInteraction, camera, imageOrigin, imageMax);
             if (pathNode != nullptr) {
                 DrawPathOverlay(*pathNode, imageOrigin, imageMax);
             }

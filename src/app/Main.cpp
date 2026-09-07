@@ -52,6 +52,8 @@ tg::StartupOptions ParseCommandLine() {
             options.testDragStart.y = static_cast<float>(::_wtof(argv[++i]));
             options.testDragEnd.x = static_cast<float>(::_wtof(argv[++i]));
             options.testDragEnd.y = static_cast<float>(::_wtof(argv[++i]));
+        } else if (argument == L"--test-viewport-gesture" && (i + 1) < argc) {
+            options.testViewportGesture = ::_wtoi(argv[++i]);
         } else if (argument == L"--test-drag-shift") {
             options.testDragShift = true;
         } else if (argument == L"--test-drag-cancel") {

@@ -72,8 +72,7 @@ bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& document, std::string& 
         for (const auto& material : preset.materials)
             if (!ValidatePresetMaterial(material, error)) return false;
         if (preset.materialGraph && !ValidatePresetGraph(*preset.materialGraph, error)) return false;
-        if (preset.materials.front().mask || preset.materials.front().heightGate || preset.materials.front().blendMode)
-            return fail("下地スロットにはマスク・高さ条件・混ぜ方を指定できません");
+        // 下地の合成設定は移動前の値を保持する。評価時は全面の下地として扱う。
         for (const auto& parameter : preset.parameters)
             if (!idValid(parameter.id) || parameter.name.empty() || !finite(parameter.minimum) || !finite(parameter.maximum) ||
                 parameter.minimum > parameter.maximum || !range(parameter.defaultValue, parameter.minimum, parameter.maximum))

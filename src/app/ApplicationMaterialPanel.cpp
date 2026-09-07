@@ -105,6 +105,7 @@ void Application::DrawMaterialLibraryPanel() {
                                   asset.name.c_str(),
                                   hasMissing ? "\nリンク切れのテクスチャを参照している" : "");
             }
+            ui::GridCaption(asset.name.c_str(), thumbnailSize);
             ImGui::EndGroup();
 
             ImGui::PopID();

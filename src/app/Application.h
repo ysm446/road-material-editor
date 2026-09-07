@@ -70,6 +70,8 @@ struct StartupOptions {
     bool testDrag = false;
     bool testDragShift = false;
     bool testDragCancel = false;
+    bool testDoubleClick = false;
+    bool testDelete = false;
     ImVec2 testDragStart{};
     ImVec2 testDragEnd{};
 };
@@ -122,6 +124,7 @@ private:
     // グラフノードのレイヤー設定のプロパティ行。変更があれば true。
     bool DrawSurfaceLayoutSettings(graph::GraphId roadId);
     void DrawSurfacePresetEditor();
+    void DrawSurfacePresetGraphEditor();
     bool DrawSurfacePresetGraph(graph::SurfacePreset& preset);
     void DrawGraphBackground(const ImVec2& min, const ImVec2& max);
     bool DrawLayerSettings(compositor::MaterialLayer& layer);
@@ -282,6 +285,34 @@ private:
     rhi::ShaderCompiler m_shaderCompiler;
     rhi::PipelineCache m_pipelineCache;
     renderer::PreviewRenderer m_renderer;
+    renderer::PreviewRenderer m_layerPreview;
+    bool m_layerPreviewInitialized = false;
+    bool m_layerPreviewDirty = true;
+    graph::SurfaceId m_layerPreviewPreset = 0;
+    float m_layerPreviewMeters = 4.0f;
+    int m_selectedPresetLayer = 0;
+    bool m_selectedPresetMask = false;
+    bool m_layerPreviewDisplacement = true;
+    int m_layerPreviewView = 0;
+    void ProcessLayerPreview();
+    void DrawLayerMaterialLibrary();
+    void ProcessLayerThumbnails();
+    void RenderLayerThumbnails(ID3D12GraphicsCommandList* commandList);
+    struct LayerThumbnail {
+        graph::SurfaceId id = 0;
+        rhi::GpuTexture texture;
+        bool dirty = true;
+        bool ready = false;
+    };
+    std::vector<LayerThumbnail> m_layerThumbnails;
+    renderer::PreviewRenderer m_layerThumbnailRenderer;
+    bool m_layerThumbnailInitialized = false;
+    bool m_layerThumbnailsDirty = true;
+    graph::SurfaceId m_layerThumbnailActive = 0;
+    int m_layerThumbnailFrames = 0;
+    graph::SurfaceId m_selectedLayerMaterial = 0;
+    std::string m_layerLibraryError;
+    bool m_defaultLayerTabPending = false;
     // マテリアルプレビューの球。窓を開いている間だけ描く。
     renderer::MaterialSphere m_materialSphere;
     // 天球プレビューの球。同じく窓を開いている間だけ描く。

@@ -56,6 +56,10 @@ tg::StartupOptions ParseCommandLine() {
             options.testDragShift = true;
         } else if (argument == L"--test-drag-cancel") {
             options.testDragCancel = true;
+        } else if (argument == L"--test-double-click") {
+            options.testDoubleClick = true;
+        } else if (argument == L"--test-delete") {
+            options.testDelete = true;
         } else if (argument == L"--select-path-point" && (i + 1) < argc) {
             options.selectPathPoint = ::_wtoi(argv[++i]);
         } else if (argument == L"--profile-mode" && (i + 1) < argc) {

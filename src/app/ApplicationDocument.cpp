@@ -131,6 +131,8 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
     m_graph.Replace(std::move(nodes), snapshot.graphLinks);
     m_graph.SetRoadNetwork(snapshot.roadNetwork);
     m_surfaceLayouts = snapshot.surfaceLayouts;
+    m_layerThumbnailsDirty = true;
+    m_layerPreviewDirty = true;
     for (auto& preset : m_surfaceLayouts.presets) {
         for (auto& material : preset.materials)
             if (!m_materialLibrary.Find(material.material)) material.material = compositor::kNoMaterialAsset;
@@ -148,6 +150,8 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
 }
 
 void Application::MarkDocumentChanged() {
+    m_layerThumbnailsDirty = true;
+    m_layerPreviewDirty = true;
     m_documentDirty = true;
     // マテリアルの編集はグラフの改版に映らないので、シーンの材質を直接再評価させる
     // （グラフ自体の編集は Revision の変化でメッシュシーンが作り直される）。

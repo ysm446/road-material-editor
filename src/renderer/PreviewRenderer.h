@@ -252,6 +252,8 @@ public:
     bool SaveOutputToPng(rhi::Device& device, const std::filesystem::path& path);
 
     bool HasOutput() const { return m_output.IsValid(); }
+    // 同寸法・同形式のキャッシュへコピー。呼出側はフレーム外で宛先を確保する。
+    bool CopyOutputTo(ID3D12GraphicsCommandList* commandList, rhi::GpuTexture& destination);
     D3D12_GPU_DESCRIPTOR_HANDLE OutputHandle() const { return m_output.srv.gpu; }
     uint32_t Width() const { return m_width; }
     uint32_t Height() const { return m_height; }

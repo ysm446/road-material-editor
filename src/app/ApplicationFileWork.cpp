@@ -199,6 +199,7 @@ void Application::ResetProject() {
     m_meshSelection = MeshSelectionState{};
     m_graph = graph::NodeGraph::CreateDefault();
     m_surfaceLayouts = {};
+    m_layerThumbnailsDirty = true;
     m_previewSurfaceBands = m_connectSurfaceBands = m_displaceConnectedBands = false;
     m_editSurfacePreset = 0;
     m_surfacePresetError.clear();
@@ -266,6 +267,7 @@ void Application::ProcessPendingFileWork() {
                              m_renderer, m_graph, m_surfaceLayouts,
                              m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
         if (io::LoadProject(path, m_device, m_pipelineCache, refs)) {
+            m_layerThumbnailsDirty = true;
             m_meshSelection = MeshSelectionState{};
             m_recentProjects.Add(path);
             m_projectPath = path;

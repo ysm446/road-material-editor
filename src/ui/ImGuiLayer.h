@@ -32,6 +32,7 @@ public:
 
     // スクリーンショット検証時だけ、OSの入力を再現可能な入力へ差し替える。
     struct TestInput {
+        bool deleteKey = false;
         ImVec2 mouse;
         bool leftDown = false;
         bool shift = false;

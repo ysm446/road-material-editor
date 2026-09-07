@@ -113,12 +113,19 @@ PresetGraph MakePresetGraph(const std::vector<PresetMaterial>& materials) {
 }
 bool CompilePresetMaterials(const SurfacePreset& preset, std::vector<PresetMaterial>& materials, std::string& error) {
     error.clear();
-    if (!preset.materialGraph) { materials = preset.materials; return true; }
-    if (!ValidatePresetGraph(*preset.materialGraph, error)) return false;
-    materials.clear();
-    for (const auto& node : preset.materialGraph->nodes) if (node.kind == PresetNodeKind::Output)
-        return Compile(*preset.materialGraph, node.id, materials);
-    return false;
+    if (!preset.materialGraph) materials = preset.materials;
+    else {
+        if (!ValidatePresetGraph(*preset.materialGraph, error)) return false;
+        materials.clear();
+        for (const auto& node : preset.materialGraph->nodes) if (node.kind == PresetNodeKind::Output)
+            if (!Compile(*preset.materialGraph, node.id, materials)) return false;
+    }
+    if (!materials.empty()) materials[0] = SourceMaterial(materials[0]);
+    for (size_t i = 0; i < materials.size(); ++i) if (!materials[i].enabled) {
+        if (!i) materials[i] = PresetMaterial{};
+        else materials[i].mask.reset();
+    }
+    return !materials.empty();
 }
 bool ConnectPresetNodes(PresetGraph& graph, uint32_t source, uint32_t target, uint32_t input, std::string& error) {
     auto candidate = graph;

@@ -1001,11 +1001,6 @@ void Application::DrawGraphPanel() {
         return;
     }
 
-    if (m_editSurfacePreset) {
-        DrawSurfacePresetEditor();
-        ImGui::End();
-        return;
-    }
     if (m_renderer.HasMeshScene()) {
         if (ui::BeginPropertyTable("meshSceneRows")) {
             ui::PropertyValue("メッシュ数", "%zu", static_cast<size_t>(std::count_if(m_renderer.Scene().meshes.begin(),

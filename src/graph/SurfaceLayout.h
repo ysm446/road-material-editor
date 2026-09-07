@@ -41,6 +41,7 @@ struct PresetMaterial {
     std::optional<RoadMaskNodeSettings> mask;
     uint32_t blendMode = 0, heightGate = 0;
     float heightGateThreshold = 0.5f, heightGateSoftness = 0.2f;
+    bool enabled = true;
 };
 enum class PresetNodeKind : uint32_t { Material, Mask, Blend, Output };
 struct PresetNode {

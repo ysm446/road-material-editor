@@ -186,6 +186,9 @@ void Application::Shutdown() {
     m_skyLibrary.Destroy(m_device);
     m_textureLibrary.Destroy(m_device);
     m_renderer.Shutdown(m_device);
+    if (m_layerPreviewInitialized) m_layerPreview.Shutdown(m_device);
+    if (m_layerThumbnailInitialized) m_layerThumbnailRenderer.Shutdown(m_device);
+    for (auto& thumbnail : m_layerThumbnails) m_device.DeferRelease(thumbnail.texture);
     m_imgui.Shutdown();
     m_pipelineCache.Destroy();
     m_shaderCompiler.Destroy();
@@ -333,6 +336,7 @@ int Application::Run() {
                     m_materialLibrary.MarkThumbnailDirty(asset.id);
                 }
                 m_renderer.InvalidateSceneMaterials();
+                m_layerThumbnailsDirty = true;
             }
         }
 
@@ -350,11 +354,15 @@ int Application::Run() {
             m_renderer.Resize(m_device, m_requestedViewportWidth, m_requestedViewportHeight);
         }
 
+        ProcessLayerPreview();
+        ProcessLayerThumbnails();
         ImGuiLayer::TestInput testInput{};
         const bool testDrag = m_options.testDrag && !m_options.uiScreenshotPath.empty();
         if (testDrag) {
             testInput.mouse = m_frameCounter < 13 ? m_options.testDragStart : m_options.testDragEnd;
             testInput.leftDown = m_frameCounter >= 11 && m_frameCounter < 16;
+            if (m_options.testDoubleClick) testInput.leftDown = m_frameCounter == 60 || m_frameCounter == 62;
+            testInput.deleteKey = m_options.testDelete && m_frameCounter == 18;
             testInput.shift = m_options.testDragShift && m_frameCounter < 17;
             testInput.escape = m_options.testDragCancel && m_frameCounter == 15;
         }
@@ -386,6 +394,9 @@ int Application::Run() {
 
         m_renderer.Render(m_device, m_pipelineCache, commandList, m_textureLibrary,
                           m_materialLibrary);
+        if (m_editSurfacePreset && m_layerPreviewInitialized)
+            m_layerPreview.Render(m_device, m_pipelineCache, commandList, m_textureLibrary, m_materialLibrary);
+        RenderLayerThumbnails(commandList);
 
         // マテリアルプレビューの球。**窓を開いている間だけ描く。**
         // ImGui はこのフレームで描いた中身をそのまま読む（submit 済みの
@@ -414,7 +425,9 @@ int Application::Run() {
 
         // UI 込みの書き出しは、バックバッファが描き終わったこのフレームで写す。
         // **材質の評価は非同期なので、走っている最中は撮らない**（前回の絵が写る）。
-        const bool evaluationIdle = !m_renderer.IsEvaluating();
+        const bool evaluationIdle = !m_renderer.IsEvaluating() &&
+            (!m_editSurfacePreset || !m_layerPreviewInitialized || !m_layerPreview.IsEvaluating()) &&
+            !m_layerThumbnailActive && std::none_of(m_layerThumbnails.begin(), m_layerThumbnails.end(), [](const auto& t) { return t.dirty; });
         const bool captureUi = !m_options.uiScreenshotPath.empty() &&
                                (m_frameCounter + 1) >= m_options.screenshotFrame && evaluationIdle;
         if (captureUi) {
@@ -527,10 +540,12 @@ void Application::DrawUi() {
     // その高さをもらう。ウィンドウはドック先を覚えているので、戻せば同じ所へ入る。
     if (m_settings.Display().showAssetBand) {
         DrawMaterialLibraryPanel();
+        DrawLayerMaterialLibrary();
         DrawSkyLibraryPanel();
         DrawTextureLibraryPanel();
     }
     DrawMaterialPanel();
+    if (m_editSurfacePreset) DrawSurfacePresetEditor();
     DrawLightingPanel();
 
     DrawMaterialSphereWindow();
@@ -616,6 +631,7 @@ void Application::BuildDefaultLayout(ImGuiID dockspaceId) {
     // **前面にしたい「マテリアル」を後にドックする。** 同じ枠では最後に
     // ドックしたものが選ばれる。タブの並びは submit した順（マテリアル → 天球）。
     ImGui::DockBuilderDockWindow("天球", bottomRight);
+    ImGui::DockBuilderDockWindow("レイヤーマテリアル", bottomRight);
     ImGui::DockBuilderDockWindow("マテリアル", bottomRight);
     // 右カラムへタブで重ねる。縦に積むと 1 枚あたりが短くなり、
     // どれもスクロールしないと全体が見えなくなる。
@@ -631,6 +647,7 @@ void Application::BuildDefaultLayout(ImGuiID dockspaceId) {
     // 前面のタブは右カラムが「グラフ」、帯の右が「マテリアル」。
     // この時点ではまだウィンドウが無いので、実際の指定は各パネルの Begin 直前で行う。
     m_focusDefaultTabs = 3;
+    m_defaultLayerTabPending = true;
 }
 
 void Application::PushStatus(LogLevel level, const char* text) {

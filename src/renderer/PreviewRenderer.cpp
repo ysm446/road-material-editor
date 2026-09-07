@@ -604,6 +604,20 @@ void PreviewRenderer::ReleaseTargets(rhi::Device& device) {
     m_height = 0;
 }
 
+bool PreviewRenderer::CopyOutputTo(ID3D12GraphicsCommandList* commandList, rhi::GpuTexture& destination) {
+    if (!m_output.IsValid() || !destination.IsValid() || destination.width != m_output.width ||
+        destination.height != m_output.height || destination.format != m_output.format) return false;
+    PIXBeginEvent(commandList, PIX_COLOR(120, 200, 200), "LayerMaterialThumbnailCopy");
+    const auto previous = m_output.state;
+    TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    TransitionIfNeeded(commandList, destination, D3D12_RESOURCE_STATE_COPY_DEST);
+    commandList->CopyResource(destination.resource.Get(), m_output.resource.Get());
+    TransitionIfNeeded(commandList, destination, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    TransitionIfNeeded(commandList, m_output, previous);
+    PIXEndEvent(commandList);
+    return true;
+}
+
 bool PreviewRenderer::SaveOutputToPng(rhi::Device& device, const std::filesystem::path& path) {
     if (!m_output.IsValid()) {
         return false;

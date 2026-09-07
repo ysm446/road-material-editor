@@ -186,6 +186,7 @@ void ImGuiLayer::BeginFrame(const TestInput* testInput) {
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, testInput->leftDown);
         io.AddKeyEvent(ImGuiMod_Shift, testInput->shift);
         io.AddKeyEvent(ImGuiKey_Escape, testInput->escape);
+        io.AddKeyEvent(ImGuiKey_Delete, testInput->deleteKey);
     }
     ImGui::NewFrame();
 }

@@ -6,6 +6,8 @@
 #include "graph/SurfaceBandGeometry.h"
 #include "ui/UiStyle.h"
 #include "graph/SurfacePresetGraph.h"
+#include "graph/RoadMask.h"
+#include <imgui_internal.h>
 #include <imgui-node-editor/imgui_node_editor.h>
 #include <algorithm>
 #include <cmath>
@@ -14,6 +16,28 @@
 namespace tg {
 namespace ed = ax::NodeEditor;
 namespace {
+graph::CompiledMeshGraph BuildLayerPreviewScene(const graph::SurfacePreset& source, float meters, bool displacement) {
+    graph::NodeGraph graph;
+    const auto pathId = graph.CreateNode(graph::NodeKind::Path);
+    const auto roadId = graph.CreateNode(graph::NodeKind::Road);
+    auto& path = std::get<graph::PathNodeSettings>(graph.FindMutableNode(pathId)->settings).path;
+    const auto first = graph::AddPathPoint(path, 0, -meters * 0.5f, 0);
+    graph::AddPathPoint(path, 0, meters * 0.5f, first);
+    std::get<graph::RoadNodeSettings>(graph.FindMutableNode(roadId)->settings).widthMeters = meters;
+    graph.CreateLink(graph.FindNode(pathId)->outputs[0].id, graph.FindNode(roadId)->inputs[0].id);
+    graph::SurfaceLayoutDocument document;
+    std::string error;
+    if (graph::CreateRoadLayout(document, graph, roadId, error)) {
+        const auto id = document.presets[0].id;
+        const auto section = document.presets[0].section;
+        document.presets[0] = source;
+        auto& preset = document.presets[0];
+        preset.id = id; preset.section = section; preset.parameters.clear(); preset.role = graph::SurfaceRole::Road;
+        if (!displacement) preset.displacementMeters = 0;
+        return graph::CompileSurfaceLayoutPreview(graph, document, roadId);
+    }
+    graph::CompiledMeshGraph failed; failed.error = error; return failed;
+}
 const char* PresetNodeLabel(graph::PresetNodeKind kind) {
     switch (kind) {
         case graph::PresetNodeKind::Material: return "素材";
@@ -168,7 +192,7 @@ bool Application::DrawSurfacePresetGraph(graph::SurfacePreset& preset) {
     ed::End(); ed::PopStyleColor(2); ed::SetCurrentEditor(nullptr);
     return changed;
 }
-void Application::DrawSurfacePresetEditor() {
+void Application::DrawSurfacePresetGraphEditor() {
     if (ui::Button("配置へ戻る", ui::kWideButtonWidth)) { m_editSurfacePreset = 0; return; }
     auto edited = m_surfaceLayouts;
     auto found = std::find_if(edited.presets.begin(), edited.presets.end(), [&](const auto& p) { return p.id == m_editSurfacePreset; });
@@ -271,4 +295,372 @@ void Application::DrawSurfacePresetEditor() {
         m_graph.MarkDirty(); MarkDocumentChanged();
     }
 }
+
+void Application::ProcessLayerPreview() {
+    if (!m_editSurfacePreset) { m_layerPreviewPreset = 0; return; }
+    const auto found = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(),
+        [&](const auto& p) { return p.id == m_editSurfacePreset; });
+    if (found == m_surfaceLayouts.presets.end()) return;
+    if (!m_layerPreviewInitialized) {
+        m_layerPreview.RequestShadowCascadeCount(1);
+        m_layerPreview.RequestShadowResolution(1024);
+        if (!m_layerPreview.Initialize(m_device, m_pipelineCache)) { m_layerPreview.Shutdown(m_device); return; }
+        m_layerPreviewInitialized = true;
+        m_layerPreview.ShowSkybox() = false;
+        m_layerPreview.ShowReferenceGrid() = false;
+        m_layerPreview.TessellationEnabled() = true;
+        m_layerPreview.RequestMaterialResolution(512);
+        m_layerPreview.Resize(m_device, 768, 768);
+    }
+    const bool switched = m_layerPreviewPreset != found->id;
+    if (switched || m_layerPreviewDirty) {
+        auto compiled = BuildLayerPreviewScene(*found, m_layerPreviewMeters, m_layerPreviewDisplacement);
+            if (compiled.error.empty() && m_layerPreview.SetGeneratedMeshScene(m_device, compiled.scene)) {
+                m_layerPreview.InvalidateSceneMaterials();
+                if (switched) {
+                    renderer::CameraState camera;
+                    camera.yaw = 0.785398f; camera.pitch = 0.61548f;
+                    camera.distance = m_layerPreviewMeters * 2.1f;
+                    m_layerPreview.GetCamera().SetState(camera);
+                }
+                m_layerPreviewPreset = found->id; m_layerPreviewDirty = false;
+            } else m_surfacePresetError = compiled.error;
+    }
+    m_layerPreview.Debug() = m_layerPreviewView == 1 ? renderer::DebugView::Height : renderer::DebugView::Shaded;
+    m_layerPreview.SetActiveSky(m_renderer.ActiveSky());
+    m_layerPreview.Light() = m_renderer.Light();
+    m_layerPreview.Exposure() = m_renderer.Exposure();
+    m_layerPreview.Tonemap() = m_renderer.Tonemap();
+    m_layerPreview.ProcessPendingWork(m_device, m_pipelineCache);
+}
+
+
+void Application::ProcessLayerThumbnails() {
+    if (m_layerThumbnailsDirty) {
+        for (auto& entry : m_layerThumbnails) { entry.dirty = true; entry.ready = false; }
+        m_layerThumbnailActive = 0; m_layerThumbnailsDirty = false;
+    }
+    for (auto it = m_layerThumbnails.begin(); it != m_layerThumbnails.end();) {
+        if (std::none_of(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == it->id; })) {
+            m_device.DeferRelease(it->texture); it = m_layerThumbnails.erase(it);
+        } else ++it;
+    }
+    if (m_surfaceLayouts.presets.empty()) return;
+    for (const auto& preset : m_surfaceLayouts.presets)
+        if (std::none_of(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == preset.id; })) {
+            LayerThumbnail entry; entry.id = preset.id; m_layerThumbnails.push_back(std::move(entry));
+        }
+    if (!m_layerThumbnailInitialized) {
+        auto& renderer = m_layerThumbnailRenderer;
+        renderer.RequestShadowCascadeCount(1); renderer.RequestShadowResolution(1024);
+        if (!renderer.Initialize(m_device, m_pipelineCache)) { renderer.Shutdown(m_device); return; }
+        m_layerThumbnailInitialized = true;
+        if (!renderer.Resize(m_device, 256, 256)) {
+            renderer.Shutdown(m_device); m_layerThumbnailInitialized = false; return;
+        }
+        renderer.ShowSkybox() = false; renderer.ShowReferenceGrid() = false;
+        renderer.TessellationEnabled() = true; renderer.RequestMaterialResolution(256);
+        renderer::CameraState camera;
+        camera.yaw = 0.785398f; camera.pitch = 0.61548f; camera.distance = 32; camera.fovY = 0.2f;
+        renderer.GetCamera().SetState(camera);
+        renderer.Light() = m_renderer.Light(); renderer.Exposure() = m_renderer.Exposure();
+        renderer.SetActiveSky(m_renderer.ActiveSky()); renderer.Tonemap() = m_renderer.Tonemap();
+    }
+    if (!m_layerThumbnailActive) {
+        auto entry = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [](const auto& t) { return t.dirty; });
+        if (entry == m_layerThumbnails.end()) return;
+        const auto preset = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == entry->id; });
+        if (!entry->texture.IsValid()) {
+            rhi::TextureDesc desc; desc.width = desc.height = 256; desc.debugName = L"LayerMaterialThumbnail";
+            if (!m_device.Allocator().CreateTexture2D(desc, entry->texture)) { entry->dirty = false; return; }
+        }
+        auto compiled = BuildLayerPreviewScene(*preset, 4, true);
+        if (!compiled.error.empty() || !m_layerThumbnailRenderer.SetGeneratedMeshScene(m_device, compiled.scene)) {
+            entry->dirty = false; return;
+        }
+        m_layerThumbnailActive = entry->id; m_layerThumbnailFrames = 0;
+    }
+    m_layerThumbnailRenderer.ProcessPendingWork(m_device, m_pipelineCache);
+}
+
+void Application::RenderLayerThumbnails(ID3D12GraphicsCommandList* commandList) {
+    if (!m_layerThumbnailActive || !m_layerThumbnailInitialized) return;
+    m_layerThumbnailRenderer.Render(m_device, m_pipelineCache, commandList, m_textureLibrary, m_materialLibrary);
+    if (++m_layerThumbnailFrames < 3 || m_layerThumbnailRenderer.IsEvaluating()) return;
+    const auto entry = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == m_layerThumbnailActive; });
+    if (entry != m_layerThumbnails.end()) {
+        entry->ready = m_layerThumbnailRenderer.CopyOutputTo(commandList, entry->texture);
+        entry->dirty = false;
+    }
+    m_layerThumbnailActive = 0;
+}
+
+void Application::DrawLayerMaterialLibrary() {
+    if (!ImGui::FindWindowByName("レイヤーマテリアル") && !ImGui::FindWindowSettingsByID(ImHashStr("レイヤーマテリアル")))
+        m_defaultLayerTabPending = true;
+    if (m_defaultLayerTabPending) {
+        auto* material = ImGui::FindWindowByName("マテリアル");
+        auto* layered = ImGui::FindWindowByName("レイヤーマテリアル");
+        if (material && layered && material->DockNode && material->DockNode == layered->DockNode && material->DockNode->TabBar) {
+            auto* tabs = material->DockNode->TabBar;
+            auto* item = ImGui::TabBarFindTabByID(tabs, layered->TabId);
+            int materialIndex = -1, layerIndex = -1;
+            for (int i = 0; i < tabs->Tabs.Size; ++i) {
+                if (tabs->Tabs[i].ID == material->TabId) materialIndex = i;
+                if (tabs->Tabs[i].ID == layered->TabId) layerIndex = i;
+            }
+            if (item && materialIndex >= 0 && layerIndex >= 0) {
+                const int offset = materialIndex + (layerIndex > materialIndex ? 1 : 0) - layerIndex;
+                if (offset) ImGui::TabBarQueueReorder(tabs, item, offset);
+                m_defaultLayerTabPending = false;
+            }
+        }
+    }
+    if (const auto* window = ImGui::FindWindowByName("マテリアル"); window && window->DockId)
+        ImGui::SetNextWindowDockID(window->DockId, ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("レイヤーマテリアル")) { ImGui::End(); return; }
+    if (ui::Button("新規作成", 100)) {
+        graph::SurfacePreset preset;
+        preset.id = m_surfaceLayouts.AllocateId(); preset.name = "新しい道路材質"; preset.role = graph::SurfaceRole::Road;
+        preset.section = {{m_surfaceLayouts.AllocateId(), 0, 0}, {m_surfaceLayouts.AllocateId(), 4, 0}};
+        preset.materials.emplace_back();
+        m_selectedLayerMaterial = m_editSurfacePreset = preset.id;
+        m_surfaceLayouts.presets.push_back(std::move(preset)); MarkDocumentChanged();
+    }
+    if (!m_layerLibraryError.empty()) ui::HintText("%s", m_layerLibraryError.c_str());
+    const float size = ui::Scaled(84);
+    if (ImGui::BeginChild("layerMaterialGrid", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
+        const int columns = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / (size + ImGui::GetStyle().ItemSpacing.x)));
+        int index = 0;
+        for (const auto& preset : m_surfaceLayouts.presets) {
+            ImGui::PushID(static_cast<int>(preset.id)); ImGui::BeginGroup();
+            const auto cached = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == preset.id; });
+            const ImTextureID texture = cached != m_layerThumbnails.end() && cached->ready ? static_cast<ImTextureID>(cached->texture.srv.gpu.ptr) : 0;
+            const auto thumbnail = ui::ThumbnailButton("thumbnail", texture, size, m_selectedLayerMaterial == preset.id);
+            if (thumbnail.clicked) { m_selectedLayerMaterial = preset.id; m_layerLibraryError.clear(); }
+            if (thumbnail.doubleClicked) {
+                m_editSurfacePreset = preset.id; m_selectedPresetLayer = 0; m_surfacePresetError.clear();
+                ImGui::SetWindowFocus("レイヤーマテリアル編集");
+            }
+            if (thumbnail.hovered) ImGui::SetTooltip("%s\nダブルクリックで編集 / DELで削除", preset.name.c_str());
+            ui::GridCaption(preset.name.c_str(), size);
+            ImGui::EndGroup(); ImGui::PopID();
+            if (++index % columns && index < static_cast<int>(m_surfaceLayouts.presets.size())) ImGui::SameLine();
+        }
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
+            ImGui::IsKeyPressed(ImGuiKey_Delete, false) && m_selectedLayerMaterial) {
+            bool used = false;
+            for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands)
+                for (const auto& span : band.spans) used |= span.preset == m_selectedLayerMaterial;
+            if (used) m_layerLibraryError = "配置で使用中です。割り当てを変更してから削除してください。";
+            else {
+                const auto found = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == m_selectedLayerMaterial; });
+                if (found != m_surfaceLayouts.presets.end()) {
+                    if (m_editSurfacePreset == found->id) m_editSurfacePreset = 0;
+                    m_surfaceLayouts.presets.erase(found); m_graph.MarkDirty(); MarkDocumentChanged();
+                }
+                m_selectedLayerMaterial = 0; m_layerLibraryError.clear();
+            }
+        }
+    }
+    ImGui::EndChild(); ImGui::End();
+}
+
+void Application::DrawSurfacePresetEditor() {
+    ImGui::SetNextWindowSize(ImVec2(ui::Scaled(1100), ui::Scaled(760)), ImGuiCond_FirstUseEver);
+    bool open = true;
+    if (!ImGui::Begin("レイヤーマテリアル編集", &open)) {
+        ImGui::End(); if (!open) m_editSurfacePreset = 0; return;
+    }
+    auto edited = m_surfaceLayouts;
+    auto found = std::find_if(edited.presets.begin(), edited.presets.end(), [&](const auto& p) { return p.id == m_editSurfacePreset; });
+    if (found == edited.presets.end()) { ImGui::End(); m_editSurfacePreset = 0; return; }
+    auto& preset = *found;
+    bool changed = false;
+    const float previewWidth = std::max(ui::Scaled(220), ImGui::GetContentRegionAvail().x * 0.52f);
+    ImGui::BeginChild("layerPreview", ImVec2(previewWidth, 0));
+    if (ui::BeginPropertyTable("layerPreviewSettings")) {
+        if (ui::PropertyFloat("表示範囲", &m_layerPreviewMeters, 1, 16, 4, "正方形の一辺の実寸", "%.1f m")) m_layerPreviewDirty = true;
+        if (ui::PropertyBool("変位を表示", &m_layerPreviewDisplacement, true, "合成後のハイトで平面を変位する")) m_layerPreviewDirty = true;
+        const char* views[] = {"材質", "ハイト"};
+        ui::PropertyCombo("表示", &m_layerPreviewView, views, 2, 0, "材質の陰影または合成ハイト");
+        ui::EndPropertyTable();
+    }
+    if (ui::Button("視点を戻す", 120)) m_layerPreviewPreset = 0;
+    const float imageSize = std::max(1.0f, std::min(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - ui::Scaled(30)));
+    if (m_layerPreview.HasOutput()) {
+        ImGui::Image(static_cast<ImTextureID>(m_layerPreview.OutputHandle().ptr), ImVec2(imageSize, imageSize));
+        if (ImGui::IsItemHovered()) {
+            auto& camera = m_layerPreview.GetCamera(); const auto& io = ImGui::GetIO();
+            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) camera.Orbit(io.MouseDelta.x, io.MouseDelta.y);
+            if (io.MouseWheel) camera.Zoom(io.MouseWheel);
+        }
+    }
+    ui::HintText("ドラッグで回転・ホイールで拡大縮小");
+    ImGui::EndChild(); ImGui::SameLine();
+    ImGui::BeginChild("layerEditor", ImVec2(0, 0));
+    if (preset.materialGraph) {
+        ui::HintText("ノード形式の材質です。変換すると出力につながる層を取り込みます。未使用ノードは除かれます（Undo可能）");
+        if (ui::Button("レイヤー形式に変換", ui::kWideButtonWidth)) {
+            std::vector<graph::PresetMaterial> layers; std::string error;
+            if (graph::CompilePresetMaterials(preset, layers, error)) {
+                preset.materials = std::move(layers); preset.materialGraph.reset(); changed = true;
+            } else m_surfacePresetError = error;
+        }
+        if (!changed) DrawSurfacePresetGraphEditor();
+    } else {
+        ui::HintText("上の行ほど上に重なります。この材質を使う全区間へ反映します");
+        auto& layers = preset.materials;
+        m_selectedPresetLayer = std::clamp(m_selectedPresetLayer, 0, static_cast<int>(layers.size()) - 1);
+        ImGui::BeginDisabled(layers.size() >= 4);
+        if (ui::Button("追加", 70)) {
+            graph::PresetMaterial layer; layer.mask.emplace(); layer.mask->shape = graph::RoadMaskShape::Constant; layer.mask->breakupAmount = 0;
+            layers.push_back(layer); m_selectedPresetLayer = static_cast<int>(layers.size()) - 1; changed = true;
+        }
+        ImGui::SameLine();
+        if (ui::Button("複製", 70)) {
+            auto layer = layers[m_selectedPresetLayer];
+            if (!layer.mask) { layer.mask.emplace(); layer.mask->shape = graph::RoadMaskShape::Constant; layer.mask->breakupAmount = 0; }
+            layers.push_back(layer); m_selectedPresetLayer = static_cast<int>(layers.size()) - 1; changed = true;
+        }
+        ImGui::EndDisabled(); ImGui::SameLine(); ImGui::BeginDisabled(layers.size() <= 1);
+        if (ui::Button("削除", 70)) { layers.erase(layers.begin() + m_selectedPresetLayer); m_selectedPresetLayer = 0; changed = true; }
+        ImGui::EndDisabled();
+        for (int i = static_cast<int>(layers.size()) - 1; i >= 0; --i) {
+            const auto material = layers[i]; ImGui::PushID(i);
+            bool enabled = material.enabled;
+            if (ui::EyeToggle("visible", &enabled, ui::Scaled(28))) { layers[i].enabled = enabled; changed = true; }
+            ImGui::SameLine();
+            const auto* asset = m_materialLibrary.Find(material.material);
+            if (ui::ThumbnailButton("material", static_cast<ImTextureID>(m_materialLibrary.ThumbnailHandle(material.material).ptr), ui::Scaled(64), i == m_selectedPresetLayer && !m_selectedPresetMask).clicked) {
+                m_selectedPresetLayer = i; m_selectedPresetMask = false;
+            }
+            if (ImGui::BeginDragDropSource()) { ImGui::SetDragDropPayload("TG_PRESET_LAYER", &i, sizeof(i)); ImGui::TextUnformatted(asset ? asset->name.c_str() : "定数材質"); ImGui::EndDragDropSource(); }
+            if (ImGui::BeginDragDropTarget()) {
+                if (const auto* payload = ImGui::AcceptDragDropPayload("TG_PRESET_LAYER")) {
+                    const int from = *static_cast<const int*>(payload->Data);
+                    if (from >= 0 && from < static_cast<int>(layers.size()) && from != i) {
+                        auto moved = layers[from]; layers.erase(layers.begin() + from); layers.insert(layers.begin() + i, moved);
+                        for (size_t upper = 1; upper < layers.size(); ++upper) if (!layers[upper].mask) {
+                            layers[upper].mask.emplace(); layers[upper].mask->shape = graph::RoadMaskShape::Constant; layers[upper].mask->breakupAmount = 0;
+                        }
+                        m_selectedPresetLayer = i; changed = true;
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::SameLine();
+            const auto pos = ImGui::GetCursorScreenPos(); const float side = ui::Scaled(64);
+            if (ImGui::InvisibleButton("mask", ImVec2(side, side))) { m_selectedPresetLayer = i; m_selectedPresetMask = true; }
+            auto* draw = ImGui::GetWindowDrawList();
+            graph::RoadNodeSettings road; road.widthMeters = m_layerPreviewMeters;
+            const auto lanes = graph::ComputeRoadLanes(road, true);
+            for (int y = 0; y < 24; ++y) for (int x = 0; x < 24; ++x) {
+                const float across = ((x + 0.5f) / 24 - 0.5f) * m_layerPreviewMeters;
+                const float distance = (y + 0.5f) / 24 * m_layerPreviewMeters;
+                const float value = i == 0 ? 1 : material.mask ? graph::EvaluateRoadMask(*material.mask, across, distance, m_layerPreviewMeters * 0.5f,
+                    m_layerPreviewMeters, &lanes, -across, distance - m_layerPreviewMeters * 0.5f, true) : 0;
+                draw->AddRectFilled(ImVec2(pos.x + x * side / 24, pos.y + y * side / 24),
+                    ImVec2(pos.x + (x + 1) * side / 24, pos.y + (y + 1) * side / 24), ImGui::ColorConvertFloat4ToU32(ImVec4(value, value, value, 1)));
+            }
+            draw->AddRect(pos, ImVec2(pos.x + side, pos.y + side), ImGui::GetColorU32(i == m_selectedPresetLayer && m_selectedPresetMask ? ImGuiCol_HeaderActive : ImGuiCol_Border));
+            ImGui::SameLine();
+            if (ImGui::Selectable(asset ? asset->name.c_str() : "定数材質", i == m_selectedPresetLayer, 0, ImVec2(0, side))) m_selectedPresetLayer = i;
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+        if (ui::BeginPropertyTable("layerProperties")) {
+            char name[128]; std::snprintf(name, sizeof(name), "%s", preset.name.c_str());
+            if (ui::PropertyTextInput("名前", name, sizeof(name), "アセットの名前") && name[0]) { preset.name = name; changed = true; }
+            const graph::SurfacePreset defaults;
+            changed |= ui::PropertyFloat("凹凸の高さ", &preset.displacementMeters, 0, 10, defaults.displacementMeters, "合成ハイトで押し出す実寸", "%.3f m");
+            changed |= ui::PropertyFloat("ブレンド幅", &preset.layerBlendRange, 0, 1, defaults.layerBlendRange, "ハイト境界の柔らかさ");
+            auto& material = layers[m_selectedPresetLayer];
+            changed |= ui::PropertyBool("レイヤーを表示", &material.enabled, true, "下地を隠すと定数材質を表示する");
+            const graph::PresetMaterial materialDefaults;
+            if (!m_selectedPresetMask) {
+                changed |= DrawMaterialSlotRow("素材", material.material, m_materialLibrary, true);
+                changed |= ui::PropertyFloat("反復長", &material.uvRepeatMeters, 0.01f, 100, materialDefaults.uvRepeatMeters,
+                "素材が繰り返す実距離。大きくすると模様が大きくなる", "%.2f m");
+                const char* spaces[] = {"面に沿う", "ワールド XZ"};
+                int space = material.worldUv ? 1 : 0;
+                if (ui::PropertyCombo("座標", &space, spaces, 2, materialDefaults.worldUv ? 1 : 0,
+                "面に沿う: 道路の曲がりに追従。ワールド XZ: 地面や隣の面と同じ座標で素材を配置")) {
+                    material.worldUv = space == 1; changed = true;
+                }
+                if (!material.material) {
+                    changed |= ui::PropertyColorLinear("色", material.baseColor.data(), materialDefaults.baseColor.data(), "素材未指定時の路面色");
+                    changed |= ui::PropertyFloat("粗さ", &material.roughness, 0, 1, materialDefaults.roughness, "大きいほど反射がぼける");
+                    changed |= ui::PropertyFloat("金属度", &material.metallic, 0, 1, materialDefaults.metallic, "素材未指定時の金属の割合");
+                    changed |= ui::PropertyFloat("AO", &material.ambientOcclusion, 0, 1, materialDefaults.ambientOcclusion, "素材未指定時の環境光の遮蔽。1で遮蔽なし");
+                }
+            }
+            if (m_selectedPresetLayer > 0) {
+                const char* modes[] = {"マスクどおり", "ハイトで競合"};
+                int mode = static_cast<int>(material.blendMode);
+                if (ui::PropertyCombo("混ぜ方", &mode, modes, 2, static_cast<int>(materialDefaults.blendMode),
+                "マスクどおり: 被覆率で混ぜる。ハイトで競合: 素材の高い部分を優先する")) {
+                    material.blendMode = static_cast<uint32_t>(mode); changed = true;
+                }
+                const char* gates[] = {"使わない", "下地の高い所", "下地の低い所"};
+                int gate = static_cast<int>(material.heightGate);
+                if (ui::PropertyCombo("下地のハイト", &gate, gates, 3, static_cast<int>(materialDefaults.heightGate),
+                "下地の凹凸で上層を絞る。粒の露出や低い所に溜まる土を表現する")) {
+                    material.heightGate = static_cast<uint32_t>(gate); changed = true;
+                }
+                if (material.heightGate) {
+                    changed |= ui::PropertyFloat("高さのしきい値", &material.heightGateThreshold, 0, 1,
+                    materialDefaults.heightGateThreshold, "下地のハイト0〜1のうち、境界にする高さ");
+                    changed |= ui::PropertyFloat("高さの柔らかさ", &material.heightGateSoftness, 0.001f, 1,
+                    materialDefaults.heightGateSoftness, "高さ条件の境界をぼかす幅");
+                }
+            }
+            if (m_selectedPresetMask && m_selectedPresetLayer > 0 && material.mask) {
+                ImGui::PushID("presetMask");
+                changed |= DrawRoadMaskPropertyRows(*material.mask);
+                ImGui::PopID();
+            }
+
+            if (m_selectedPresetMask && (m_selectedPresetLayer == 0 || !material.mask))
+                ui::PropertyValue("マスク", "%s", m_selectedPresetLayer == 0 ? "下地は全面を覆います" : "未設定");
+            ui::EndPropertyTable();
+        }
+        if (m_selectedPresetMask && m_selectedPresetLayer > 0 && !layers[m_selectedPresetLayer].mask && ui::Button("マスクを作成", 140)) {
+            layers[m_selectedPresetLayer].mask.emplace();
+            layers[m_selectedPresetLayer].mask->shape = graph::RoadMaskShape::Constant;
+            layers[m_selectedPresetLayer].mask->breakupAmount = 0;
+            changed = true;
+        }
+        float width, height;
+        if (graph::GetSimpleRoadsideDimensions(preset, width, height)) {
+            ui::SectionHeader("沿道の断面");
+            if (ui::BeginPropertyTable("layerSideShape")) {
+                const graph::SimpleRoadsideDefaults defaults;
+                const bool step = preset.section.size() == 3;
+                bool shapeChanged = ui::PropertyFloat("幅", &width, 0.1f, 10, defaults.width, "この沿道プリセットを使う全区間の幅", "%.2f m");
+                shapeChanged |= ui::PropertyFloat(step ? "段差の高さ" : "外端の高さ", &height, step ? 0.01f : -2, 2,
+                    step ? defaults.sidewalkHeight : defaults.groundHeight, "道路端を固定した断面の高さ", "%.2f m");
+                if (shapeChanged) changed |= graph::SetSimpleRoadsideDimensions(preset, width, height);
+                ui::EndPropertyTable();
+            }
+        }
+    }
+    if (!m_surfacePresetError.empty()) ui::HintText("%s", m_surfacePresetError.c_str());
+    ImGui::EndChild(); ImGui::End();
+    if (!open) m_editSurfacePreset = 0;
+    if (changed) {
+        std::string error;
+        if (graph::ValidateSurfaceLayouts(edited, error)) {
+            for (const auto& layout : edited.layouts) for (const auto& band : layout.bands) {
+                if (!error.empty() || std::none_of(band.spans.begin(), band.spans.end(), [&](const auto& span) { return span.preset == preset.id; })) continue;
+                error = band.side == graph::SurfaceSide::Road
+                    ? graph::CompileSurfaceLayoutPreview(m_graph, edited, layout.roadNode).error
+                    : graph::CompileSurfaceBandPreview(m_graph, edited, layout.roadNode, band.id).error;
+            }
+            if (error.empty()) { m_surfaceLayouts = std::move(edited); m_graph.MarkDirty(); MarkDocumentChanged(); }
+        }
+        m_surfacePresetError = error;
+    }
+}
+
 }  // namespace tg

@@ -775,4 +775,45 @@ void RunSurfaceLayoutTests() {
               "層の追加が素材・マスク・合成を結線し、4層で止まる");
     }
 
+
+    {
+        auto visibility = document;
+        auto& visibilityPreset = visibility.presets[0];
+        auto upper = visibilityPreset.materials[0];
+        upper.material = 42; upper.mask.emplace(); upper.mask->shape = graph::RoadMaskShape::WorldNoise;
+        upper.mask->strength = 0.7f; upper.enabled = false;
+        visibilityPreset.materials.push_back(upper);
+        std::vector<graph::PresetMaterial> evaluated;
+        auto reordered = visibility;
+        std::swap(reordered.presets[0].materials[0], reordered.presets[0].materials[1]);
+        reordered.presets[0].materials[0].enabled = true;
+        Check(graph::ValidateSurfaceLayouts(reordered, error) &&
+              graph::CompilePresetMaterials(reordered.presets[0], evaluated, error) &&
+              evaluated[0].material == 42 && !evaluated[0].mask && reordered.presets[0].materials[0].mask,
+              "上層を下地へ移動でき、マスクは保存して評価時だけ全面にする");
+        std::swap(reordered.presets[0].materials[0], reordered.presets[0].materials[1]);
+        Check(graph::CompilePresetMaterials(reordered.presets[0], evaluated, error) && evaluated[1].mask && evaluated[1].mask->strength == 0.7f,
+              "下地から上層へ戻した素材は元のマスクを使う");
+        Check(graph::CompilePresetMaterials(visibilityPreset, evaluated, error) && evaluated.size() == 2 && !evaluated[1].mask,
+              "非表示レイヤーはマスクを評価へ渡さない");
+        const auto saved = io::WriteSurfaceLayouts(visibility);
+        graph::SurfaceLayoutDocument restored;
+        Check(io::ReadSurfaceLayouts(saved, restored, error) && io::WriteSurfaceLayouts(restored) == saved &&
+              !restored.presets[0].materials[1].enabled && restored.presets[0].materials[1].mask->strength == 0.7f,
+              "非表示の素材とマスクを失わず保存往復する");
+        restored.presets[0].materials[1].enabled = true;
+        Check(graph::CompilePresetMaterials(restored.presets[0], evaluated, error) && evaluated[1].mask && evaluated[1].material == 42,
+              "再表示すると元の素材とマスクへ戻る");
+        visibilityPreset.materials[0].enabled = false;
+        Check(graph::CompilePresetMaterials(visibilityPreset, evaluated, error) && evaluated[0].material == 0,
+              "下地の非表示は安全な定数材質を使う");
+        visibilityPreset.materialGraph = graph::MakePresetGraph(visibilityPreset.materials);
+        Check(graph::CompilePresetMaterials(visibilityPreset, evaluated, error) && evaluated[0].material == 0 && !evaluated[1].mask,
+              "グラフ形式でもレイヤーの非表示が一致する");
+        auto malformed = saved;
+        malformed["presets"][0]["materials"][1]["enabled"] = "false";
+        const auto unchanged = io::WriteSurfaceLayouts(restored);
+        Check(!io::ReadSurfaceLayouts(malformed, restored, error) && io::WriteSurfaceLayouts(restored) == unchanged,
+              "表示フラグの型が壊れた保存データは非破壊で拒否する");
+    }
 }

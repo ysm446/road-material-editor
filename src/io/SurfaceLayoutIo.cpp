@@ -56,11 +56,13 @@ json WritePresetMaterial(const graph::PresetMaterial& material) {
             {"softness", mask.softness}, {"seed", mask.seed}, {"breakupAmount", mask.breakupAmount},
             {"breakupScale", mask.breakupScaleMeters}, {"strength", mask.strength}, {"invert", mask.invert}};
     }
+    if (!material.enabled) m["enabled"] = false;
     return m;
 }
 
 graph::PresetMaterial ReadPresetMaterial(Reader& r, const json& m, uint32_t version) {
     graph::PresetMaterial material;
+    if (m.contains("enabled")) material.enabled = r.Bool(m, "enabled");
     material.material = r.UInt(m, "material"); material.uvRepeatMeters = r.Float(m, "uvRepeat"); material.worldUv = r.Bool(m, "worldUv");
     material.roughness = r.Float(m, "roughness");
     const auto& color = r.Array(m, "baseColor");

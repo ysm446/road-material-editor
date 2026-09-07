@@ -61,7 +61,7 @@ bool Environment::Initialize(rhi::Device& device, rhi::PipelineCache& pipelineCa
     brdfDesc.format = kBrdfLutFormat;
     brdfDesc.allowUnorderedAccess = true;
     brdfDesc.createSrv = true;
-    brdfDesc.initialState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    brdfDesc.initialState = D3D12_RESOURCE_STATE_COMMON;
     brdfDesc.debugName = L"EnvBrdfLut";
     if (!device.Allocator().CreateTexture2D(brdfDesc, m_brdfLut)) {
         return false;
@@ -101,6 +101,7 @@ bool Environment::BuildBrdfLut(rhi::Device& device, rhi::PipelineCache& pipeline
 
     const bool executed = device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
         PIXBeginEvent(commandList, PIX_COLOR(120, 180, 255), "EnvBrdfLut");
+        TransitionIfNeeded(commandList, m_brdfLut, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         commandList->SetComputeRootSignature(pipelineCache.GlobalRootSignature());
         commandList->SetPipelineState(pipeline);
         commandList->SetComputeRoot32BitConstants(0, sizeof(constants) / sizeof(uint32_t),

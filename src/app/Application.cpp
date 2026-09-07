@@ -292,7 +292,7 @@ int Application::Run() {
         // 対話せずに保存と読み込みを確かめるために使う。
         if (!m_options.saveProjectPath.empty() && m_frameCounter >= m_options.screenshotFrame) {
             const io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
-                                       m_renderer, m_graph};
+                                       m_renderer, m_graph, m_surfaceLayouts};
             io::SaveProject(m_options.saveProjectPath, refs);
             break;
         }

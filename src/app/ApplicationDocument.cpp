@@ -32,6 +32,7 @@ DocumentSnapshot Application::CaptureDocument() const {
     snapshot.graphNodes = m_graph.Nodes();
     snapshot.graphLinks = m_graph.Links();
     snapshot.roadNetwork = m_graph.RoadNetwork();
+    snapshot.surfaceLayouts = m_surfaceLayouts;
     snapshot.selectedGraphNode = m_selectedGraphNode;
     snapshot.selectedMaterial = m_selectedMaterial;
 
@@ -129,6 +130,10 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
     }
     m_graph.Replace(std::move(nodes), snapshot.graphLinks);
     m_graph.SetRoadNetwork(snapshot.roadNetwork);
+    m_surfaceLayouts = snapshot.surfaceLayouts;
+    for (auto& preset : m_surfaceLayouts.presets)
+        for (auto& material : preset.materials)
+            if (!m_materialLibrary.Find(material.material)) material.material = compositor::kNoMaterialAsset;
     // ノードの位置も一緒に戻すので、エディタへ流し込み直す。視点は動かさない。
     RequestGraphNodePlacement(false);
 

@@ -755,6 +755,7 @@ void Application::DrawGraphEditor() {
             if (ed::AcceptDeletedItem()) {
                 const int nodeId = ToGraphId(deletedNodeId.Get());
                 if (m_graph.DeleteNode(nodeId)) {
+                    std::erase_if(m_surfaceLayouts.layouts, [nodeId](const auto& layout) { return layout.roadNode == nodeId; });
                     MarkDocumentChanged();
                     if (m_previewGraphNode == nodeId) {
                         m_previewGraphNode = 0;

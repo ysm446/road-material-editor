@@ -198,6 +198,7 @@ void Application::ResetProject() {
     // メッシュシーンは次のフレームの SyncMeshGraph が作り直す（改版を 0 に戻す）。
     m_meshSelection = MeshSelectionState{};
     m_graph = graph::NodeGraph::CreateDefault();
+    m_surfaceLayouts = {};
     m_selectedGraphNode = 0;
     m_previewGraphNode = 0;
     m_previewGraphPin = 0;
@@ -259,7 +260,7 @@ void Application::ProcessPendingFileWork() {
         m_pendingProjectOpen.clear();
 
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
-                             m_renderer, m_graph};
+                             m_renderer, m_graph, m_surfaceLayouts};
         if (io::LoadProject(path, m_device, m_pipelineCache, refs)) {
             m_meshSelection = MeshSelectionState{};
             m_recentProjects.Add(path);
@@ -302,7 +303,7 @@ void Application::ProcessPendingFileWork() {
         m_pendingProjectSave.clear();
 
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
-                             m_renderer, m_graph};
+                             m_renderer, m_graph, m_surfaceLayouts};
         if (io::SaveProject(path, refs)) {
             m_recentProjects.Add(path);
             m_projectPath = path;

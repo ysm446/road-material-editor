@@ -198,11 +198,10 @@ bool MaterialLibrary::BuildThumbnail(rhi::Device& device, rhi::PipelineCache& pi
         desc.height = kThumbnailSize;
         desc.format = DXGI_FORMAT_R8G8B8A8_UNORM;
         desc.allowUnorderedAccess = true;
-        // 初回は Discard で初期化してから書く（TextureLibrary::BuildPreview と同じ理由）。
+        // 初回はRTVの明示クリアで初期化してから書く。
         // D3D12MA の配置リソースは解放跡のメモリを再利用するため、初期化せずに
         // UAV で書くと GPU ベースバリデーションが「レイアウト COMMON のまま書いた」と
-        // 報告する。Discard は直接キューでは RENDER_TARGET 状態を要求するので
-        // RTV フラグも付ける。
+        // 報告する場合がある。RTVをクリアしてからUAVへ遷移させる。
         desc.allowRenderTarget = true;
         desc.createSrv = true;
         desc.initialState = D3D12_RESOURCE_STATE_COMMON;
@@ -238,11 +237,12 @@ bool MaterialLibrary::BuildThumbnail(rhi::Device& device, rhi::PipelineCache& pi
     const bool executed = device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
         PIXBeginEvent(commandList, PIX_COLOR(120, 200, 200), "MaterialThumbnail");
 
-        // 作った直後（COMMON）は Discard で初期化してから UAV へ。
-        // 中身はディスパッチが全画素を書き潰すので、初期化は Discard で十分。
+        // 作った直後は内容とメタデータを明示クリアし、再利用メモリを初期化する。
         if (thumbnail.state == D3D12_RESOURCE_STATE_COMMON) {
             rhi::TransitionIfNeeded(commandList, thumbnail, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            commandList->DiscardResource(thumbnail.resource.Get(), nullptr);
+            // TextureDescの最適化クリア値と同じ値にする。
+            const float clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            commandList->ClearRenderTargetView(thumbnail.rtv.cpu, clearColor, 0, nullptr);
         }
         rhi::TransitionIfNeeded(commandList, thumbnail, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 

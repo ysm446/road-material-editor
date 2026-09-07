@@ -9,6 +9,7 @@
 #include "graph/NodeGraph.h"
 #include "graph/Road.h"
 #include "app/UndoHistory.h"
+#include "graph/SurfaceLayout.h"
 #include "io/AppSettings.h"
 #include "io/RecentFiles.h"
 #include "renderer/MaterialSphere.h"
@@ -281,6 +282,7 @@ private:
     // --- ノードグラフ -------------------------------------------------------
     // 道路はグラフが唯一の入口。Mesh Output へ届いた鎖をメッシュシーンにして
     // レンダラへ渡す（SyncMeshGraph）。材質の合成はメッシュごとにレンダラ側で評価する。
+    graph::SurfaceLayoutDocument m_surfaceLayouts;
     graph::NodeGraph m_graph = graph::NodeGraph::CreateDefault();
     graph::GraphId m_selectedGraphNode = 0;
     // エディタで選ばれているノード全部。コピーはこれを見る

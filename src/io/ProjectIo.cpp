@@ -1,4 +1,5 @@
 #include "io/ProjectIo.h"
+#include "io/SurfaceLayoutIo.h"
 
 #include "core/PathUtf8.h"
 
@@ -43,7 +44,8 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 14: shoulder ノード。旧ビルドが路肩を読み飛ばして Outer 以降のリンクを失うことを防ぐ。
 // 15: merge ノード（入力数が可変）。旧ビルドが Merge を読み飛ばして Mesh Output との接続を失うことを防ぐ。
 // 16: crack ノード。
-constexpr int kProjectFormatVersion = 16;
+// 17: 埋込プリセットと道路・沿道の配置記述。旧ビルドによる消失を防ぐ。
+constexpr int kProjectFormatVersion = 17;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -1368,6 +1370,12 @@ bool ReadJsonFile(const fs::path& path, const char* expectedFormat, int maxVersi
 }  // namespace
 
 bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs) {
+    std::string layoutError;
+    if (!graph::ValidateSurfaceLayouts(refs.surfaceLayouts, layoutError) ||
+        !graph::ValidateSurfaceLayoutRoads(refs.surfaceLayouts, refs.graph, layoutError)) {
+        TG_LOG_ERROR("配置データを保存できません: %s", layoutError.c_str());
+        return false;
+    }
     // 裸のファイル名（親ディレクトリ無し）で保存すると相対パスが作れず、
     // 全参照が絶対パスで書かれてしまう。先に絶対化してから基準を取る。
     std::error_code absoluteError;
@@ -1423,6 +1431,14 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs) {
             return (it != materialIndex.end()) ? json(it->second) : json();
         };
     document["graph"] = WriteGraph(refs.graph, writeMaterial);
+    auto layouts = WriteSurfaceLayouts(refs.surfaceLayouts);
+    for (auto& preset : layouts["presets"]) {
+        for (auto& material : preset["materials"]) {
+            const auto reference = writeMaterial(material["material"].get<uint32_t>());
+            material["material"] = reference.is_null() ? json(0) : reference;
+        }
+    }
+    document["surfaceLayouts"] = std::move(layouts);
 
     // 天球はマテリアルと同じく、構造ごと埋め込む（画像だけ相対パスの参照）。
     json skies = json::array();
@@ -1452,6 +1468,28 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
         return false;
     }
 
+    graph::SurfaceLayoutDocument pendingLayouts;
+    if (ReadInt(document, "version", 0) >= 17 && FindMember(document, "surfaceLayouts") == nullptr) {
+        TG_LOG_ERROR("版17の配置データが欠落しています（現在の文書は保持）");
+        return false;
+    }
+    if (const json* layouts = FindMember(document, "surfaceLayouts")) {
+        std::string error;
+        if (!ReadSurfaceLayouts(*layouts, pendingLayouts, error)) {
+            TG_LOG_ERROR("配置データを読み込めません（現在の文書は保持）: %s", error.c_str());
+            return false;
+        }
+        if (!pendingLayouts.layouts.empty()) {
+            graph::NodeGraph validationGraph;
+            const auto* graphValue = FindMember(document, "graph");
+            if (!graphValue || !graphValue->is_object() ||
+                !ReadGraph(*graphValue, validationGraph, [](const json&) { return compositor::kNoMaterialAsset; }) ||
+                !graph::ValidateSurfaceLayoutRoads(pendingLayouts, validationGraph, error)) {
+                TG_LOG_ERROR("配置先Roadを確認できません（現在の文書は保持）: %s", error.c_str());
+                return false;
+            }
+        }
+    }
     const fs::path baseDir = path.parent_path();
 
     // 旧ファイルの手入力メッシュシーン（scene）は読まない。表示するメッシュは
@@ -1539,6 +1577,9 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
             const auto it = materialIds.find(value.get<int>());
             return (it != materialIds.end()) ? it->second : compositor::kNoMaterialAsset;
         };
+    for (auto& preset : pendingLayouts.presets)
+        for (auto& material : preset.materials) material.material = readMaterial(json(material.material));
+    refs.surfaceLayouts = std::move(pendingLayouts);
     // 旧形式の layers[]（版 3 以前）。移行用に一旦読み込んでおく。
     std::vector<compositor::MaterialLayer> legacyLayers;
     if (const json* layers = FindMember(document, "layers");

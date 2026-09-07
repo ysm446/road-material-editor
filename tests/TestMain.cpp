@@ -8,6 +8,7 @@
 
 void RunRoadTests();
 void RunConnectionPrototypeTests();
+void RunSurfaceLayoutTests();
 void RunMeshSceneTests();
 void RunFrameLimiterTests();
 void RunNodeGraphTests();
@@ -17,6 +18,7 @@ void RunUndoHistoryTests();
 int main() {
     RunRoadTests();
     RunConnectionPrototypeTests();
+    RunSurfaceLayoutTests();
     RunMeshSceneTests();
     RunUiInteractionTests();
     RunUndoHistoryTests();

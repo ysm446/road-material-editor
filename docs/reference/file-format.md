@@ -1,13 +1,23 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 12:00
+更新日時: 2026-09-07 16:13
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
-Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は13。
+Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は17。
 版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンク、版12で Road の材質スロットと Road Mask、版13で面上の Path と Decal を追加した（「Road Editor で追加した版」）。
+版14でShoulder、版15でMerge、版16でCrack、版17で埋込プリセットと配置記述を追加した。
 道路専用の拡張子は後続で設計する。
+
+## 版17: surfaceLayouts
+
+ルートの `surfaceLayouts` は `{version: 1, nextId, presets: [], layouts: []}`。空の場合も保存する。
+版16以前の欠落は空へ移行する。版17での欠落・不正な参照・未対応の版は、既存文書を入れ替える前に拒否する。
+素材参照はプロジェクトのmaterialsの保存IDを使う。0は未指定。その他の安定IDは節内で一意。
+役割はRoad=0 / Ground=1 / Sidewalk=2、帯の側はRoad=0 / Left=1 / Right=2、境界モードはBlend=0 / KeepStep=1 / Fixed=2として保存する。
+境界配列は内端・外端・始端・終端の順に4要素。座標と移行量はメートル。区間の上書き値はパラメータIDと始点値・終点値を持つ。
+詳細と制約は [配置記述の保存基盤](surface-layout-data.md)。実装は `SurfaceLayout.h` と `SurfaceLayoutIo.cpp`。配置記述の描画への適用はまだ行わない。
 
 ## 全体像
 

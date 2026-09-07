@@ -3,6 +3,7 @@
 #include "compositor/MaterialLibrary.h"
 #include "compositor/TextureLibrary.h"
 #include "graph/NodeGraph.h"
+#include "graph/SurfaceLayout.h"
 #include "renderer/PreviewRenderer.h"
 #include "renderer/SkyLibrary.h"
 #include "rhi/Device.h"
@@ -23,6 +24,7 @@ struct ProjectRefs {
     renderer::SkyLibrary& skies;
     renderer::PreviewRenderer& renderer;
     graph::NodeGraph& graph;
+    graph::SurfaceLayoutDocument& surfaceLayouts;
 };
 
 // --- プロジェクト (.tgproj) -----------------------------------------------

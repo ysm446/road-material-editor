@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--gravel", type=int, required=True, help="既存の材質 ID")
     parser.add_argument("--layered", action="store_true", help="道路4層＋接続先4層＋歩道の検証構成を作る")
     parser.add_argument("--length", type=float, default=24.0, help="検証道路の長さ（m、0より大きく50以下）")
+    parser.add_argument("--layout-description", action="store_true", help="版17のプリセット・配置記述を追加（描画への適用は未対応）")
     args = parser.parse_args()
     if not math.isfinite(args.length) or not 0 < args.length <= 50:
         parser.error("長さは0より大きく50 m以下にしてください")
@@ -43,6 +44,7 @@ def main():
                      "groundColor": [0.45, 0.42, 0.38]}}]
     doc["activeSky"] = 0
     doc["version"] = 16
+    doc.pop("surfaceLayouts", None)
     def surface(node_id, pin, material, position):
         return {"id": node_id, "kind": "surface", "inputs": [], "outputs": [pin], "position": position,
                 "layer": {"enabled": True, "material": material, "baseColor": [0.42, 0.4, 0.36],
@@ -86,6 +88,38 @@ def main():
                 links.extend([{"id": next_id + 4, "start": next_id + 1, "end": road_node["inputs"][slot + 1]},
                               {"id": next_id + 5, "start": next_id + 3, "end": road_node["inputs"][slot + 4]}])
                 next_id += 6
+    if args.layout_description:
+        doc["version"] = 17
+        data = {"version": 1, "nextId": 1, "presets": [], "layouts": []}
+        def allocate():
+            value = data["nextId"]
+            data["nextId"] += 1
+            return value
+        for index, name in enumerate(("新舗装", "荒れた舗装", "砂利道", "砂利路肩", "草地", "歩道")):
+            points = [(0, 0), (6 if index < 3 else 2, 0)]
+            if index == 5:
+                points = [(0, 0), (0, 0.15), (2, 0.15)]
+            preset = {"id": allocate(), "version": 1, "name": name, "role": 0 if index < 3 else 2 if index == 5 else 1,
+                      "displacement": 0.015 if index < 2 else 0.08 if index < 5 else 0,
+                      "section": [{"id": allocate(), "across": x, "height": y} for x, y in points],
+                      "boundaries": [{"mode": 1 if index == 5 else 0, "transition": 0.5,
+                                      "maxHeightAdjustment": 0.15, "preserveOutline": index == 5} for _ in range(4)],
+                      "materials": [{"material": args.asphalt if index < 2 else args.gravel if index < 5 else 0,
+                                     "uvRepeat": 2, "worldUv": False, "baseColor": [0.42, 0.4, 0.36], "roughness": 0.8}],
+                      "parameters": [{"id": allocate(), "name": "荒れ具合", "minimum": 0, "maximum": 1, "default": 0.5}]}
+            data["presets"].append(preset)
+        layout = {"id": allocate(), "roadNode": 10, "bands": []}
+        for side, cuts in enumerate(((0, 0.24, 0.56, 1), (0, 0.34, 0.7, 1))):
+            band = {"id": allocate(), "side": side, "spans": []}
+            for index in range(3):
+                preset = data["presets"][side * 3 + index]
+                band["spans"].append({"id": allocate(), "preset": preset["id"],
+                                      "start": cuts[index] * args.length, "end": cuts[index + 1] * args.length,
+                                      "blendIn": 0, "blendOut": 0, "seed": 17,
+                                      "parameters": [{"parameter": preset["parameters"][0]["id"], "start": 0.2, "end": 0.8}]})
+            layout["bands"].append(band)
+        data["layouts"].append(layout)
+        doc["surfaceLayouts"] = data
     preview = doc.setdefault("preview", {})
     preview["camera"] = {"target": [0, 0, 0], "distance": max(16, args.length * 26 / 24),
                          "yaw": -0.55, "pitch": 0.9, "fovY": 0.785398}
@@ -98,6 +132,8 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"作成: {args.output}\n起動オプション: --project {args.output} --connection-prototype 10 {gravel_node} 5")
+    if args.layout_description:
+        print("配置記述は保存・読み込みの検証用です。描画への適用は未対応です。")
 
 
 if __name__ == "__main__":

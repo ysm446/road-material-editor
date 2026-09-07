@@ -28,6 +28,36 @@ bool IsNeutralPlane(const tg::graph::CompiledGraph& compiled) {
 }  // namespace
 
 void RunNodeGraphTests() {
+    Section("ノードグラフ — 復元時のリンク検証と Merge の ID 保持");
+    {
+        NodeGraph graph;
+        const auto a = graph.CreateNode(NodeKind::RoadMarking);
+        const auto b = graph.CreateNode(NodeKind::RoadMarking);
+        const auto c = graph.CreateNode(NodeKind::RoadMarking);
+        const auto merge = graph.CreateNode(NodeKind::Merge);
+        const auto aIn = graph.FindNode(a)->inputs[0].id;
+        const auto aOut = graph.FindNode(a)->outputs[0].id;
+        const auto bIn = graph.FindNode(b)->inputs[0].id;
+        const auto bOut = graph.FindNode(b)->outputs[0].id;
+        const auto cOut = graph.FindNode(c)->outputs[0].id;
+        const auto spare = graph.FindNode(merge)->inputs[0].id;
+        graph.CreateLink(aOut, bIn);
+        Check(graph.FindNode(merge)->inputs[0].id == spare,
+              "無関係なリンクを作っても Merge の空きピン ID は変わらない");
+        const auto nodes = graph.Nodes();
+        const auto links = graph.Links();
+        graph.Replace(nodes, links);
+        Check(graph.FindNode(merge)->inputs[0].id == spare,
+              "保存データやアンドゥの復元で Merge の空きピン ID を保持する");
+        graph.Replace(nodes, {{1000, aOut, bIn}, {1001, bOut, aIn},
+                              {1002, cOut, bIn}, {1003, cOut, graph.FindNode(c)->inputs[0].id}});
+        Check(graph.Links().size() == 1 && graph.Links()[0].id == 1000,
+              "復元時は循環・入力の重複・自己接続を捨て、最初の有効な接続を保つ");
+        Check(graph.FindUpstreamNodeForPin(bIn)->id == a &&
+                  graph.FindUpstreamNodeForPin(aIn) == nullptr,
+              "不正リンクの除去後も有効な上流を参照できる");
+    }
+
     Section("ノードグラフ — 既定の下地と Surface");
     {
         NodeGraph graph = NodeGraph::CreateDefault();

@@ -281,13 +281,15 @@ void NodeGraph::NormalizeVariablePins() {
         if (node.kind != NodeKind::Merge) continue;
         // 繋がっている入力を順に残し、末尾に空きを 1 本だけ置く。ラベルは並びで振り直す。
         std::vector<Pin> connected;
+        Pin spare;
         for (const Pin& pin : node.inputs) {
             const bool linked = std::any_of(m_links.begin(), m_links.end(),
                                             [&](const Link& link) { return link.endPin == pin.id; });
             if (linked) connected.push_back(pin);
+            else if (spare.id == 0) spare = pin;
         }
-        Pin spare;
-        spare.id = AllocateGraphId();
+        // 未接続ピンも UI と保存データが参照するため、既存の ID を維持する。
+        if (spare.id == 0) spare.id = AllocateGraphId();
         spare.nodeId = node.id;
         spare.kind = PinKind::Input;
         spare.valueType = ValueType::Mesh;
@@ -373,14 +375,19 @@ bool NodeGraph::DeleteNode(GraphId nodeId) {
 
 void NodeGraph::Replace(std::vector<Node> nodes, std::vector<Link> links) {
     m_nodes = std::move(nodes);
-    m_links = std::move(links);
-    // 壊れたリンク（ピンが無い・型が合わない）は捨てる。読み込みの安全網。
-    std::erase_if(m_links, [this](const Link& link) {
+    m_links.clear();
+    // 編集時と同じ DAG・入力 1 本の規則を復元時にも適用する。
+    // 順に採用し、循環や入力の重複を作る後続リンクだけを捨てる。
+    for (const Link& link : links) {
         const Pin* start = FindPin(link.startPin);
         const Pin* end = FindPin(link.endPin);
-        return start == nullptr || end == nullptr || start->kind != PinKind::Output ||
-               end->kind != PinKind::Input || start->valueType != end->valueType;
-    });
+        if (start == nullptr || end == nullptr || start->kind != PinKind::Output ||
+            end->kind != PinKind::Input || FindUpstreamNodeForPin(link.endPin) != nullptr ||
+            !CanCreateLink(link.startPin, link.endPin)) {
+            continue;
+        }
+        m_links.push_back(link);
+    }
     RebuildNextGraphId();
     NormalizeVariablePins();
     MarkDirty();

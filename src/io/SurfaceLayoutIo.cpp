@@ -44,16 +44,31 @@ struct Reader {
 }
 
 json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& document) {
-    json result = {{"version", 1}, {"nextId", document.nextId}, {"presets", json::array()}, {"layouts", json::array()}};
+    json result = {{"version", 2}, {"nextId", document.nextId}, {"presets", json::array()}, {"layouts", json::array()}};
     for (const auto& preset : document.presets) {
         json p = {{"id", preset.id}, {"version", preset.version}, {"name", preset.name}, {"role", static_cast<uint32_t>(preset.role)},
-                  {"displacement", preset.displacementMeters}, {"section", json::array()}, {"boundaries", json::array()},
+                  {"displacement", preset.displacementMeters}, {"layerBlendRange", preset.layerBlendRange}, {"section", json::array()}, {"boundaries", json::array()},
                   {"materials", json::array()}, {"parameters", json::array()}};
         for (const auto& point : preset.section) p["section"].push_back({{"id", point.id}, {"across", point.across}, {"height", point.height}});
         for (const auto& boundary : preset.boundaries) p["boundaries"].push_back({{"mode", static_cast<uint32_t>(boundary.mode)},
             {"transition", boundary.transitionMeters}, {"maxHeightAdjustment", boundary.maxHeightAdjustment}, {"preserveOutline", boundary.preserveOutline}});
-        for (const auto& material : preset.materials) p["materials"].push_back({{"material", material.material}, {"uvRepeat", material.uvRepeatMeters},
-            {"worldUv", material.worldUv}, {"baseColor", material.baseColor}, {"roughness", material.roughness}});
+        for (const auto& material : preset.materials) {
+            json m = {{"material", material.material}, {"uvRepeat", material.uvRepeatMeters},
+                {"worldUv", material.worldUv}, {"baseColor", material.baseColor}, {"roughness", material.roughness},
+                {"metallic", material.metallic}, {"ambientOcclusion", material.ambientOcclusion},
+                {"blendMode", material.blendMode}, {"heightGate", material.heightGate},
+                {"heightGateThreshold", material.heightGateThreshold}, {"heightGateSoftness", material.heightGateSoftness}, {"mask", nullptr}};
+            if (material.mask) {
+                const auto& mask = *material.mask;
+                m["mask"] = {{"shape", static_cast<uint32_t>(mask.shape)}, {"edgeSide", static_cast<uint32_t>(mask.edgeSide)},
+                    {"laneOffset", mask.laneOffsetMeters}, {"trackSpacing", mask.trackSpacingMeters}, {"trackWidth", mask.trackWidthMeters},
+                    {"feather", mask.featherMeters}, {"tracksFromLanes", mask.tracksFromLanes}, {"bothLanes", mask.bothLanes},
+                    {"edgeWidth", mask.edgeWidthMeters}, {"noiseScale", mask.noiseScaleMeters}, {"threshold", mask.threshold},
+                    {"softness", mask.softness}, {"seed", mask.seed}, {"breakupAmount", mask.breakupAmount},
+                    {"breakupScale", mask.breakupScaleMeters}, {"strength", mask.strength}, {"invert", mask.invert}};
+            }
+            p["materials"].push_back(std::move(m));
+        }
         for (const auto& parameter : preset.parameters) p["parameters"].push_back({{"id", parameter.id}, {"name", parameter.name},
             {"minimum", parameter.minimum}, {"maximum", parameter.maximum}, {"default", parameter.defaultValue}});
         result["presets"].push_back(std::move(p));
@@ -78,13 +93,15 @@ json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& document) {
 bool ReadSurfaceLayouts(const json& value, graph::SurfaceLayoutDocument& document, std::string& error) {
     Reader r;
     graph::SurfaceLayoutDocument parsed;
-    if (r.UInt(value, "version") != 1) { error = "未対応の配置データ版です"; return false; }
+    const auto version = r.UInt(value, "version");
+    if (version != 1 && version != 2) { error = "未対応の配置データ版です"; return false; }
     parsed.nextId = r.UInt(value, "nextId");
     for (const auto& p : r.Array(value, "presets")) {
         graph::SurfacePreset preset;
         preset.id = r.UInt(p, "id"); preset.version = r.UInt(p, "version"); preset.name = r.String(p, "name");
         preset.role = static_cast<graph::SurfaceRole>(r.UInt(p, "role"));
         preset.displacementMeters = r.Float(p, "displacement");
+        if (version >= 2) preset.layerBlendRange = r.Float(p, "layerBlendRange");
         for (const auto& point : r.Array(p, "section")) preset.section.push_back({r.UInt(point, "id"), r.Float(point, "across"), r.Float(point, "height")});
         const auto& boundaries = r.Array(p, "boundaries");
         if (boundaries.size() != 4) r.valid = false;
@@ -102,6 +119,25 @@ bool ReadSurfaceLayouts(const json& value, graph::SurfaceLayoutDocument& documen
             for (size_t i = 0; i < color.size() && i < 3; ++i) {
                 if (!color[i].is_number()) r.valid = false;
                 else material.baseColor[i] = color[i].get<float>();
+            }
+            if (version >= 2) {
+                material.metallic = r.Float(m, "metallic"); material.ambientOcclusion = r.Float(m, "ambientOcclusion");
+                material.blendMode = r.UInt(m, "blendMode"); material.heightGate = r.UInt(m, "heightGate");
+                material.heightGateThreshold = r.Float(m, "heightGateThreshold"); material.heightGateSoftness = r.Float(m, "heightGateSoftness");
+                const auto& mask = r.Field(m, "mask");
+                if (!mask.is_null()) {
+                    graph::RoadMaskNodeSettings settings;
+                    settings.shape = static_cast<graph::RoadMaskShape>(r.UInt(mask, "shape"));
+                    settings.edgeSide = static_cast<graph::RoadMaskSide>(r.UInt(mask, "edgeSide"));
+                    settings.laneOffsetMeters = r.Float(mask, "laneOffset"); settings.trackSpacingMeters = r.Float(mask, "trackSpacing");
+                    settings.trackWidthMeters = r.Float(mask, "trackWidth"); settings.featherMeters = r.Float(mask, "feather");
+                    settings.tracksFromLanes = r.Bool(mask, "tracksFromLanes"); settings.bothLanes = r.Bool(mask, "bothLanes");
+                    settings.edgeWidthMeters = r.Float(mask, "edgeWidth"); settings.noiseScaleMeters = r.Float(mask, "noiseScale");
+                    settings.threshold = r.Float(mask, "threshold"); settings.softness = r.Float(mask, "softness"); settings.seed = r.UInt(mask, "seed");
+                    settings.breakupAmount = r.Float(mask, "breakupAmount"); settings.breakupScaleMeters = r.Float(mask, "breakupScale");
+                    settings.strength = r.Float(mask, "strength"); settings.invert = r.Bool(mask, "invert");
+                    material.mask = settings;
+                }
             }
             preset.materials.push_back(material);
         }

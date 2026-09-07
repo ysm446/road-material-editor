@@ -1,0 +1,138 @@
+#include "graph/SurfaceLayoutEditing.h"
+#include "graph/Road.h"
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+namespace tg::graph {
+SurfaceBand* FindRoadBand(SurfaceLayoutDocument& document, GraphId roadId) {
+    for (auto& layout : document.layouts) if (layout.roadNode == roadId)
+        for (auto& band : layout.bands) if (band.side == SurfaceSide::Road) return &band;
+    return nullptr;
+}
+void ClampSpanBlends(SurfaceSpan& span) {
+    const float length = span.endMeters - span.startMeters;
+    span.blendInMeters = std::clamp(span.blendInMeters, 0.0f, length);
+    span.blendOutMeters = std::clamp(span.blendOutMeters, 0.0f, length);
+}
+bool CreateRoadLayout(SurfaceLayoutDocument& document, const NodeGraph& graph, GraphId roadId, std::string& error) {
+    if (const auto* existing = FindRoadBand(document, roadId); existing && !existing->spans.empty()) {
+        error = "この道路には既に区間があります"; return false;
+    }
+    RoadGeometry road;
+    if (!EvaluateRoad(graph, roadId, road, error)) return false;
+    const float length = road.rowDistances.back();
+    if (length < 0.1f || length > 50) { error = "区間編集は長さ0.1〜50 mの道路に対応します"; return false; }
+    auto next = document;
+    SurfacePreset preset;
+    preset.id = next.AllocateId(); preset.name = "道路材質"; preset.role = SurfaceRole::Road;
+    preset.displacementMeters = road.settings.displacementMeters;
+    preset.layerBlendRange = road.settings.layerBlendRange;
+    preset.section = {{next.AllocateId(), 0, 0}, {next.AllocateId(), road.settings.widthMeters, 0}};
+    const auto* node = graph.FindNode(roadId);
+    std::vector<const Pin*> materials, masks;
+    for (const auto& pin : node->inputs) {
+        if (pin.valueType == ValueType::Material) materials.push_back(&pin);
+        if (pin.valueType == ValueType::RoadMask) masks.push_back(&pin);
+    }
+    for (size_t slot = 0; slot < 4; ++slot) {
+        PresetMaterial material;
+        if (!slot) { material.baseColor = {0.18f, 0.18f, 0.18f}; material.roughness = 0.85f; }
+        material.uvRepeatMeters = slot ? road.settings.layerUvRepeatMeters[slot] : road.settings.uvRepeatMeters;
+        material.worldUv = road.settings.layerWorldUv[slot];
+        material.blendMode = slot ? road.settings.layerBlendMode[slot] : 0;
+        material.heightGate = slot ? road.settings.layerHeightGate[slot] : 0;
+        material.heightGateThreshold = road.settings.layerHeightGateThreshold[slot];
+        material.heightGateSoftness = road.settings.layerHeightGateSoftness[slot];
+        if (slot < materials.size()) {
+            const auto* upstream = graph.FindUpstreamNodeForPin(materials[slot]->id);
+            if (upstream) {
+                const auto layers = graph.CompileLayersTo(upstream->id).layers;
+                if (layers.size() > 1 || (!layers.empty() && layers.back().channelMask != compositor::kAllChannelBits)) {
+                    error = "材質の取込は各スロット1層・全チャンネルに対応します"; return false;
+                }
+                if (!layers.empty()) {
+                    const auto& layer = layers.back();
+                    material.material = layer.material;
+                    material.baseColor = {layer.baseColor.x, layer.baseColor.y, layer.baseColor.z};
+                    material.roughness = layer.roughness; material.metallic = layer.metallic;
+                    material.ambientOcclusion = layer.ambientOcclusion;
+                    if (slot && slot - 1 < masks.size()) {
+                        const auto* mask = graph.FindUpstreamNodeForPin(masks[slot - 1]->id);
+                        if (mask) if (const auto* settings = std::get_if<RoadMaskNodeSettings>(&mask->settings)) material.mask = *settings;
+                    }
+                }
+            }
+        }
+        preset.materials.push_back(material);
+    }
+    SurfaceBand band;
+    band.id = next.AllocateId(); band.side = SurfaceSide::Road;
+    SurfaceSpan span;
+    span.id = next.AllocateId(); span.preset = preset.id; span.endMeters = length;
+    band.spans.push_back(span);
+    RoadLayout layout;
+    layout.id = next.AllocateId(); layout.roadNode = roadId; layout.bands.push_back(std::move(band));
+    next.presets.push_back(std::move(preset));
+    if (auto* existing = FindRoadBand(next, roadId)) existing->spans = std::move(layout.bands[0].spans);
+    else next.layouts.push_back(std::move(layout));
+    if (!ValidateSurfaceLayouts(next, error)) return false;
+    document = std::move(next);
+    return true;
+}
+bool SplitSurfaceSpan(SurfaceLayoutDocument& document, SurfaceBand& band, size_t index) {
+    if (index >= band.spans.size()) return false;
+    auto& span = band.spans[index];
+    if (span.endMeters - span.startMeters < 0.1f) return false;
+    const auto id = document.AllocateId();
+    if (!id) return false;
+    auto right = span;
+    right.id = id;
+    right.startMeters = (span.startMeters + span.endMeters) * 0.5f;
+    span.endMeters = right.startMeters;
+    for (size_t i = 0; i < span.parameters.size(); ++i) {
+        const float middle = std::lerp(span.parameters[i].startValue, span.parameters[i].endValue, 0.5f);
+        span.parameters[i].endValue = middle; right.parameters[i].startValue = middle;
+    }
+    span.blendOutMeters = right.blendInMeters = 0;
+    ClampSpanBlends(span); ClampSpanBlends(right);
+    band.spans.insert(band.spans.begin() + index + 1, std::move(right));
+    return true;
+}
+bool RemoveSurfaceSpan(SurfaceBand& band, size_t index) {
+    if (index >= band.spans.size() || band.spans.size() < 2) return false;
+    if (index) band.spans[index - 1].endMeters = band.spans[index].endMeters;
+    else band.spans[1].startMeters = band.spans[0].startMeters;
+    band.spans.erase(band.spans.begin() + index);
+    return true;
+}
+bool ResizeSurfaceBand(SurfaceBand& band, float length) {
+    if (band.spans.empty() || !std::isfinite(length) || length < 0.1f || length > 50 || band.spans.back().endMeters <= 0) return false;
+    const float ratio = length / band.spans.back().endMeters;
+    for (auto& span : band.spans) {
+        span.startMeters *= ratio; span.endMeters *= ratio;
+        span.blendInMeters *= ratio; span.blendOutMeters *= ratio;
+        ClampSpanBlends(span);
+    }
+    band.spans.back().endMeters = length;
+    return true;
+}
+bool DuplicateSurfacePreset(SurfaceLayoutDocument& document, SurfaceBand& band, size_t index) {
+    if (index >= band.spans.size()) return false;
+    auto& span = band.spans[index];
+    const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& preset) { return preset.id == span.preset; });
+    if (found == document.presets.end()) return false;
+    auto preset = *found;
+    const uint64_t needed = 1 + preset.section.size() + preset.parameters.size();
+    if (uint64_t(document.nextId) + needed > std::numeric_limits<SurfaceId>::max()) return false;
+    preset.id = document.AllocateId(); preset.name += " コピー";
+    for (auto& point : preset.section) point.id = document.AllocateId();
+    for (auto& parameter : preset.parameters) {
+        const auto old = parameter.id; parameter.id = document.AllocateId();
+        for (auto& value : span.parameters) if (value.parameter == old) value.parameter = parameter.id;
+    }
+    span.preset = preset.id;
+    document.presets.push_back(std::move(preset));
+    return true;
+}
+}  // namespace tg::graph

@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <optional>
+#include "graph/NodeGraph.h"
 
 namespace tg::graph {
 
@@ -34,6 +36,11 @@ struct PresetMaterial {
     bool worldUv = false;
     std::array<float, 3> baseColor{0.42f, 0.4f, 0.36f};
     float roughness = 0.8f;
+    float metallic = 0, ambientOcclusion = 1;
+    // 下地には不要。上層で未指定なら被覆0（旧版の未結線スロットも同じ）。
+    std::optional<RoadMaskNodeSettings> mask;
+    uint32_t blendMode = 0, heightGate = 0;
+    float heightGateThreshold = 0.5f, heightGateSoftness = 0.2f;
 };
 struct SurfacePreset {
     SurfaceId id = 0;
@@ -46,6 +53,7 @@ struct SurfacePreset {
     std::array<BoundaryContract, 4> boundaries;
     std::vector<PresetMaterial> materials;
     std::vector<PresetParameter> parameters;
+    float layerBlendRange = 0.2f;
 };
 struct SpanParameter {
     SurfaceId parameter = 0;

@@ -1356,6 +1356,7 @@ CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph, GraphId previewNodeId
         }
     }
     compiled.scene.meshes = std::move(all.meshes);
+    compiled.meshSources = std::move(all.sources);
     return compiled;
 }
 }  // namespace tg::graph

@@ -86,6 +86,7 @@ set(tg_sources
     src/app/ApplicationDocument.cpp
     src/app/ApplicationFileWork.cpp
     src/app/ApplicationGraphPanel.cpp
+    src/app/ApplicationSurfaceLayout.cpp
     src/app/ApplicationLayerPanel.cpp
     src/app/ApplicationMaterialPanel.cpp
     src/app/ApplicationPathEdit.cpp
@@ -99,6 +100,8 @@ set(tg_sources
     src/core/Log.cpp
     src/core/Log.h
     src/graph/Road.cpp
+    src/graph/SurfaceLayoutEditing.cpp
+    src/graph/SurfaceLayoutEditing.h
     src/graph/SurfaceLayoutEvaluation.cpp
     src/graph/SurfaceLayoutEvaluation.h
     src/graph/SurfaceLayout.cpp
@@ -278,6 +281,8 @@ add_executable(road_editor_tests
     tests/RoadTests.cpp
     tests/SurfaceLayoutTests.cpp
     tests/ConnectionPrototypeTests.cpp
+    src/graph/SurfaceLayoutEditing.cpp
+    src/graph/SurfaceLayoutEditing.h
     src/graph/SurfaceLayoutEvaluation.cpp
     src/graph/SurfaceLayoutEvaluation.h
     src/graph/SurfaceLayout.cpp

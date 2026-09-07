@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--gravel", type=int, required=True, help="既存の材質 ID")
     parser.add_argument("--layered", action="store_true", help="道路4層＋接続先4層＋歩道の検証構成を作る")
     parser.add_argument("--length", type=float, default=24.0, help="検証道路の長さ（m、0より大きく50以下）")
-    parser.add_argument("--layout-description", action="store_true", help="版17のプリセット・配置記述を追加（道路本体の開発用プレビューに対応）")
+    parser.add_argument("--layout-description", action="store_true", help="版18のプリセット・配置記述を追加（道路本体の開発用プレビューに対応）")
     args = parser.parse_args()
     if not math.isfinite(args.length) or not 0 < args.length <= 50:
         parser.error("長さは0より大きく50 m以下にしてください")
@@ -89,8 +89,8 @@ def main():
                               {"id": next_id + 5, "start": next_id + 3, "end": road_node["inputs"][slot + 4]}])
                 next_id += 6
     if args.layout_description:
-        doc["version"] = 17
-        data = {"version": 1, "nextId": 1, "presets": [], "layouts": []}
+        doc["version"] = 18
+        data = {"version": 2, "nextId": 1, "presets": [], "layouts": []}
         def allocate():
             value = data["nextId"]
             data["nextId"] += 1
@@ -107,6 +107,23 @@ def main():
                       "materials": [{"material": args.asphalt if index < 2 else args.gravel if index < 5 else 0,
                                      "uvRepeat": 2, "worldUv": False, "baseColor": [0.42, 0.4, 0.36], "roughness": 0.8}],
                       "parameters": [{"id": allocate(), "name": "荒れ具合", "minimum": 0, "maximum": 1, "default": 0.5}]}
+            preset["layerBlendRange"] = 0.12
+            base = preset["materials"][0]
+            base.update({"metallic": 0, "ambientOcclusion": 1, "mask": None, "blendMode": 0,
+                         "heightGate": 0, "heightGateThreshold": 0.5, "heightGateSoftness": 0.2})
+            if args.layered and index < 3:
+                for slot, shape in enumerate((0, 2, 1), 1):
+                    layer = copy.deepcopy(base)
+                    layer.update({"material": args.gravel if index < 2 else args.asphalt,
+                                  "uvRepeat": (1.3, 3.1, 0.8)[slot - 1], "blendMode": 1 if slot == 2 else 0,
+                                  "heightGate": 2 if slot == 3 else 0, "heightGateThreshold": 0.6,
+                                  "mask": {"shape": shape, "edgeSide": 0, "laneOffset": 1.5,
+                                           "trackSpacing": 1.5, "trackWidth": 0.35, "feather": 0.25,
+                                           "tracksFromLanes": True, "bothLanes": True, "edgeWidth": 0.7,
+                                           "noiseScale": 2.5, "threshold": 0.5, "softness": 0.2,
+                                           "seed": 13 + index * 3 + slot, "breakupAmount": 0.3,
+                                           "breakupScale": 3, "strength": (0.15, 0.65, 0.3)[index], "invert": False}})
+                    preset["materials"].append(layer)
             data["presets"].append(preset)
         layout = {"id": allocate(), "roadNode": 10, "bands": []}
         for side, cuts in enumerate(((0, 0.24, 0.56, 1), (0, 0.34, 0.7, 1))):

@@ -928,7 +928,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 drawConstants.shadeLayers = (layerSource == i && baseReady && drawConstants.roadMaskIndex != kNoShadowIndex) ? 1u : 0u;
                 if (!baseReady) drawConstants.displacementScale = 0.0f;
             }
-            const auto& connection = m_meshScene.meshes[i];
+            const auto& connection = m_meshScene.meshes[layerSource];
             if (connection.connectionSources[0] >= 0) {
                 drawConstants.connectionContextCount = 3;
                 bool ready = true;
@@ -969,8 +969,8 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 // 評価途中の欠落した材質を混ぜず、全入力が揃ったフレームから描く。
                 if (!ready) continue;
                 drawConstants.layerCount = 4;
-                drawConstants.shadeLayers = 1;
-                drawConstants.useMaterialTextures = 1;
+                drawConstants.shadeLayers = layerSource == i ? 1u : 0u;
+                if (layerSource == i) drawConstants.useMaterialTextures = 1;
                 drawConstants.displacementScale = connection.displacementMeters;
             }
             if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;

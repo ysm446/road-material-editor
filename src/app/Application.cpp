@@ -361,6 +361,10 @@ int Application::Run() {
         if (testDrag && m_frameCounter == 18) {
             TG_LOG_INFO("SelectionTest: points=%zu meshes=%zu dirty=%d", m_pathEdit.selected.size(),
                         m_meshSelection.selected.size(), m_documentDirty ? 1 : 0);
+            size_t spans = 0;
+            for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands) spans += band.spans.size();
+            TG_LOG_INFO("LayoutUiTest: layouts=%zu spans=%zu presets=%zu undo=%zu", m_surfaceLayouts.layouts.size(),
+                        spans, m_surfaceLayouts.presets.size(), m_undoHistory.UndoCount());
         }
 
         ID3D12GraphicsCommandList* commandList =

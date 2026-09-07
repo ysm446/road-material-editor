@@ -1,6 +1,8 @@
 #include "TestSupport.h"
 #include "graph/SurfaceLayout.h"
+#include "graph/SurfaceLayoutEditing.h"
 #include "graph/SurfaceLayoutEvaluation.h"
+#include "graph/RoadMask.h"
 #include "io/SurfaceLayoutIo.h"
 #include "app/UndoHistory.h"
 #include <nlohmann/json.hpp>
@@ -69,7 +71,7 @@ void RunSurfaceLayoutTests() {
     broken = encoded; broken["layouts"][0]["bands"][0]["spans"][0]["parameters"][0]["end"] = 2; assertRejected(broken);
     broken = encoded; broken["nextId"] = -1; assertRejected(broken);
     broken = encoded; broken["nextId"] = uint64_t(1) << 40; assertRejected(broken);
-    broken = encoded; broken["version"] = 2; assertRejected(broken);
+    broken = encoded; broken["version"] = 99; assertRejected(broken);
     broken = encoded; broken["presets"][0]["section"] = "invalid"; assertRejected(broken);
     broken = encoded; broken["presets"][0]["boundaries"][0]["mode"] = 99; assertRejected(broken);
     broken = encoded; broken["presets"][0].erase("materials"); assertRejected(broken);
@@ -143,8 +145,128 @@ void RunSurfaceLayoutTests() {
               preview.scene.meshes[3].displacementMeters == linked.presets[2].displacementMeters,
               "プリセットの素材参照と変位量を既存評価器へ渡す");
     }
-    auto unsupported = linked;
-    unsupported.presets[0].materials.push_back({});
-    Check(!graph::CompileSurfaceLayoutPreview(sceneGraph, unsupported, linked.layouts[0].roadNode).error.empty(),
-          "未対応の多層プリセットを黙って単層にしない");
+    auto layered = linked;
+    auto& preset = layered.presets[0];
+    preset.layerBlendRange = 0.37f;
+    for (uint32_t slot = 1; slot < 4; ++slot) {
+        graph::PresetMaterial material;
+        material.material = slot + 10;
+        material.uvRepeatMeters = 1.5f * static_cast<float>(slot);
+        material.worldUv = slot == 3;
+        material.metallic = 0.1f; material.ambientOcclusion = 0.7f;
+        material.mask.emplace();
+        material.mask->shape = static_cast<graph::RoadMaskShape>(slot - 1);
+        material.mask->seed = slot * 13;
+        material.mask->edgeSide = graph::RoadMaskSide::Left;
+        material.mask->strength = 0.6f;
+        material.heightGate = slot % 3;
+        material.heightGateThreshold = 0.3f;
+        material.heightGateSoftness = 0.13f;
+        material.blendMode = slot % 2;
+        preset.materials.push_back(material);
+    }
+    const auto layeredJson = io::WriteSurfaceLayouts(layered);
+    graph::SurfaceLayoutDocument layeredDecoded;
+    Check(io::ReadSurfaceLayouts(layeredJson, layeredDecoded, error) && io::WriteSurfaceLayouts(layeredDecoded) == layeredJson,
+          "4層の道路マスク・高さ条件・UV・PBR値が保存往復する");
+    const auto layeredPreview = graph::CompileSurfaceLayoutPreview(sceneGraph, layeredDecoded, linked.layouts[0].roadNode);
+    Check(layeredPreview.error.empty() && renderer::ValidateMeshScene(layeredPreview.scene), "多層プリセットをGPU評価用のシーンへ変換する");
+    if (layeredPreview.scene.meshes.size() == 4) {
+        const auto& context = layeredPreview.scene.meshes[1];
+        graph::RoadGeometry evaluatedRoad;
+        graph::EvaluateRoad(sceneGraph, linked.layouts[0].roadNode, evaluatedRoad, error);
+        const auto lanes = graph::ComputeRoadLanes(evaluatedRoad.settings, sceneGraph.RoadNetwork().leftHandTraffic);
+        const graph::RoadMaskNodeSettings* channels[] = {&*preset.materials[1].mask, &*preset.materials[2].mask, &*preset.materials[3].mask};
+        const auto expected = graph::BakeRoadMask(channels, evaluatedRoad.settings.widthMeters, 50, &lanes, &evaluatedRoad);
+        Check(context.roadMask.rgba == expected.rgba && context.layerStacks[2].has_value() &&
+              context.layerStacks[2]->Layers()[0].material == 13 && context.layerWorldUv[3] &&
+              context.layerUvRepeat[2] == 3 && context.layerHeightGate[2] == 2 && context.layerBlendRange == 0.37f,
+              "既存Roadと同じマスクを生成し、各層の設定を失わない");
+    }
+    auto legacyJson = encoded;
+    legacyJson["version"] = 1;
+    for (auto& p : legacyJson["presets"]) {
+        p.erase("layerBlendRange");
+        for (auto& m : p["materials"])
+            for (const auto* key : {"mask", "blendMode", "heightGate", "heightGateThreshold", "heightGateSoftness", "metallic", "ambientOcclusion"}) m.erase(key);
+    }
+    Check(io::ReadSurfaceLayouts(legacyJson, decoded, error) && io::WriteSurfaceLayouts(decoded) == encoded,
+          "旧版の単層記述を既定値で移行する");
+    for (const auto* field : {"mask", "heightGate", "metallic"}) {
+        auto missing = layeredJson;
+        missing["presets"][0]["materials"][1].erase(field);
+        Check(!io::ReadSurfaceLayouts(missing, layeredDecoded, error) && io::WriteSurfaceLayouts(layeredDecoded) == layeredJson,
+              "新版の必須項目欠落を既存文書を変更せず拒否する");
+    }
+    auto invalidMask = layeredJson;
+    invalidMask["presets"][0]["materials"][1]["mask"]["shape"] = 99;
+    Check(!io::ReadSurfaceLayouts(invalidMask, layeredDecoded, error), "不正な道路マスクを拒否する");
+    auto invalidLayer = layered;
+    invalidLayer.presets[0].materials[1].heightGateSoftness = std::numeric_limits<float>::quiet_NaN();
+    Check(!graph::ValidateSurfaceLayouts(invalidLayer, error), "非有限の層条件をGPUへ渡さない");
+    DocumentSnapshot layeredBefore;
+    layeredBefore.surfaceLayouts = layered;
+    auto layeredAfter = layeredBefore;
+    layeredAfter.surfaceLayouts.presets[0].materials[1].mask->strength = 0.1f;
+    history.Clear();
+    history.Push(layeredBefore, 0);
+    Check(io::WriteSurfaceLayouts(history.Undo(layeredAfter).surfaceLayouts) == layeredJson, "層マスクの編集をUndoで復元する");
+    graph::SurfaceLayoutDocument editing;
+    const auto roadId = linked.layouts[0].roadNode;
+    Check(graph::CreateRoadLayout(editing, sceneGraph, roadId, error), "現在の道路から区間と材質プリセットを作る");
+    auto* band = graph::FindRoadBand(editing, roadId);
+    Check(band && band->spans.size() == 1 && band->spans[0].endMeters == 50, "初期区間は道路の全長を覆う");
+    if (band) {
+        const auto originalId = band->spans[0].id;
+        Check(graph::SplitSurfaceSpan(editing, *band, 0) && band->spans.size() == 2 &&
+              band->spans[0].endMeters == band->spans[1].startMeters && band->spans[0].id == originalId,
+              "分割で左のIDを保ち、右に新IDを割り当てる");
+        Check(graph::DuplicateSurfacePreset(editing, *band, 1) && band->spans[0].preset != band->spans[1].preset,
+              "複製した材質は別区間の編集から独立する");
+        Check(graph::ValidateSurfaceLayouts(editing, error), "分割と複製後も全ID・参照が有効");
+        const auto editingSnapshot = io::WriteSurfaceLayouts(editing);
+        Check(graph::RemoveSurfaceSpan(*band, 0) && band->spans[0].startMeters == 0 && band->spans[0].endMeters == 50,
+              "区間を削除すると隣の区間が埋める");
+        Check(!graph::RemoveSurfaceSpan(*band, 0), "最後の区間は削除しない");
+        Check(graph::ResizeSurfaceBand(*band, 24) && band->spans.back().endMeters == 24, "道路長の変更へ区間を合わせる");
+        Check(io::ReadSurfaceLayouts(editingSnapshot, editing, error), "操作前の保存記述へ戻せる");
+    }
+    const auto markingId = sceneGraph.CreateNode(graph::NodeKind::RoadMarking);
+    const auto outputId = sceneGraph.CreateNode(graph::NodeKind::MeshOutput);
+    sceneGraph.CreateLink(sceneGraph.FindNode(roadId)->outputs[0].id, sceneGraph.FindNode(markingId)->inputs[0].id);
+    sceneGraph.CreateLink(sceneGraph.FindNode(markingId)->outputs[0].id, sceneGraph.FindNode(outputId)->inputs[0].id);
+    const auto normalScene = graph::CompileMeshGraphWithLayouts(sceneGraph, editing);
+    Check(normalScene.error.empty() && renderer::ValidateMeshScene(normalScene.scene) && normalScene.scene.meshes.size() == 4,
+          "通常のMesh Outputへ道路2材質と白線を統合する");
+    if (normalScene.scene.meshes.size() == 4) {
+        Check(normalScene.scene.meshes[0].connectionSources[0] == 2 && normalScene.scene.meshes[0].connectionSources[1] == 3 &&
+              normalScene.scene.meshes[1].displacementSource == 0 && normalScene.scene.meshes[1].useBlendMode,
+              "白線の材質を保ち、変位元の道路と内部コンテキストの参照を維持する");
+    }
+    auto badRange = editing;
+    graph::FindRoadBand(badRange, roadId)->spans.back().endMeters = 40;
+    const auto fallback = graph::CompileMeshGraphWithLayouts(sceneGraph, badRange);
+    Check(!fallback.error.empty() && fallback.scene.meshes.size() == 2 && fallback.scene.meshes[0].connectionSources[0] == -1,
+          "道路長と区間が合わない間は元の道路を表示し、エラーを残す");
+
+    auto retained = linked;
+    const auto roadsideBefore = io::WriteSurfaceLayouts(retained)["layouts"][0]["bands"][1];
+    auto* retainedRoad = graph::FindRoadBand(retained, roadId);
+    const auto bandId = retainedRoad->id;
+    retainedRoad->spans.clear();
+    Check(graph::CompileMeshGraphWithLayouts(sceneGraph, retained).error.empty(), "解除した空の道路帯は元のRoad材質で表示する");
+    Check(graph::CreateRoadLayout(retained, sceneGraph, roadId, error) &&
+          graph::FindRoadBand(retained, roadId)->id == bandId &&
+          io::WriteSurfaceLayouts(retained)["layouts"][0]["bands"][1] == roadsideBefore,
+          "解除後に再開しても沿道と道路帯のIDを保持する");
+    DocumentSnapshot editBefore, editAfter;
+    editBefore.surfaceLayouts = editing;
+    editAfter = editBefore;
+    graph::SplitSurfaceSpan(editAfter.surfaceLayouts, *graph::FindRoadBand(editAfter.surfaceLayouts, roadId), 0);
+    history.Clear(); history.Push(editBefore, 0);
+    const auto editUndo = history.Undo(editAfter);
+    Check(io::WriteSurfaceLayouts(editUndo.surfaceLayouts) == io::WriteSurfaceLayouts(editBefore.surfaceLayouts) &&
+          io::WriteSurfaceLayouts(history.Redo(editUndo).surfaceLayouts) == io::WriteSurfaceLayouts(editAfter.surfaceLayouts),
+          "区間分割の全IDをUndo・Redoで復元する");
+
 }

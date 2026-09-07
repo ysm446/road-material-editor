@@ -698,7 +698,7 @@ float4 PsMain(VsOutput input) : SV_Target0
         normal = (dot(faceNormal, viewDirection) < 0.0f) ? -faceNormal : faceNormal;
     }
 
-    if (useMaterialShading && g_mesh.connectionContextCount != 0u)
+    if (useMaterialShading && g_mesh.shadeLayers != 0u && g_mesh.connectionContextCount != 0u)
     {
         float4 surface;
         float3 tangentNormal;

@@ -118,6 +118,7 @@ private:
     // グラフのノード 1 枚。カード・ピン・リンクの当たり判定を描く。
     void DrawGraphNode(const graph::Node& node);
     // グラフノードのレイヤー設定のプロパティ行。変更があれば true。
+    bool DrawSurfaceLayoutSettings(graph::GraphId roadId);
     bool DrawLayerSettings(compositor::MaterialLayer& layer);
     // グラフの変更をメッシュシーンへ反映する。フレームの頭（フレームの外）で呼ぶ。
     void SyncMeshGraph();
@@ -285,6 +286,8 @@ private:
     // レンダラへ渡す（SyncMeshGraph）。材質の合成はメッシュごとにレンダラ側で評価する。
     graph::SurfaceLayoutDocument m_surfaceLayouts;
     graph::NodeGraph m_graph = graph::NodeGraph::CreateDefault();
+    graph::SurfaceId m_surfaceLayoutSpan = 0;
+    int m_surfaceLayoutLayer = 0;
     graph::GraphId m_selectedGraphNode = 0;
     // エディタで選ばれているノード全部。コピーはこれを見る
     // （プロパティに出すのは先頭の 1 つ = m_selectedGraphNode）。

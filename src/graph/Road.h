@@ -78,6 +78,7 @@ struct CompiledMeshGraph {
     bool active = false;
     renderer::MeshScene scene;
     std::string error;
+    std::vector<GraphId> meshSources;
 };
 // Mesh Outputへ接続された道路と、その上の白線・Decalをシーンへ追加する。
 // 部品（白線・Decal）が失敗しても道路面までは積み、理由を error に「 / 」区切りで残す。

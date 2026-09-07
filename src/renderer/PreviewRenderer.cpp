@@ -1089,7 +1089,9 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
                 commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
                 commandList->SetPipelineState(shadowPipeline);
-                drawMeshes(shadowConstants, kPassOpaque | kPassDecal);
+                // 路面に貼る白線・ひび割れ・Decalは影を受けるだけにする。
+                // 深度だけのパスへ含めると透明マスクが無視され、帯全体が路面を遮光する。
+                drawMeshes(shadowConstants, kPassOpaque);
 
                 TransitionIfNeeded(commandList, shadowMap,
                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

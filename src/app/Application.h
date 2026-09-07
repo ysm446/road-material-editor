@@ -291,7 +291,9 @@ private:
     int m_surfaceLayoutLayer = 0;
     bool m_showLegacyRoadInputs = false;
     bool m_previewSurfaceBands = false;
+    bool m_connectSurfaceBands = false;
     int m_surfaceBandSide = 0;
+    int m_surfaceBandSpan = 0;
     graph::GraphId m_selectedGraphNode = 0;
     // エディタで選ばれているノード全部。コピーはこれを見る
     // （プロパティに出すのは先頭の 1 つ = m_selectedGraphNode）。

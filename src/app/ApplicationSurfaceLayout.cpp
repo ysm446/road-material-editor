@@ -16,12 +16,18 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
     ui::SectionHeader("沿道形状（試作）");
     if (ui::BeginPropertyTable("surfaceBandPreviewRows")) {
         if (ui::PropertyBool("形状を表示", &m_previewSurfaceBands, false,
-            "沿道断面を単色で確認する。材質・ハイト変位の接続はまだ反映しない")) m_graph.MarkDirty();
+            "沿道の形状と下地材質を確認する。ハイト変位の接続はまだ反映しない")) m_graph.MarkDirty();
         const char* sides[] = {"左", "右"};
         ui::PropertyCombo("配置する側", &m_surfaceBandSide, sides, 2, 0, "道路の進行方向に向かっての左右");
+        if (ui::PropertyBool("横接続を試す", &m_connectSurfaceBands, false,
+            "道路1種類と左沿道の最大2種類を境界で混ぜる。形状表示もオンにし、接続した道路と沿道の変位を停止する")) {
+            if (m_connectSurfaceBands) m_previewSurfaceBands = true;
+            m_graph.MarkDirty();
+        }
         ui::EndPropertyTable();
     }
     const auto side = m_surfaceBandSide == 0 ? graph::SurfaceSide::Left : graph::SurfaceSide::Right;
+    if (m_previewSurfaceBands && m_connectSurfaceBands) ui::HintText("左側の横接続を試作中。接続した道路と沿道の変位は停止します");
     bool exists = false;
     for (const auto& layout : m_surfaceLayouts.layouts) if (layout.roadNode == roadId)
         for (const auto& candidate : layout.bands) if (candidate.side == side) exists = true;
@@ -65,7 +71,51 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 }
             }
         }
-        ui::HintText("単色の形状試作。材質・変位の接続は後続です");
+        for (auto& layout : roadsideEdit.layouts) if (layout.roadNode == roadId) {
+            for (auto& candidate : layout.bands) if (candidate.side == side && !candidate.spans.empty()) {
+                m_surfaceBandSpan = std::clamp(m_surfaceBandSpan, 0, static_cast<int>(candidate.spans.size()) - 1);
+                std::vector<std::string> labels;
+                for (const auto& span : candidate.spans) {
+                    char label[96]; std::snprintf(label, sizeof(label), "%.2f ～ %.2f m", span.startMeters, span.endMeters);
+                    labels.emplace_back(label);
+                }
+                std::vector<const char*> items;
+                for (const auto& label : labels) items.push_back(label.c_str());
+                bool changed = false;
+                ui::SectionHeader("沿道の下地材質");
+                if (ui::BeginPropertyTable("roadsideMaterialRows")) {
+                    ui::PropertyCombo("編集する区間", &m_surfaceBandSpan, items.data(), static_cast<int>(items.size()), 0, "材質を編集する沿道の区間");
+                    auto& span = candidate.spans[m_surfaceBandSpan];
+                    auto preset = std::find_if(roadsideEdit.presets.begin(), roadsideEdit.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+                    if (preset != roadsideEdit.presets.end()) {
+                        ui::PropertyValue("プリセット", "%s", preset->name.c_str());
+                        auto& material = preset->materials.front();
+                        const graph::PresetMaterial defaults;
+                        changed |= DrawMaterialSlotRow("素材", material.material, m_materialLibrary);
+                        changed |= ui::PropertyFloat("反復長", &material.uvRepeatMeters, 0.01f, 100, defaults.uvRepeatMeters,
+                            "素材が繰り返す実距離。断面の垂直面も距離に含む", "%.2f m");
+                        const char* spaces[] = {"面に沿う", "ワールド XZ"};
+                        int space = material.worldUv ? 1 : 0;
+                        if (ui::PropertyCombo("座標", &space, spaces, 2, defaults.worldUv ? 1 : 0, "ワールド XZは垂直面では模様が伸びるため、歩道の段差には面に沿うを推奨")) {
+                            material.worldUv = space == 1; changed = true;
+                        }
+                        if (!material.material) {
+                            changed |= ui::PropertyColorLinear("色", material.baseColor.data(), defaults.baseColor.data(), "素材未指定時の色");
+                            changed |= ui::PropertyFloat("粗さ", &material.roughness, 0, 1, defaults.roughness, "素材未指定時の反射のぼけ");
+                        }
+                    }
+                    ui::EndPropertyTable();
+                }
+                ui::HintText("同じプリセットを使う沿道区間すべてに反映します");
+                if (changed) {
+                    const auto preview = graph::CompileSurfaceBandPreview(m_graph, roadsideEdit, roadId, candidate.id);
+                    if (preview.error.empty()) { m_surfaceLayouts = std::move(roadsideEdit); return true; }
+                    TG_LOG_ERROR("沿道材質: %s", preview.error.c_str());
+                }
+                break;
+            }
+        }
+        ui::HintText("下地1層の試作。上層・ハイト変位の接続は後続です");
     }
     ui::SectionHeader("路面区間");
     auto edited = m_surfaceLayouts;

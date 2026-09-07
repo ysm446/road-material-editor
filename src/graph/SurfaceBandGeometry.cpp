@@ -173,7 +173,7 @@ bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocum
             vertex.position = positions[ids[i]];
             XMStoreFloat3(&vertex.normal, normal);
             XMStoreFloat4(&vertex.tangent, XMVector3Normalize(across));
-            vertex.tangent.w = band.side == SurfaceSide::Left ? 1.0f : -1.0f;
+            vertex.tangent.w = band.side == SurfaceSide::Left ? -1.0f : 1.0f;
             vertex.uv = {knots[col - 1 + i / 2], distances[row - 1 + i % 2]};
             vertex.roadUv = vertex.uv;
             mesh.vertices.push_back(vertex);
@@ -182,6 +182,192 @@ bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocum
         else mesh.indices.insert(mesh.indices.end(), {first, first + 2, first + 1, first + 2, first + 3, first + 1});
     }
     result = std::move(mesh);
+    return true;
+}
+CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const SurfaceLayoutDocument& document,
+                                          GraphId roadId, SurfaceId bandId) {
+    CompiledMeshGraph result; result.active = true;
+    if (!ValidateSurfaceLayouts(document, result.error) || !ValidateSurfaceLayoutRoads(document, graph, result.error)) return result;
+    const SurfaceBand* band = nullptr;
+    for (const auto& layout : document.layouts) if (layout.roadNode == roadId)
+        for (const auto& candidate : layout.bands) if (candidate.id == bandId) band = &candidate;
+    if (!band) { result.error = "指定した道路の沿道帯がありません"; return result; }
+    RoadGeometry road;
+    if (!EvaluateRoad(graph, roadId, road, result.error)) return result;
+    renderer::SceneMesh mesh;
+    if (!BuildSurfaceBandGeometry(road, document, *band, mesh.geometry, result.error)) return result;
+    std::vector<const SurfacePreset*> presets;
+    std::vector<float> arcLengths;
+    std::vector<renderer::SceneMesh> contexts;
+    for (const auto& span : band->spans) {
+        if (std::any_of(presets.begin(), presets.end(), [&](const auto* p) { return p->id == span.preset; })) continue;
+        const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+        if (presets.size() == 3) { result.error = "沿道材質の試作は1帯につき最大3プリセットに対応します"; return result; }
+        if (std::any_of(found->materials.begin() + 1, found->materials.end(), [](const auto& m) { return m.mask.has_value(); })) {
+            result.error = "沿道材質の試作は下地1層に対応します。上層の合成は後続です"; return result;
+        }
+        presets.push_back(&*found);
+        float arc = 0;
+        for (size_t i = 1; i < found->section.size(); ++i)
+            arc += std::hypot(found->section[i].across - found->section[i - 1].across,
+                              found->section[i].height - found->section[i - 1].height);
+        arcLengths.push_back(arc);
+        const auto& source = found->materials.front();
+        renderer::SceneMesh context;
+        context.materialOnly = true;
+        context.roadMetersPerUv = source.uvRepeatMeters;
+        context.layerUvRepeat[0] = source.uvRepeatMeters;
+        context.layerWorldUv[0] = source.worldUv;
+        compositor::MaterialStack stack;
+        auto layer = compositor::MaterialStack::MakeBaseLayer();
+        layer.name = found->name; layer.material = source.material;
+        layer.baseColor = {source.baseColor[0], source.baseColor[1], source.baseColor[2]};
+        layer.roughness = source.roughness; layer.metallic = source.metallic; layer.ambientOcclusion = source.ambientOcclusion;
+        layer.heightSource = compositor::ValueSource::Texture; layer.heightBase = 0.5f; layer.heightGain = 1;
+        stack.Layers() = {layer}; stack.SetTerrainScale(source.uvRepeatMeters, 1);
+        context.materialStack = std::move(stack);
+        contexts.push_back(std::move(context));
+    }
+    // 形状側の断面比率を実距離に変換する。段差の垂直面にもUV幅がある。
+    for (auto& vertex : mesh.geometry.vertices) {
+        float arc = 0;
+        for (const auto& sample : SampleSurfaceBand(document, *band, vertex.uv.y)) {
+            const size_t index = std::find_if(presets.begin(), presets.end(), [&](const auto* p) { return p->id == sample.preset; }) - presets.begin();
+            arc += arcLengths[index] * sample.weight;
+        }
+        vertex.uv.x *= arc;
+        vertex.roadUv = vertex.uv;
+    }
+    mesh.roadMetersPerUv = 1;
+    mesh.roadWidthMeters = *std::max_element(arcLengths.begin(), arcLengths.end());
+    mesh.roadLengthMeters = road.rowDistances.back();
+    mesh.roadGridOverlay = false;
+    // 法線が分かれる縁石の変位を独立に適用すると割れるため、この段階では全コンテキストとも0。
+    mesh.displacementMeters = 0;
+    for (size_t i = 0; i < 3; ++i) mesh.connectionSources[i] = static_cast<int>(std::min(i, presets.size() - 1) + 1);
+    mesh.roadMask.width = 1;
+    mesh.roadMask.height = std::max(16u, static_cast<uint32_t>(std::ceil(mesh.roadLengthMeters * 64)));
+    mesh.roadMask.rgba.resize(size_t(mesh.roadMask.height) * 4);
+    for (uint32_t y = 0; y < mesh.roadMask.height; ++y) {
+        const float distance = (float(y) + 0.5f) * mesh.roadLengthMeters / float(mesh.roadMask.height);
+        std::array<float, 3> weights{};
+        for (const auto& sample : SampleSurfaceBand(document, *band, distance)) {
+            const size_t index = std::find_if(presets.begin(), presets.end(), [&](const auto* p) { return p->id == sample.preset; }) - presets.begin();
+            weights[index] += sample.weight;
+        }
+        auto* pixel = &mesh.roadMask.rgba[size_t(y) * 4];
+        pixel[0] = static_cast<uint8_t>(std::lround(weights[1] * 255));
+        pixel[1] = static_cast<uint8_t>(std::min(255 - int(pixel[0]), static_cast<int>(std::lround(weights[2] * 255))));
+        pixel[2] = 0; pixel[3] = 255;
+    }
+    result.scene.meshes.push_back(std::move(mesh));
+    for (auto& context : contexts) result.scene.meshes.push_back(std::move(context));
+    return result;
+}
+bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
+                                    const SurfaceLayoutDocument& document, GraphId roadId,
+                                    SurfaceId bandId, std::string& error) {
+    error.clear();
+    const auto fail = [&](const char* message) { error = message; return false; };
+    if (!ValidateSurfaceLayouts(document, error)) return false;
+    const SurfaceBand* band = nullptr;
+    for (const auto& layout : document.layouts) if (layout.roadNode == roadId)
+        for (const auto& candidate : layout.bands) if (candidate.id == bandId) band = &candidate;
+    if (!band || band->side != SurfaceSide::Left) return fail("横接続の試作は左側の沿道に対応します");
+    const auto roadSource = std::find(scene.meshSources.begin(), scene.meshSources.end(), roadId);
+    if (roadSource == scene.meshSources.end()) return fail("接続先の道路が表示されていません");
+    const size_t roadIndex = roadSource - scene.meshSources.begin();
+    if (roadIndex >= scene.scene.meshes.size()) return fail("道路の描画参照が不正です");
+    auto roadside = CompileSurfaceBandPreview(graph, document, roadId, bandId);
+    if (!roadside.error.empty()) { error = roadside.error; return false; }
+    if (roadside.scene.meshes.size() > 3) return fail("横接続の試作は沿道側の最大2プリセットに対応します");
+    const auto& sourceRoad = scene.scene.meshes[roadIndex];
+    renderer::SceneMesh roadContext;
+    if (sourceRoad.connectionSources[0] >= 0) {
+        if (sourceRoad.connectionSources[0] != sourceRoad.connectionSources[1] ||
+            sourceRoad.connectionSources[0] != sourceRoad.connectionSources[2])
+            return fail("横接続の試作は道路側1種類のプリセットに対応します");
+        const size_t index = static_cast<size_t>(sourceRoad.connectionSources[0]);
+        if (index >= scene.scene.meshes.size()) return fail("道路材質の参照が不正です");
+        roadContext = scene.scene.meshes[index];
+    } else roadContext = sourceRoad;
+    roadContext.geometry = {}; roadContext.materialOnly = true;
+    roadContext.connectionSources = {-1, -1, -1};
+    roadContext.connectionSeams.clear(); roadContext.displacementMeters = 0;
+    roadContext.layerUvRepeat[0] = roadContext.roadMetersPerUv;
+    if (!roadContext.materialStack) {
+        compositor::MaterialStack stack;
+        auto layer = compositor::MaterialStack::MakeBaseLayer();
+        layer.baseColor = sourceRoad.material.baseColor; layer.roughness = sourceRoad.material.roughness;
+        layer.metallic = sourceRoad.material.metallic; stack.Layers() = {layer};
+        roadContext.materialStack = std::move(stack);
+    }
+    std::vector<const SurfacePreset*> presets;
+    for (const auto& span : band->spans) {
+        if (std::any_of(presets.begin(), presets.end(), [&](const auto* p) { return p->id == span.preset; })) continue;
+        const auto preset = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+        presets.push_back(&*preset);
+    }
+    const float width = sourceRoad.roadWidthMeters;
+    const float length = sourceRoad.roadLengthMeters;
+    if (width <= 0 || length <= 0) return fail("道路の寸法情報がありません");
+    const float totalWidth = width + roadside.scene.meshes[0].roadWidthMeters;
+    auto roadMesh = sourceRoad;
+    auto sideMesh = std::move(roadside.scene.meshes[0]);
+    for (auto& vertex : roadMesh.geometry.vertices) {
+        auto meters = vertex.roadUv;
+        meters.x *= sourceRoad.roadMetersPerUv; meters.y *= sourceRoad.roadMetersPerUv;
+        if (sourceRoad.roadUvAlongU) std::swap(meters.x, meters.y);
+        vertex.roadUv = meters;
+    }
+    for (auto& vertex : sideMesh.geometry.vertices) vertex.roadUv.x += width;
+    const int contextStart = static_cast<int>(scene.scene.meshes.size());
+    for (auto* mesh : {&roadMesh, &sideMesh}) {
+        mesh->roadMetersPerUv = 1; mesh->roadUvAlongU = false;
+        mesh->roadWidthMeters = totalWidth; mesh->roadLengthMeters = length; mesh->displacementMeters = 0;
+        mesh->connectionSources = {contextStart, contextStart + 1, contextStart + static_cast<int>(presets.size())};
+        mesh->connectionOrigins = {DirectX::XMFLOAT2{0, 0}, DirectX::XMFLOAT2{width, 0}, DirectX::XMFLOAT2{width, 0}};
+        mesh->roadMask.width = 512;
+        mesh->roadMask.height = std::max(16u, static_cast<uint32_t>(std::ceil(length * 64)));
+        mesh->roadMask.rgba.resize(size_t(mesh->roadMask.width) * mesh->roadMask.height * 4);
+    }
+    // 同じ物理座標と種から境界を評価する。KeepStep/輪郭保持だけは面の側に応じて分離する。
+    for (uint32_t y = 0; y < roadMesh.roadMask.height; ++y) {
+        const float distance = (float(y) + 0.5f) * length / float(roadMesh.roadMask.height);
+        const auto samples = SampleSurfaceBand(document, *band, distance);
+        for (uint32_t x = 0; x < roadMesh.roadMask.width; ++x) {
+            const float offset = (float(x) + 0.5f) * totalWidth / float(roadMesh.roadMask.width) - width;
+            for (auto* mesh : {&roadMesh, &sideMesh}) {
+                std::array<float, 2> weights{};
+                for (const auto& sample : samples) {
+                    const size_t index = std::find_if(presets.begin(), presets.end(), [&](const auto* p) { return p->id == sample.preset; }) - presets.begin();
+                    const auto& contract = presets[index]->boundaries[0];
+                    float coverage = mesh == &sideMesh ? 1.0f : 0.0f;
+                    if (contract.mode == BoundaryMode::Blend && !contract.preserveOutline && contract.transitionMeters > 0) {
+                        const float transition = std::min({contract.transitionMeters, width * 0.5f, sideMesh.roadWidthMeters - width});
+                        const auto span = std::find_if(band->spans.begin(), band->spans.end(), [&](const auto& s) { return s.id == sample.span; });
+                        const float wave = transition * 0.2f * std::sin(distance * 2.3f + float(span->seed % 1024));
+                        const float t = std::clamp((offset - wave) / (transition * 2) + 0.5f, 0.0f, 1.0f);
+                        coverage = t * t * (3 - 2 * t);
+                    }
+                    weights[index] += coverage * sample.weight;
+                }
+                auto* pixel = &mesh->roadMask.rgba[(size_t(y) * mesh->roadMask.width + x) * 4];
+                pixel[0] = static_cast<uint8_t>(std::lround(weights[0] * 255));
+                pixel[1] = static_cast<uint8_t>(std::min(255 - int(pixel[0]), static_cast<int>(std::lround(weights[1] * 255))));
+                pixel[2] = 0; pixel[3] = 255;
+            }
+        }
+    }
+    auto next = scene;
+    next.scene.meshes[roadIndex] = std::move(roadMesh);
+    next.scene.meshes.push_back(std::move(roadContext)); next.meshSources.push_back(0);
+    for (size_t i = 1; i < roadside.scene.meshes.size(); ++i) {
+        next.scene.meshes.push_back(std::move(roadside.scene.meshes[i])); next.meshSources.push_back(0);
+    }
+    next.scene.meshes.push_back(std::move(sideMesh)); next.meshSources.push_back(0);
+    if (!renderer::ValidateMeshScene(next.scene)) return fail("横接続の描画データが不正です");
+    scene = std::move(next);
     return true;
 }
 }  // namespace tg::graph

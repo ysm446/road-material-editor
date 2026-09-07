@@ -309,9 +309,6 @@ void Application::SyncMeshGraph() {
     if (m_previewSurfaceBands) {
         for (const auto& layout : m_surfaceLayouts.layouts) {
             if (std::find(compiled.meshSources.begin(), compiled.meshSources.end(), layout.roadNode) == compiled.meshSources.end()) continue;
-            graph::RoadGeometry road;
-            std::string error;
-            if (!graph::EvaluateRoad(m_graph, layout.roadNode, road, error)) continue;
             for (const auto& band : layout.bands) {
                 if (band.side == graph::SurfaceSide::Road || band.spans.empty()) continue;
                 if (std::count_if(layout.bands.begin(), layout.bands.end(), [&](const auto& other) {
@@ -321,14 +318,22 @@ void Application::SyncMeshGraph() {
                     compiled.error += "沿道形状の試作は左右それぞれ1帯に対応します";
                     continue;
                 }
-                renderer::SceneMesh mesh;
-                if (graph::BuildSurfaceBandGeometry(road, m_surfaceLayouts, band, mesh.geometry, error)) {
-                    mesh.material.baseColor = {0.45f, 0.45f, 0.45f};
-                    mesh.material.roughness = 0.85f;
-                    compiled.scene.meshes.push_back(std::move(mesh));
-                } else {
+                auto preview = graph::CompileSurfaceBandPreview(m_graph, m_surfaceLayouts, layout.roadNode, band.id);
+                if (m_connectSurfaceBands && band.side == graph::SurfaceSide::Left && preview.error.empty()) {
+                    std::string error;
+                    if (graph::ConnectLeftSurfaceBandMaterials(compiled, m_graph, m_surfaceLayouts, layout.roadNode, band.id, error)) continue;
                     if (!compiled.error.empty()) compiled.error += " / ";
                     compiled.error += error;
+                }
+                if (preview.error.empty()) {
+                    const int offset = static_cast<int>(compiled.scene.meshes.size());
+                    for (auto& source : preview.scene.meshes[0].connectionSources) source += offset;
+                    for (auto& mesh : preview.scene.meshes) {
+                        compiled.scene.meshes.push_back(std::move(mesh)); compiled.meshSources.push_back(0);
+                    }
+                } else {
+                    if (!compiled.error.empty()) compiled.error += " / ";
+                    compiled.error += preview.error;
                 }
             }
         }

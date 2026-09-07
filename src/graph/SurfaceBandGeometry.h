@@ -9,4 +9,12 @@ bool CreateRoadsideExample(SurfaceLayoutDocument& document, const NodeGraph& gra
 // 失敗時は出力を保持する。
 bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocument& document,
                               const SurfaceBand& band, renderer::MeshData& result, std::string& error);
+// 最大3プリセットの下地PBR材質を沿道の区間比率で混合する。材質変位は未適用。
+CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const SurfaceLayoutDocument& document,
+                                          GraphId roadId, SurfaceId bandId);
+// 左1帯の材質境界試作。道路1構成＋沿道最大2構成。失敗時はシーンを保持する。
+// 成功時は道路を置換し沿道を追加する。双方の変位は停止する。
+bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
+                                    const SurfaceLayoutDocument& document, GraphId roadId,
+                                    SurfaceId bandId, std::string& error);
 }  // namespace tg::graph

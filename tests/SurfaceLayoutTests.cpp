@@ -304,6 +304,11 @@ void RunSurfaceLayoutTests() {
             mirrored &= std::abs(rightMesh.vertices[i].position.x + bandMesh.vertices[i].position.x) < 1e-5f &&
                         std::abs(rightMesh.vertices[i].normal.y - bandMesh.vertices[i].normal.y) < 1e-5f;
         Check(mirrored, "左右を反転しても面の表裏は反転しない");
+        for (const auto* mesh : {&bandMesh, &rightMesh}) {
+            const auto& v = mesh->vertices.front();
+            const float bitangentZ = (v.normal.x * v.tangent.y - v.normal.y * v.tangent.x) * v.tangent.w;
+            Check(bitangentZ > 0, "左右とも法線マップのV方向が道路の進行方向と一致する");
+        }
     }
     auto bentRoad = bandRoad;
     for (auto& v : bentRoad.surface.vertices) {
@@ -325,5 +330,97 @@ void RunSurfaceLayoutTests() {
           graph::BuildSurfaceBandGeometry(bandRoad, roadsideReloaded, roadsideReloaded.layouts[0].bands[1], rightMesh, error) &&
           rightMesh.vertices.size() == bandMesh.vertices.size() && rightMesh.indices == bandMesh.indices,
           "保存した仮沿道から同じ分割の形状を再生成する");
+
+    tests::Section("沿道材質 — 下地と区間混合");
+    roadside.presets[0].materials[0].material = 13;
+    roadside.presets[0].materials[0].uvRepeatMeters = 3;
+    roadside.presets[0].materials[0].worldUv = true;
+    roadside.presets[1].materials[0].baseColor = {0.2f, 0.3f, 0.4f};
+    roadside.presets[1].materials[0].roughness = 0.67f;
+    roadside.presets[1].displacementMeters = 0.2f;
+    const auto bandPreview = graph::CompileSurfaceBandPreview(sceneGraph, roadside, roadId, roadside.layouts[0].bands[1].id);
+    Check(bandPreview.error.empty() && bandPreview.scene.meshes.size() == 3 && renderer::ValidateMeshScene(bandPreview.scene),
+          "沿道を形状1件と材質2件で描画できる構成へ変換する");
+    if (bandPreview.scene.meshes.size() == 3) {
+        const auto& surface = bandPreview.scene.meshes[0];
+        const auto& ground = bandPreview.scene.meshes[1];
+        const auto& walk = bandPreview.scene.meshes[2];
+        Check(surface.connectionSources == std::array<int, 3>{1, 2, 2} && ground.materialOnly && walk.materialOnly,
+              "沿道の素材参照は評価専用コンテキストを指す");
+        Check(ground.materialStack->Layers()[0].material == 13 && ground.layerUvRepeat[0] == 3 && ground.layerWorldUv[0] &&
+              walk.materialStack->Layers()[0].roughness == 0.67f && walk.materialStack->Layers()[0].baseColor.y == 0.3f,
+              "下地の素材参照・反復長・座標・PBR定数を保持する");
+        Check(surface.displacementMeters == 0 && walk.displacementMeters == 0, "断面の継ぎ目を独立した材質変位で割らない");
+        Check(std::abs(surface.geometry.vertices.back().uv.x - 2.15f) < 1e-5f &&
+              surface.geometry.vertices.back().roadUv.y == 50, "垂直面を含む断面長と進行方向の実距離をUVに保持する");
+        const auto& mask = surface.roadMask;
+        Check(mask.rgba.front() == 0 && mask.rgba[(mask.height - 1) * 4] == 255 &&
+              mask.rgba[(mask.height / 2) * 4] >= 127 && mask.rgba[(mask.height / 2) * 4] <= 130,
+              "断面と同じ移行位置で下地材質の重みが0から1へ変わる");
+        Check(surface.geometry.indices == bandMesh.indices && surface.geometry.vertices.front().position.x == bandMesh.vertices.front().position.x,
+              "材質を付けても沿道の形状は変わらない");
+    }
+    auto unsupportedBand = roadside;
+    unsupportedBand.presets[0].materials.emplace_back();
+    unsupportedBand.presets[0].materials.back().mask.emplace();
+    const auto rejectedBand = graph::CompileSurfaceBandPreview(sceneGraph, unsupportedBand, roadId, unsupportedBand.layouts[0].bands[1].id);
+    Check(!rejectedBand.error.empty() && rejectedBand.scene.meshes.empty(), "未対応の上層を黙って捨てずに理由を返す");
+    graph::SurfaceLayoutDocument materialReload;
+    Check(io::ReadSurfaceLayouts(io::WriteSurfaceLayouts(roadside), materialReload, error), "沿道の下地材質が保存往復する");
+    const auto reloadedBand = graph::CompileSurfaceBandPreview(sceneGraph, materialReload, roadId, materialReload.layouts[0].bands[1].id);
+    Check(reloadedBand.error.empty() && reloadedBand.scene.meshes[0].roadMask.rgba == bandPreview.scene.meshes[0].roadMask.rgba,
+          "再読込後も沿道の材質の移行が一致する");
+
+    tests::Section("横接続 — 共通境界と段差の保持");
+    auto lateralScene = graph::CompileMeshGraph(sceneGraph);
+    const size_t originalMeshes = lateralScene.scene.meshes.size();
+    const auto lateralBandId = roadside.layouts[0].bands[1].id;
+    Check(graph::ConnectLeftSurfaceBandMaterials(lateralScene, sceneGraph, roadside, roadId, lateralBandId, error) &&
+          renderer::ValidateMeshScene(lateralScene.scene), "道路1構成と左沿道2構成の材質を接続する");
+    if (lateralScene.scene.meshes.size() == originalMeshes + 4) {
+        const auto& roadSurface = lateralScene.scene.meshes[0];
+        const auto& sideSurface = lateralScene.scene.meshes.back();
+        Check(roadSurface.connectionSources == sideSurface.connectionSources &&
+              roadSurface.connectionOrigins[1].x == bandRoad.settings.widthMeters &&
+              roadSurface.roadWidthMeters == sideSurface.roadWidthMeters,
+              "道路と沿道が同じ材質参照・境界座標・マスク縮尺を使う");
+        const auto& a = roadSurface.roadMask; const auto& b = sideSurface.roadMask;
+        bool sameGround = true;
+        for (uint32_t x = 0; x < a.width * 4; ++x) sameGround &= a.rgba[x] == b.rgba[x];
+        Check(sameGround, "馴染ませる路肩区間では両面の境界比率が完全に一致する");
+        const uint32_t edge = static_cast<uint32_t>(bandRoad.settings.widthMeters / roadSurface.roadWidthMeters * float(a.width));
+        const auto roadEnd = (size_t(a.height - 1) * a.width + edge) * 4;
+        Check(a.rgba[roadEnd] == 0 && a.rgba[roadEnd + 1] == 0 && b.rgba[roadEnd + 1] == 255,
+              "段差を残す歩道は道路へ滲ませず、歩道側の材質を保持する");
+        Check(a.rgba[edge * 4] > 0 && a.rgba[edge * 4] < 255,
+              "路肩との境界では両側の材質が混ざる");
+        Check(roadSurface.displacementMeters == 0 && sideSurface.displacementMeters == 0 &&
+              lateralScene.scene.meshes[originalMeshes].displacementMeters == 0,
+              "材質接続の試作では道路と沿道の変位を停止する");
+        Check(lateralScene.scene.meshes[1].displacementSource == 0 &&
+              lateralScene.scene.meshes[1].geometry.indices == normalScene.scene.meshes[1].geometry.indices,
+              "白線の形状と参照先は材質接続後も保持する");
+    }
+    auto unsupportedScene = normalScene;
+    const auto countBefore = unsupportedScene.scene.meshes.size();
+    Check(!graph::ConnectLeftSurfaceBandMaterials(unsupportedScene, sceneGraph, roadside, roadId, lateralBandId, error) &&
+          unsupportedScene.scene.meshes.size() == countBefore &&
+          unsupportedScene.scene.meshes[0].connectionSources == normalScene.scene.meshes[0].connectionSources,
+          "複数の道路プリセットは部分的に接続せずシーンを保持する");
+    auto wrongSideScene = graph::CompileMeshGraph(sceneGraph);
+    Check(!graph::ConnectLeftSurfaceBandMaterials(wrongSideScene, sceneGraph, rightSide, roadId,
+          rightSide.layouts[0].bands[1].id, error), "右側は対応するまで明示的に拒否する");
+    auto axisGraph = sceneGraph;
+    std::get<graph::RoadNodeSettings>(axisGraph.FindMutableNode(roadId)->settings).uvAlongU = true;
+    auto axisScene = graph::CompileMeshGraph(axisGraph);
+    Check(graph::ConnectLeftSurfaceBandMaterials(axisScene, axisGraph, roadside, roadId, lateralBandId, error),
+          "道路のUVが長さ方向Uでも横接続を生成できる");
+    if (!axisScene.scene.meshes.empty()) {
+        const auto& axisRoad = axisScene.scene.meshes[0];
+        Check(std::abs(axisRoad.geometry.vertices.back().roadUv.x - bandRoad.settings.widthMeters) < 1e-5f &&
+              std::abs(axisRoad.geometry.vertices.back().roadUv.y - 50) < 1e-5f && !axisRoad.roadUvAlongU,
+              "元のUV軸に依存せず横距離・進行距離の共通座標へ変換する");
+        Check(axisScene.meshSources.size() == axisScene.scene.meshes.size(), "追加後も描画メッシュと由来の配列が対応する");
+    }
 
 }

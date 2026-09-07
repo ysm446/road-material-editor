@@ -468,6 +468,17 @@ void Application::PasteGraphNodes(const ImVec2& viewCenter) {
     TG_LOG_INFO("ノードを貼り付けました: %zu 個", m_graphClipboard.size());
 }
 
+bool Application::IsGraphPinVisible(const graph::Pin& pin) const {
+    if (m_showLegacyRoadInputs || (pin.valueType != graph::ValueType::Material &&
+        pin.valueType != graph::ValueType::RoadMask)) return true;
+    for (const auto& layout : m_surfaceLayouts.layouts) {
+        if (layout.roadNode != pin.nodeId) continue;
+        for (const auto& band : layout.bands)
+            if (band.side == graph::SurfaceSide::Road && !band.spans.empty()) return false;
+    }
+    return true;
+}
+
 void Application::DrawGraphNode(const graph::Node& node) {
     // ノードの幅。**ピンのラベルが重ならない幅まで広げる。**
     // 入力は左、出力は右へ寄せるので、同じ行に並ぶ 2 つのラベルの合計が要る幅になる。
@@ -479,6 +490,7 @@ void Application::DrawGraphNode(const graph::Node& node) {
     float rowWidth = 0.0f;
     std::vector<const graph::Pin*> visibleInputs;
     for (const graph::Pin& input : node.inputs) {
+        if (!IsGraphPinVisible(input)) continue;
         visibleInputs.push_back(&input);
     }
     for (size_t row = 0; row < std::max(visibleInputs.size(), node.outputs.size()); ++row) {
@@ -717,6 +729,10 @@ void Application::DrawGraphEditor() {
     }
 
     for (const graph::Link& link : m_graph.Links()) {
+        if (const auto* pin = m_graph.FindPin(link.endPin); pin && !IsGraphPinVisible(*pin)) {
+            ed::DeselectLink(ed::LinkId(link.id));
+            continue;
+        }
         ImVec4 color(0.52f, 0.60f, 0.55f, 1.0f);
         if (const graph::Pin* startPin = m_graph.FindPin(link.startPin)) {
             color = PinTypeColor(startPin->valueType);

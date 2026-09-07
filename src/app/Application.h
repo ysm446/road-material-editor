@@ -117,6 +117,7 @@ private:
     void DrawGraphEditor();
     // グラフのノード 1 枚。カード・ピン・リンクの当たり判定を描く。
     void DrawGraphNode(const graph::Node& node);
+    bool IsGraphPinVisible(const graph::Pin& pin) const;
     // グラフノードのレイヤー設定のプロパティ行。変更があれば true。
     bool DrawSurfaceLayoutSettings(graph::GraphId roadId);
     bool DrawLayerSettings(compositor::MaterialLayer& layer);
@@ -288,6 +289,7 @@ private:
     graph::NodeGraph m_graph = graph::NodeGraph::CreateDefault();
     graph::SurfaceId m_surfaceLayoutSpan = 0;
     int m_surfaceLayoutLayer = 0;
+    bool m_showLegacyRoadInputs = false;
     graph::GraphId m_selectedGraphNode = 0;
     // エディタで選ばれているノード全部。コピーはこれを見る
     // （プロパティに出すのは先頭の 1 つ = m_selectedGraphNode）。

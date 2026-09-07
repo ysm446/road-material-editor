@@ -26,130 +26,30 @@ bool IsNeutralPlane(const tg::graph::CompiledGraph& compiled) {
            layer.heightBase == tg::compositor::kHeightPivot;
 }
 
-bool StartsWithNeutralPlane(const tg::graph::CompiledGraph& compiled) {
-    if (compiled.layers.empty()) {
-        return false;
-    }
-    const tg::compositor::MaterialLayer& layer = compiled.layers.front();
-    return layer.enabled && !tg::compositor::IsHeightOperationKind(layer.kind) &&
-           layer.heightSource == tg::compositor::ValueSource::Constant &&
-           layer.heightBase == tg::compositor::kHeightPivot;
-}
-
 }  // namespace
 
 void RunNodeGraphTests() {
-    Section("ノードグラフ — 入力のないハイト加工");
-
-    constexpr std::array kOperationKinds = {
-        NodeKind::Blur,      NodeKind::Sediment, NodeKind::Crumbling,
-        NodeKind::Snow,      NodeKind::River,    NodeKind::Droplet,
-    };
-    for (const NodeKind kind : kOperationKinds) {
-        NodeGraph graph;
-        const tg::graph::GraphId operationId = graph.CreateNode(kind);
-        Check(IsNeutralPlane(graph.CompileLayersTo(operationId)),
-              "Base 未接続の加工ノードは変位 0 の平面になる");
-    }
-
+    Section("ノードグラフ — 既定の下地と Surface の鎖");
     {
-        NodeGraph graph;
-        const tg::graph::GraphId baseId = graph.CreateNode(NodeKind::Heightmap);
-        const tg::graph::GraphId blurId = graph.CreateNode(NodeKind::Blur);
+        NodeGraph graph = NodeGraph::CreateDefault();
+        Check(graph.Nodes().size() == 1 && graph.Nodes().front().kind == NodeKind::Surface,
+              "既定のグラフは Surface 1 つ");
+        Check(IsNeutralPlane(graph.CompileLayers()),
+              "出力ノードは無いので、既定のレイヤー列は変位 0 の平面になる");
+
+        // Surface → Surface の鎖は、下から上のレイヤー列になる。
+        const tg::graph::GraphId baseId = graph.Nodes().front().id;
+        const tg::graph::GraphId topId = graph.CreateNode(NodeKind::Surface);
         const tg::graph::Node* base = graph.FindNode(baseId);
-        const tg::graph::Node* blur = graph.FindNode(blurId);
-        const bool connected = base != nullptr && blur != nullptr && !base->outputs.empty() &&
-                               !blur->inputs.empty() &&
-                               graph.CreateLink(base->outputs.front().id, blur->inputs.front().id);
-        const tg::graph::CompiledGraph compiled = graph.CompileLayersTo(blurId);
-        Check(connected && compiled.layers.size() == 2 &&
-                  compiled.layers.front().kind == tg::compositor::LayerKind::Shape &&
-                  compiled.layers.back().kind == tg::compositor::LayerKind::Blur,
-              "Base 接続中の加工ノードは入力と加工を保つ");
-    }
-
-    Section("ノードグラフ — Sediment の Emission 入力");
-    {
-        // Emission に繋いだマスクは、堆積レイヤーの Mask 入力（供給元）として op へ落ちる。
-        NodeGraph graph;
-        const tg::graph::GraphId baseId = graph.CreateNode(NodeKind::Heightmap);
-        const tg::graph::GraphId noiseId = graph.CreateNode(NodeKind::MaskNoise);
-        const tg::graph::GraphId sedimentId = graph.CreateNode(NodeKind::Sediment);
-        const tg::graph::Node* base = graph.FindNode(baseId);
-        const tg::graph::Node* noise = graph.FindNode(noiseId);
-        const tg::graph::Node* sediment = graph.FindNode(sedimentId);
-        const bool hasPins = base != nullptr && noise != nullptr && sediment != nullptr &&
-                             !base->outputs.empty() && !noise->outputs.empty() &&
-                             sediment->inputs.size() == 2 &&
-                             sediment->inputs[1].valueType == tg::graph::ValueType::Mask;
-        const bool connected =
-            hasPins && graph.CreateLink(base->outputs.front().id, sediment->inputs[0].id) &&
-            graph.CreateLink(noise->outputs.front().id, sediment->inputs[1].id);
-        const tg::graph::CompiledGraph compiled = graph.CompileLayersTo(sedimentId);
-        const bool wired = compiled.layers.size() == 2 &&
-                           compiled.layers.back().kind == tg::compositor::LayerKind::Sediment &&
-                           compiled.layers.back().mask.source == tg::compositor::MaskSource::Node &&
-                           compiled.layers.back().mask.maskOp >= 0 &&
-                           static_cast<size_t>(compiled.layers.back().mask.maskOp) <
-                               compiled.maskOps.size();
-        Check(connected && wired, "Sediment の Emission 入力は供給元のマスク op になる");
-
-        // 繋がなければ供給元は無し（全面へ一様）。
-        NodeGraph plain;
-        const tg::graph::GraphId plainBaseId = plain.CreateNode(NodeKind::Heightmap);
-        const tg::graph::GraphId plainSedimentId = plain.CreateNode(NodeKind::Sediment);
-        const tg::graph::Node* plainBase = plain.FindNode(plainBaseId);
-        const tg::graph::Node* plainSediment = plain.FindNode(plainSedimentId);
-        const bool plainConnected =
-            plainBase != nullptr && plainSediment != nullptr && !plainBase->outputs.empty() &&
-            !plainSediment->inputs.empty() &&
-            plain.CreateLink(plainBase->outputs.front().id, plainSediment->inputs[0].id);
-        const tg::graph::CompiledGraph plainCompiled = plain.CompileLayersTo(plainSedimentId);
-        Check(plainConnected && plainCompiled.layers.size() == 2 &&
-                  plainCompiled.layers.back().mask.source != tg::compositor::MaskSource::Node,
-              "Emission 未接続の Sediment は供給元を持たない");
-    }
-
-    Section("ノードグラフ — Snow の Mask 入力");
-    {
-        // Mask に繋いだマスクは、積雪レイヤーの Mask 入力（降らせる場所）として op へ落ちる。
-        NodeGraph graph;
-        const tg::graph::GraphId baseId = graph.CreateNode(NodeKind::Heightmap);
-        const tg::graph::GraphId heightId = graph.CreateNode(NodeKind::MaskHeight);
-        const tg::graph::GraphId snowId = graph.CreateNode(NodeKind::Snow);
-        const tg::graph::Node* base = graph.FindNode(baseId);
-        const tg::graph::Node* height = graph.FindNode(heightId);
-        const tg::graph::Node* snow = graph.FindNode(snowId);
-        const bool hasPins = base != nullptr && height != nullptr && snow != nullptr &&
-                             !base->outputs.empty() && !height->outputs.empty() &&
-                             snow->inputs.size() == 2 &&
-                             snow->inputs[1].valueType == tg::graph::ValueType::Mask;
-        const bool connected =
-            hasPins && graph.CreateLink(base->outputs.front().id, snow->inputs[0].id) &&
-            graph.CreateLink(height->outputs.front().id, snow->inputs[1].id);
-        const tg::graph::CompiledGraph compiled = graph.CompileLayersTo(snowId);
-        const bool wired = compiled.layers.size() == 2 &&
-                           compiled.layers.back().kind == tg::compositor::LayerKind::Snow &&
-                           compiled.layers.back().mask.source == tg::compositor::MaskSource::Node &&
-                           compiled.layers.back().mask.maskOp >= 0 &&
-                           static_cast<size_t>(compiled.layers.back().mask.maskOp) <
-                               compiled.maskOps.size();
-        Check(connected && wired, "Snow の Mask 入力は降らせる場所のマスク op になる");
-
-        // 繋がなければ全面へ一様。
-        NodeGraph plain;
-        const tg::graph::GraphId plainBaseId = plain.CreateNode(NodeKind::Heightmap);
-        const tg::graph::GraphId plainSnowId = plain.CreateNode(NodeKind::Snow);
-        const tg::graph::Node* plainBase = plain.FindNode(plainBaseId);
-        const tg::graph::Node* plainSnow = plain.FindNode(plainSnowId);
-        const bool plainConnected =
-            plainBase != nullptr && plainSnow != nullptr && !plainBase->outputs.empty() &&
-            !plainSnow->inputs.empty() &&
-            plain.CreateLink(plainBase->outputs.front().id, plainSnow->inputs[0].id);
-        const tg::graph::CompiledGraph plainCompiled = plain.CompileLayersTo(plainSnowId);
-        Check(plainConnected && plainCompiled.layers.size() == 2 &&
-                  plainCompiled.layers.back().mask.source != tg::compositor::MaskSource::Node,
-              "Mask 未接続の Snow は降らせる場所を持たない");
+        const tg::graph::Node* top = graph.FindNode(topId);
+        const bool linked = base != nullptr && top != nullptr && !base->outputs.empty() &&
+                            !top->inputs.empty() &&
+                            graph.CreateLink(base->outputs.front().id, top->inputs.front().id);
+        const tg::graph::CompiledGraph compiled = graph.CompileLayersTo(topId);
+        Check(linked && compiled.layers.size() == 2 && compiled.layerSources.size() == 2 &&
+                  compiled.layerSources[0] == baseId && compiled.layerSources[1] == topId,
+              "Surface の鎖は下から上のレイヤー列になり、元ノードを控える");
+        Check(compiled.maskOps.empty(), "マスクを出すノードは無いので op の列は空");
     }
 
     Section("パス — 実寸カーブの範囲外編集");
@@ -283,7 +183,7 @@ void RunNodeGraphTests() {
               "貼った鎖は元の鎖と別の鎖になる");
     }
 
-    Section("パス — 面の線分列と Mask Area");
+    Section("パス — 面の線分列");
     {
         using tg::graph::PathElementId;
         using tg::graph::PathSettings;
@@ -310,104 +210,24 @@ void RunNodeGraphTests() {
                             segments.back().by == segments.front().ay;
         Check(segments.size() == 3 && chained && closed,
               "閉じた鎖の BuildPathAreaSegments は輪を一周して先頭へ戻る");
-
-        // グラフ: Path → Mask Area → Surface の Mask。閉じた鎖があれば Area の op になる。
-        NodeGraph graph;
-        const tg::graph::GraphId baseId = graph.CreateNode(NodeKind::Heightmap);
-        const tg::graph::GraphId pathId = graph.CreateNode(NodeKind::Path);
-        const tg::graph::GraphId areaId = graph.CreateNode(NodeKind::MaskArea);
-        const tg::graph::GraphId surfaceId = graph.CreateNode(NodeKind::Surface);
-        tg::graph::Node* pathNode = graph.FindMutableNode(pathId);
-        if (auto* settings = std::get_if<tg::graph::PathNodeSettings>(&pathNode->settings)) {
-            settings->path = loop;
-        }
-        const tg::graph::Node* base = graph.FindNode(baseId);
-        const tg::graph::Node* area = graph.FindNode(areaId);
-        const tg::graph::Node* surface = graph.FindNode(surfaceId);
-        const bool linked =
-            graph.CreateLink(pathNode->outputs.front().id, area->inputs.front().id) &&
-            graph.CreateLink(base->outputs.front().id, surface->inputs[0].id) &&
-            graph.CreateLink(area->outputs.front().id, surface->inputs[1].id);
-        const tg::graph::CompiledGraph compiled = graph.CompileLayersTo(surfaceId);
-        const bool wired = compiled.layers.size() == 2 &&
-                           compiled.layers.back().mask.source == tg::compositor::MaskSource::Node &&
-                           compiled.layers.back().mask.maskOp >= 0 &&
-                           static_cast<size_t>(compiled.layers.back().mask.maskOp) <
-                               compiled.maskOps.size() &&
-                           compiled.maskOps[static_cast<size_t>(compiled.layers.back().mask.maskOp)]
-                                   .kind == tg::compositor::MaskOpKind::Area &&
-                           compiled.maskOps.front().pathSegments.size() == 3;
-        Check(linked && wired, "Mask Area は閉じた鎖から Area の op になる");
-
-        // 開いた鎖しか無ければ op は作られない（マスクは定数へ落ちる）。
-        if (auto* settings = std::get_if<tg::graph::PathNodeSettings>(&pathNode->settings)) {
-            settings->path = open;
-        }
-        graph.MarkDirty();
-        const tg::graph::CompiledGraph openCompiled = graph.CompileLayersTo(surfaceId);
-        Check(openCompiled.layers.size() == 2 &&
-                  openCompiled.layers.back().mask.source != tg::compositor::MaskSource::Node,
-              "閉じた鎖が無い Mask Area は op を作らない");
     }
 
-    Section("ノードグラフ — Path の Base");
+    Section("ノードグラフ — Path の入力");
     {
         NodeGraph graph;
-        const tg::graph::GraphId heightmapId = graph.CreateNode(NodeKind::Heightmap);
-        const tg::graph::GraphId outputId = graph.CreateNode(NodeKind::Output);
+        const tg::graph::GraphId surfaceId = graph.CreateNode(NodeKind::Surface);
         const tg::graph::GraphId pathId = graph.CreateNode(NodeKind::Path);
-        const tg::graph::Node* heightmap = graph.FindNode(heightmapId);
-        const tg::graph::Node* output = graph.FindNode(outputId);
+        const tg::graph::Node* surface = graph.FindNode(surfaceId);
         const tg::graph::Node* path = graph.FindNode(pathId);
+        Check(IsNeutralPlane(graph.CompileLayersTo(pathId)),
+              "Path はレイヤー列を持たず、変位 0 の平面になる");
 
-        const bool outputConnected =
-            heightmap != nullptr && output != nullptr && !heightmap->outputs.empty() &&
-            !output->inputs.empty() &&
-            graph.CreateLink(heightmap->outputs.front().id, output->inputs.front().id);
-        Check(outputConnected && IsNeutralPlane(graph.CompileLayersTo(pathId)),
-              "Base 未接続の Path は Output 側の地形ではなく変位 0 の平面になる");
-
-        // Path の入力は Surface（Mesh 型）になった。旧地形（Material 型）は繋げない。
+        // Path の入力は Surface（Mesh 型）。材質（Material 型）は繋げない。
         const bool pathRejects =
-            heightmap != nullptr && path != nullptr && !heightmap->outputs.empty() &&
+            surface != nullptr && path != nullptr && !surface->outputs.empty() &&
             !path->inputs.empty() &&
-            !graph.CanCreateLink(heightmap->outputs.front().id, path->inputs.front().id);
+            !graph.CanCreateLink(surface->outputs.front().id, path->inputs.front().id);
         Check(pathRejects && path->inputs.front().valueType == tg::graph::ValueType::Mesh,
-              "Path の Surface 入力は Mesh 型で、地形（Material）は繋げない");
-    }
-
-    Section("ノードグラフ — ハイト由来マスクの Base");
-    constexpr std::array kHeightMaskKinds = {
-        NodeKind::MaskFluvial,
-        NodeKind::MaskHeight,
-        NodeKind::MaskSlope,
-        NodeKind::MaskCurvature,
-    };
-    for (const NodeKind kind : kHeightMaskKinds) {
-        NodeGraph graph;
-        const tg::graph::GraphId heightmapId = graph.CreateNode(NodeKind::Heightmap);
-        const tg::graph::GraphId outputId = graph.CreateNode(NodeKind::Output);
-        const tg::graph::GraphId maskId = graph.CreateNode(kind);
-        const tg::graph::Node* heightmap = graph.FindNode(heightmapId);
-        const tg::graph::Node* output = graph.FindNode(outputId);
-        const tg::graph::Node* mask = graph.FindNode(maskId);
-
-        const bool outputConnected =
-            heightmap != nullptr && output != nullptr && !heightmap->outputs.empty() &&
-            !output->inputs.empty() &&
-            graph.CreateLink(heightmap->outputs.front().id, output->inputs.front().id);
-        const tg::graph::CompiledGraph disconnected = graph.CompileLayersTo(maskId);
-        Check(outputConnected && StartsWithNeutralPlane(disconnected),
-              "Base 未接続のハイト由来マスクは変位 0 の平面上で表示する");
-
-        const bool maskConnected =
-            heightmap != nullptr && mask != nullptr && !heightmap->outputs.empty() &&
-            !mask->inputs.empty() &&
-            graph.CreateLink(heightmap->outputs.front().id, mask->inputs.front().id);
-        const tg::graph::CompiledGraph connected = graph.CompileLayersTo(maskId);
-        Check(maskConnected && !connected.layers.empty() &&
-                  connected.layers.front().kind == tg::compositor::LayerKind::Shape &&
-                  connected.layers.front().heightSource != tg::compositor::ValueSource::Constant,
-              "Base 接続中のハイト由来マスクは自身の入力地形上で表示する");
+              "Path の Surface 入力は Mesh 型で、材質（Material）は繋げない");
     }
 }

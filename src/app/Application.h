@@ -114,22 +114,14 @@ private:
     void DrawGraphEditor();
     // グラフのノード 1 枚。カード・ピン・リンクの当たり判定を描く。
     void DrawGraphNode(const graph::Node& node);
-    // ノードに出すマスクのサムネイル（そのノードの outputIndex 番目の Mask 出力）。
-    // 表側の評価結果に無ければ ptr が 0。
-    D3D12_GPU_DESCRIPTOR_HANDLE GraphMaskThumbnail(graph::GraphId nodeId,
-                                                   size_t outputIndex) const;
     // ノードに出す合成結果のサムネイル（そのノードのレイヤーまで合成した見た目）。
     D3D12_GPU_DESCRIPTOR_HANDLE GraphLayerThumbnail(graph::GraphId nodeId) const;
     // グラフノードのレイヤー設定のプロパティ行。
     // 変更があれば true。isBase はマスクが効かない一番下のレイヤーのとき。
-    // isSource は入力を持たないノード（ハイトマップ）。マスクの節を出さない。
     // maskFromNode が真のとき、マスクの出どころは Mask 入力に繋いだノード。
     // ソースと画像の行は出さない（同じ値を 2 か所から編集させない）。
-    // maskResolves が偽なら「Mask 入力に繋いだのに効いていない」注意書きを出す
-    // （堆積 / 崩落の Mask を、そのチェーンの外から繋いだとき）。
-    bool DrawLayerSettings(compositor::MaterialLayer& layer, bool isBase, bool isSource = false,
-                           bool maskFromNode = false,
-                           bool maskResolves = true);
+    bool DrawLayerSettings(compositor::MaterialLayer& layer, bool isBase,
+                           bool maskFromNode = false);
     // グラフの変更をコンパイル結果（m_graphStack）へ反映する。フレームの頭で呼ぶ。
     void SyncGraphStack();
     void SyncMeshGraph();
@@ -327,12 +319,11 @@ private:
     // 前回コンパイルしたプレビュー対象。選択が変わっても再コンパイルするために持つ。
     graph::GraphId m_compiledGraphTarget = 0;
     graph::GraphId m_compiledGraphTargetPin = 0;
-    // コンパイルした op の出どころを、スタックの版ごとに控える。評価は非同期なので、
+    // コンパイルしたレイヤーの出どころを、スタックの版ごとに控える。評価は非同期なので、
     // 表側にある結果はいまのコンパイルより古いことがある。ノードのサムネイルは
     // 「表側の結果の版」に合う対応で引かないと、別のノードの模様が出る。
     struct GraphMaskOpSources {
         uint64_t revision = 0;
-        std::vector<graph::CompiledGraph::MaskOpSource> ops;
         // レイヤーごとの元ノード（添字はレイヤーの添字）。結果サムネイル用。
         std::vector<graph::GraphId> layers;
     };

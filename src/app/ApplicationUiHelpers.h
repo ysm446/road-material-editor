@@ -78,19 +78,6 @@ inline const compositor::MaterialLayer kDefaultLiquidLayer = [] {
     return layer;
 }();
 
-// ハイトマップノードの既定値。**ソースとして単体で成立する形**にしておく。
-// 画像の 0〜1 がそのままハイトの全幅（起伏の強さは 1.0 固定で UI にも出さない）。
-// その全幅を実寸へ変換するのはノードの「標高差」（m）。
-inline const compositor::MaterialLayer kDefaultHeightmapLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Shape;
-    layer.name = "Heightmap";
-    layer.heightSource = compositor::ValueSource::Texture;
-    layer.heightBase = 0.5f;  // 0.5 で持ち上げなし
-    layer.heightGain = 1.0f;
-    return layer;
-}();
-
 // ブラーノードの既定値。**合成しない加工**なので、色もマスクも使わない。
 // 半径は terrain-editor の既定（3 セル）にならい、1024m / 1024px を想定して 3m。
 inline const compositor::MaterialLayer kDefaultBlurLayer = [] {
@@ -176,17 +163,6 @@ inline const compositor::MaterialLayer& DefaultLayerFor(compositor::LayerKind ki
     }
 }
 
-// レイヤー一覧のツールチップなどで使う種類の表示名。LayerKind の並びと一致させること。
-inline const char* const kLayerKindLabels[] = {"サーフェス", "シェイプ", "水面", "ブラー",
-                                               "堆積",       "崩落",     "積雪", "河川",
-                                               "水滴侵食"};
-// 曲率マスクの向き。compositor::CurvatureMode の並びと一致させること。
-inline const char* const kCurvatureModeLabels[] = {"尾根", "谷", "両方"};
-// 岩片の形。compositor::RockStyle の並びと一致させること。
-inline const char* const kRockStyleLabels[] = {"丸い", "多面体", "尖った破片"};
-// 堆積 / 積雪の計算グリッド。合成解像度とは別に持つ。
-inline const char* const kSedimentResolutionLabels[] = {"256", "512", "1024"};
-inline constexpr uint32_t kSedimentResolutionValues[] = {256, 512, 1024};
 inline const compositor::BrushSettings kDefaultBrush;
 inline const renderer::LightSettings kDefaultLight;
 inline const renderer::ExposureSettings kDefaultExposure;
@@ -196,20 +172,11 @@ inline const renderer::SkySettings kDefaultSky;
 
 inline const char* const kNoiseTypeLabels[] = {"fBm",    "尾根状", "セル状",
                                               "Perlin", "雲状",   "割れ目"};
-inline const char* const kValueSourceLabels[] = {"定数", "ノイズ", "テクスチャ"};
 // **「ノード」は選ばせない。** グラフで Mask 入力へ繋ぐと自動でそれになる。
 inline const char* const kMaskSourceLabels[] = {
     "定数",       "ノイズ",     "テクスチャ", "下地の高さ",
     "下地の傾斜", "下地の曲率", "下地の窪み", "ペイント",
 };
-// マスクの合成。compositor::MaskBlendMode の並びと一致させること。
-inline const char* const kMaskBlendModeLabels[] = {"加算", "乗算", "小さいほう", "大きいほう",
-                                                   "減算"};
-// 川筋マスクの出力カーブ。compositor::FluvialCurve の並びと一致させること。
-inline const char* const kFluvialCurveLabels[] = {"対数", "しきい値", "線形"};
-// 川筋マスクの計算グリッド。合成解像度とは別に持つ。
-inline const char* const kFluvialResolutionLabels[] = {"256", "512", "1024"};
-inline constexpr uint32_t kFluvialResolutionValues[] = {256, 512, 1024};
 inline const char* const kChannelLabels[] = {"BaseColor", "Normal", "Surface", "Height"};
 
 // ビューポートの表示モード。renderer::DebugView と並びを合わせること。
@@ -444,225 +411,6 @@ inline bool DrawTextureCombo(const char* id, compositor::TextureId& slot,
             ImGui::SetTooltip("なし\nテクスチャ一覧からドラッグしても割り当てられる");
         }
     }
-    return changed;
-}
-
-// 川筋（フロー累積）マスクの設定行。レイヤーのマスクとマスクノードの両方から使う。
-// **プロパティテーブルの中で呼ぶこと。**
-inline bool DrawFluvialRows(compositor::FluvialParams& fluvial) {
-    const compositor::FluvialParams defaults;
-    bool changed = false;
-
-    int curve = static_cast<int>(fluvial.curve);
-    if (ui::PropertyCombo("カーブ", &curve, kFluvialCurveLabels,
-                          IM_ARRAYSIZE(kFluvialCurveLabels),
-                          static_cast<int>(defaults.curve),
-                          "対数は細い支流まで見える連続的な川筋、"
-                          "しきい値は川とみなす所だけを抜く、線形は主流が強く出る")) {
-        fluvial.curve = static_cast<compositor::FluvialCurve>(curve);
-        changed = true;
-    }
-
-    const bool isThreshold = (fluvial.curve == compositor::FluvialCurve::Threshold);
-    changed |= ui::PropertyFloat(
-        "しきい値", &fluvial.threshold, 0.0f, 0.05f, defaults.threshold,
-        isThreshold ? "これより多く水が集まる所を川とみなす（全セル数に対する割合）"
-                    : "これ未満の流量を切り捨てる（全セル数に対する割合）",
-        "%.4f", 0, 0.0005f);
-    if (isThreshold) {
-        changed |= ui::PropertyFloat("やわらかさ", &fluvial.softness, 0.001f, 2.0f,
-                                     defaults.softness,
-                                     "しきい値の前後をどれだけなだらかに繋ぐか", "%.3f");
-        changed |= ui::PropertyFloat("川縁", &fluvial.edgePower, 0.1f, 8.0f,
-                                     defaults.edgePower,
-                                     "1 より大きいと川が細く、小さいと太くなる", "%.2f");
-    } else {
-        changed |= ui::PropertyFloat("ガンマ", &fluvial.gamma, 0.05f, 4.0f, defaults.gamma,
-                                     "下げると細い支流が明るくなり、上げると主流だけが残る",
-                                     "%.2f");
-    }
-
-    changed |= ui::PropertyFloat(
-        "最大ディテール", &fluvial.detailMeters, 1.0f, 512.0f, defaults.detailMeters,
-        "流向を読む前にならす大きさ（m）。大きいほど小さな凹凸を無視して大きな谷筋を追う",
-        "%.1f m", ImGuiSliderFlags_Logarithmic);
-    changed |= ui::PropertyFloat("集中度", &fluvial.concentration, 0.1f, 16.0f,
-                                 defaults.concentration,
-                                 "下流への配分の集中度。大きいほど主流へ集まり、"
-                                 "小さいほど面的に広がる",
-                                 "%.2f");
-
-    int resolutionIndex = 1;
-    for (int i = 0; i < IM_ARRAYSIZE(kFluvialResolutionValues); ++i) {
-        if (kFluvialResolutionValues[i] == fluvial.resolution) {
-            resolutionIndex = i;
-        }
-    }
-    if (ui::PropertyCombo("解像度", &resolutionIndex, kFluvialResolutionLabels,
-                          IM_ARRAYSIZE(kFluvialResolutionLabels), 1,
-                          "川筋を計算するグリッド。合成解像度とは別。"
-                          "上げるほど細かい支流が出るが、反復回数も比例して増える")) {
-        fluvial.resolution = kFluvialResolutionValues[resolutionIndex];
-        changed = true;
-    }
-    return changed;
-}
-
-// 曲率マスクの設定行。プロパティテーブルの中で呼ぶこと。
-inline bool DrawCurvatureRows(compositor::CurvatureParams& curvature) {
-    const compositor::CurvatureParams defaults;
-    bool changed = false;
-    int mode = static_cast<int>(curvature.mode);
-    if (ui::PropertyCombo("向き", &mode, kCurvatureModeLabels,
-                          IM_ARRAYSIZE(kCurvatureModeLabels), static_cast<int>(defaults.mode),
-                          "周りより高い所（尾根）、低い所（谷）、その両方のどれを拾うか")) {
-        curvature.mode = static_cast<compositor::CurvatureMode>(mode);
-        changed = true;
-    }
-    changed |= ui::PropertyFloat(
-        "最大ディテール", &curvature.detailMeters, 1.0f, 512.0f, defaults.detailMeters,
-        "比べる周りの広さ（m）。大きいほど小さな凹凸を無視して広い尾根や谷を拾う",
-        "%.1f m", ImGuiSliderFlags_Logarithmic);
-    changed |= ui::PropertyFloat(
-        "感度", &curvature.sensitivityMeters, 0.01f, 100.0f, defaults.sensitivityMeters,
-        "この高さの差で 1 になる。小さいほど弱い曲率まで明るくなる", "%.2f m",
-        ImGuiSliderFlags_Logarithmic);
-    changed |= ui::PropertyFloat("しきい値", &curvature.threshold, 0.0f, 0.99f,
-                                 defaults.threshold, "これ以下の弱い曲率を捨てる", "%.2f");
-    changed |= ui::PropertyFloat("ガンマ", &curvature.gamma, 0.05f, 4.0f, defaults.gamma,
-                                 "1 未満で弱い曲率を明るく、1 より大きいと強い所だけを残す",
-                                 "%.2f");
-    return changed;
-}
-
-// 標高マスクの設定行。**プロパティテーブルの中で呼ぶこと。**
-// Mask Path の行。形（幅 / フェザー / 強さ）はパスの点が持つので、ここは調整だけ。
-inline bool DrawPathMaskRows(compositor::PathMaskParams& params) {
-    const compositor::PathMaskParams defaults;
-    bool changed = false;
-    changed |= ui::PropertyFloat("ガンマ", &params.gamma, 0.05f, 8.0f, defaults.gamma,
-                                 "フェザーのカーブ。1 未満で外側まで明るく、1 より大きいと中心へ締まる",
-                                 "%.2f", ImGuiSliderFlags_Logarithmic);
-    changed |= ui::PropertyBool("反転", &params.invert, defaults.invert, "白黒を入れ替える");
-    return changed;
-}
-
-// Mask Area の行。閉じた鎖の内側を塗るので、縁の扱いだけを持つ。
-inline bool DrawAreaMaskRows(compositor::AreaMaskParams& params) {
-    const compositor::AreaMaskParams defaults;
-    bool changed = false;
-    changed |= ui::PropertyFloat("縁のぼかし", &params.featherMeters, 0.0f, 200.0f,
-                                 defaults.featherMeters,
-                                 "多角形の縁の外側を 0 へ落とす幅（m）。0 で二値", "%.1f m",
-                                 ImGuiSliderFlags_Logarithmic);
-    changed |= ui::PropertyFloat("縁のずれ", &params.offsetMeters, -200.0f, 200.0f,
-                                 defaults.offsetMeters,
-                                 "縁を外へ（正）/ 内へ（負）ずらす距離（m）。"
-                                 "線を引いた所より少し広く / 狭く取りたいときに",
-                                 "%.1f m");
-    changed |= ui::PropertyFloat("ガンマ", &params.gamma, 0.05f, 8.0f, defaults.gamma,
-                                 "ぼかしのカーブ。1 未満で外側まで明るく、1 より大きいと内側へ締まる",
-                                 "%.2f", ImGuiSliderFlags_Logarithmic);
-    changed |= ui::PropertyBool("反転", &params.invert, defaults.invert, "白黒を入れ替える");
-    return changed;
-}
-
-inline bool DrawHeightMaskRows(compositor::HeightParams& height) {
-    const compositor::HeightParams defaults;
-    bool changed = false;
-    changed |= ui::PropertyBool("全範囲", &height.useFullRange, defaults.useFullRange,
-                                "地形の一番低い所を 0、一番高い所を 1 にして、"
-                                "標高そのものをグラデーションにする。"
-                                "入れると下の 3 行は使わない");
-    if (!height.useFullRange) {
-        changed |= ui::PropertyFloat("最低標高", &height.minMeters, 0.0f, 8000.0f,
-                                     defaults.minMeters, "これより低い所を 0 にする",
-                                     "%.1f m");
-        changed |= ui::PropertyFloat("最高標高", &height.maxMeters, 0.0f, 8000.0f,
-                                     defaults.maxMeters, "これより高い所を 0 にする",
-                                     "%.1f m");
-        changed |= ui::PropertyFloat("フェザー", &height.featherMeters, 0.0f, 1000.0f,
-                                     defaults.featherMeters,
-                                     "標高帯の上下の境目をぼかす幅。0 で硬い帯になる",
-                                     "%.1f m", ImGuiSliderFlags_Logarithmic);
-    }
-    changed |= ui::PropertyFloat("ガンマ", &height.gamma, 0.05f, 4.0f, defaults.gamma,
-                                 "1 未満で境目の弱い所を明るく、"
-                                 "1 より大きいと帯の中心だけを残す",
-                                 "%.2f");
-    changed |= ui::PropertyBool("反転", &height.invert, defaults.invert,
-                                "指定した標高帯の外側のマスクを作るときに使う");
-    return changed;
-}
-
-// 傾斜マスクの設定行。**プロパティテーブルの中で呼ぶこと。**
-inline bool DrawSlopeRows(compositor::SlopeParams& slope) {
-    const compositor::SlopeParams defaults;
-    bool changed = false;
-    changed |= ui::PropertyFloat(
-        "最大ディテール", &slope.detailMeters, 0.0f, 512.0f, defaults.detailMeters,
-        "傾斜を測る距離（m）。大きいほど小さな凹凸を無視して大きな斜面を拾う",
-        "%.1f m", ImGuiSliderFlags_Logarithmic);
-    changed |= ui::PropertyFloat("最小角", &slope.minDegrees, 0.0f, 89.0f, defaults.minDegrees,
-                                 "これ以下の傾斜を 0 にする", "%.1f 度");
-    changed |= ui::PropertyFloat("最大角", &slope.maxDegrees, 1.0f, 90.0f, defaults.maxDegrees,
-                                 "これ以上の傾斜を 1 にする", "%.1f 度");
-    changed |= ui::PropertyFloat("ガンマ", &slope.gamma, 0.05f, 4.0f, defaults.gamma,
-                                 "1 未満で弱い斜面を明るく、1 より大きいと急斜面だけを残す",
-                                 "%.2f");
-    changed |= ui::PropertyBool("反転", &slope.invert, defaults.invert,
-                                "平地のマスクを作るときに使う");
-    return changed;
-}
-
-// レベル調整の設定行。**プロパティテーブルの中で呼ぶこと。**
-inline bool DrawLevelsRows(compositor::LevelsParams& levels) {
-    const compositor::LevelsParams defaults;
-    bool changed = false;
-    changed |= ui::PropertyFloat("黒点", &levels.blackPoint, 0.0f, 1.0f, defaults.blackPoint,
-                                 "これ以下を 0 にする。弱い成分を切り落とす", "%.3f");
-    changed |= ui::PropertyFloat("白点", &levels.whitePoint, 0.0f, 1.0f, defaults.whitePoint,
-                                 "これ以上を 1 にする。下げるほど早く飽和する", "%.3f");
-    changed |= ui::PropertyFloat("ガンマ", &levels.gamma, 0.05f, 4.0f, defaults.gamma,
-                                 "1 未満で暗部を持ち上げ、1 より大きいと強い部分だけを残す",
-                                 "%.2f");
-    changed |= ui::PropertyBool("反転", &levels.invert, defaults.invert, nullptr);
-    return changed;
-}
-
-// マスクのぼかしの設定行。**プロパティテーブルの中で呼ぶこと。**
-// つまみはハイトのぼかし（Heightmap Blur）と同じ形に揃えてある。
-inline bool DrawMaskBlurRows(compositor::MaskBlurParams& blur) {
-    const compositor::MaskBlurParams defaults;
-    bool changed = false;
-    // 半径は実寸（m）。合成解像度を変えても効きが変わらない。
-    changed |= ui::PropertyFloat("半径", &blur.radiusMeters, 0.0f, 512.0f, defaults.radiusMeters,
-                                 "ぼかす範囲（m）。大きいほど境界がなだらかになる", "%.2f m",
-                                 ImGuiSliderFlags_Logarithmic);
-    changed |= ui::PropertyFloat("強さ", &blur.strength, 0.0f, 1.0f, defaults.strength,
-                                 "元のマスクとぼかしたマスクを混ぜる量。1 で完全なぼかし",
-                                 "%.2f");
-    changed |= ui::PropertyInt("反復", &blur.iterations, 1, 16, defaults.iterations,
-                               "ぼかしを重ねる回数。多いほど広く均される"
-                               "（実効半径はおよそ 半径 x sqrt(反復)）");
-    return changed;
-}
-
-// マスクの合成の設定行。**プロパティテーブルの中で呼ぶこと。**
-inline bool DrawBlendRows(compositor::BlendParams& blend) {
-    const compositor::BlendParams defaults;
-    bool changed = false;
-    int mode = static_cast<int>(blend.mode);
-    if (ui::PropertyCombo("種類", &mode, kMaskBlendModeLabels,
-                          IM_ARRAYSIZE(kMaskBlendModeLabels), static_cast<int>(defaults.mode),
-                          "乗算は絞り込み（両方が立つ所だけ）、加算は合算、"
-                          "小さいほう / 大きいほうは飽和させずに寄せる。"
-                          "減算は前景から背景を引く（背景が立つ所を除く。0 で切る）")) {
-        blend.mode = static_cast<compositor::MaskBlendMode>(mode);
-        changed = true;
-    }
-    changed |= ui::PropertyFloat("強さ", &blend.intensity, 0.0f, 1.0f, defaults.intensity,
-                                 "前景そのままと合成結果の間の補間。0 で前景のまま", "%.2f");
     return changed;
 }
 

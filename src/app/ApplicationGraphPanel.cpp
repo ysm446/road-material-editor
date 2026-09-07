@@ -34,44 +34,6 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
     switch (kind) {
         case graph::NodeKind::Surface:
             return ImVec4(0.55f, 0.66f, 0.58f, 1.0f);
-        case graph::NodeKind::Heightmap:
-            return ImVec4(0.72f, 0.66f, 0.50f, 1.0f);
-        case graph::NodeKind::Shape:
-            return ImVec4(0.66f, 0.62f, 0.52f, 1.0f);
-        case graph::NodeKind::Liquid:
-            return ImVec4(0.50f, 0.62f, 0.70f, 1.0f);
-        case graph::NodeKind::Blur:
-            return ImVec4(0.62f, 0.58f, 0.68f, 1.0f);
-        case graph::NodeKind::Sediment:
-            return ImVec4(0.70f, 0.62f, 0.52f, 1.0f);
-        case graph::NodeKind::Crumbling:
-            return ImVec4(0.74f, 0.58f, 0.50f, 1.0f);
-        case graph::NodeKind::Snow:
-            return ImVec4(0.72f, 0.76f, 0.82f, 1.0f);
-        case graph::NodeKind::River:
-            return ImVec4(0.48f, 0.64f, 0.72f, 1.0f);
-        case graph::NodeKind::Droplet:
-            return ImVec4(0.56f, 0.66f, 0.62f, 1.0f);
-        case graph::NodeKind::Scatter:
-            return ImVec4(0.60f, 0.70f, 0.52f, 1.0f);
-        case graph::NodeKind::MaskImage:
-            return ImVec4(0.72f, 0.72f, 0.72f, 1.0f);
-        case graph::NodeKind::MaskNoise:
-            return ImVec4(0.68f, 0.72f, 0.62f, 1.0f);
-        case graph::NodeKind::MaskFluvial:
-            return ImVec4(0.55f, 0.68f, 0.74f, 1.0f);
-        case graph::NodeKind::MaskHeight:
-            return ImVec4(0.74f, 0.70f, 0.60f, 1.0f);
-        case graph::NodeKind::MaskSlope:
-            return ImVec4(0.60f, 0.70f, 0.66f, 1.0f);
-        case graph::NodeKind::MaskCurvature:
-            return ImVec4(0.66f, 0.68f, 0.74f, 1.0f);
-        case graph::NodeKind::MaskLevels:
-            return ImVec4(0.78f, 0.76f, 0.70f, 1.0f);
-        case graph::NodeKind::MaskBlur:
-            return ImVec4(0.76f, 0.72f, 0.64f, 1.0f);
-        case graph::NodeKind::MaskBlend:
-            return ImVec4(0.74f, 0.70f, 0.78f, 1.0f);
         case graph::NodeKind::Path:
             return ImVec4(0.52f, 0.74f, 0.84f, 1.0f);
         case graph::NodeKind::RoadMarking:
@@ -86,10 +48,6 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.62f, 0.70f, 0.66f, 1.0f);
         case graph::NodeKind::Crack:
             return ImVec4(0.66f, 0.58f, 0.62f, 1.0f);
-        case graph::NodeKind::MaskPath:
-        case graph::NodeKind::MaskArea:
-            return ImVec4(0.58f, 0.74f, 0.82f, 1.0f);
-        case graph::NodeKind::Output:
         default:
             return ImVec4(0.59f, 0.64f, 0.68f, 1.0f);
     }
@@ -363,30 +321,14 @@ void Application::SyncGraphStack() {
         m_previewGraphNode = 0;
         m_previewGraphPin = 0;
     }
-    // 地形の実寸はチェーンの根にある Heightmap ノードが持つ。
-    // **読み込むときに一度決めたら、以後はプレビュー側で触らない。**
-    if (const graph::TerrainScale* scale = m_graph.FindChainScale(target)) {
-        m_renderer.PlaneSize() = scale->sizeMeters;
-        m_renderer.DisplacementScale() = scale->heightMeters;
-    }
     // 合成の法線は実寸の勾配から作るので、評価器にも同じ実寸を渡す。
-    // ノードが実寸を持たないときはプレビュー設定がジオメトリを決めるので、
-    // そちらに合わせる（押し出した形と陰影の起伏を一致させる）。
+    // プレビュー設定がジオメトリを決めるので、そちらに合わせる
+    // （押し出した形と陰影の起伏を一致させる）。
     // レイヤー列が変わらなくても実寸だけ動くことがあるため、早期 return より前に置く。
     m_graphStack.SetTerrainScale(m_renderer.PlaneSize(), m_renderer.DisplacementScale());
 
-    // 描画側は「いまマスクを見ているか」を知らないと斜線を引けない。毎フレーム写す。
+    // マスクを出すノードは無くなったので、マスクのプレビューは常にオフ。
     m_renderer.MaskPreviewActive() = false;
-    if (const graph::Node* node = m_graph.FindNode(target); node != nullptr) {
-        for (const graph::Pin& pin : node->outputs) {
-            const bool isPreviewed =
-                (pin.id == m_previewGraphPin) ||
-                (m_previewGraphPin == 0 && pin.id == node->outputs.front().id);
-            if (isPreviewed && pin.valueType == graph::ValueType::Mask) {
-                m_renderer.MaskPreviewActive() = true;
-            }
-        }
-    }
 
     if (m_compiledGraphRevision == m_graph.Revision() && m_compiledGraphTarget == target &&
         m_compiledGraphTargetPin == m_previewGraphPin) {
@@ -402,11 +344,10 @@ void Application::SyncGraphStack() {
     m_graphStack.MaskOps() = std::move(compiled.maskOps);
     m_graphStack.MarkDirty();
 
-    // op の出どころを版ごとに控える。評価が追いつくまでの数版ぶんあれば足りる。
+    // レイヤーの出どころを版ごとに控える。評価が追いつくまでの数版ぶんあれば足りる。
     constexpr size_t kKeepRevisions = 4;
     GraphMaskOpSources sources;
     sources.revision = m_graphStack.Revision();
-    sources.ops = std::move(compiled.maskOpSources);
     sources.layers = std::move(compiled.layerSources);
     m_graphMaskOpSources.push_back(std::move(sources));
     while (m_graphMaskOpSources.size() > kKeepRevisions) {
@@ -433,31 +374,12 @@ D3D12_GPU_DESCRIPTOR_HANDLE Application::GraphLayerThumbnail(graph::GraphId node
     return D3D12_GPU_DESCRIPTOR_HANDLE{0};
 }
 
-D3D12_GPU_DESCRIPTOR_HANDLE Application::GraphMaskThumbnail(graph::GraphId nodeId,
-                                                            size_t outputIndex) const {
-    const compositor::MaterialEvaluator& evaluator = m_renderer.Evaluator();
-    const uint64_t revision = evaluator.EvaluatedRevision();
-    for (const GraphMaskOpSources& sources : m_graphMaskOpSources) {
-        if (sources.revision != revision) {
-            continue;
-        }
-        for (size_t i = 0; i < sources.ops.size(); ++i) {
-            if (sources.ops[i].nodeId == nodeId && sources.ops[i].outputIndex == outputIndex) {
-                return evaluator.MaskOpThumbnailHandle(i);
-            }
-        }
-        break;
-    }
-    return D3D12_GPU_DESCRIPTOR_HANDLE{0};
-}
-
-// 選択中のノードを控える。**出力ノードは対象外**（1 つだけ繋ぐ前提のノードで、
-// 増やしても迷うだけなので）。
+// 選択中のノードを控える。
 void Application::CopySelectedGraphNodes() {
     std::vector<const graph::Node*> nodes;
     for (const graph::GraphId id : m_selectedGraphNodes) {
         const graph::Node* node = m_graph.FindNode(id);
-        if (node != nullptr && node->kind != graph::NodeKind::Output) {
+        if (node != nullptr) {
             nodes.push_back(node);
         }
     }
@@ -620,8 +542,7 @@ void Application::DrawGraphNode(const graph::Node& node) {
     const ImVec4 accent = NodeAccentColor(node.kind);
     // **プレビュー中のノードは枠を明るくする。** 選択（プロパティ）と
     // プレビューは別なので、どれが画面に出ているのかが分かるようにする。
-    const bool isPreview = (node.id == m_previewGraphNode) ||
-                           (m_previewGraphNode == 0 && node.kind == graph::NodeKind::Output);
+    const bool isPreview = (node.id == m_previewGraphNode);
     const ImVec4 nodeBorderColor = isPreview ? ImVec4(0.72f, 0.76f, 0.62f, 1.0f)
                                              : ImVec4(0.22f, 0.22f, 0.22f, 1.0f);
     const ImVec4 activeNodeBorderColor(0.59f, 0.64f, 0.68f, 1.0f);
@@ -665,18 +586,11 @@ void Application::DrawGraphNode(const graph::Node& node) {
     }
 
     // サムネイル。**繋ぎ替えずに中身が分かる**ようにするためのもの。
-    //   - レイヤーのノード（Heightmap / Surface / Shape / 加工…）: そのレイヤーまで
-    //     合成した結果（アルベドに Height の勾配で陰影を付けたもの）。
-    //     Mask 出力を持つ加工ノードは、隣に最初の Mask（白黒）も出す。
-    //   - マスクのノード: 焼いたマスク（白黒）。
+    //   - Surface: そのレイヤーまで合成した結果（アルベドに Height の勾配で陰影を付けたもの）。
     //   - プレビューしていない枝は評価されないので、枠だけの空き（未評価）になる。
     {
         const float thumbnailSize = ui::Scaled(ui::kNodeThumbnail);
-        if (graph::IsMaskNodeKind(node.kind)) {
-            ImGui::Dummy(ImVec2(kNodeWidth, 2.0f));
-            const D3D12_GPU_DESCRIPTOR_HANDLE handle = GraphMaskThumbnail(node.id, 0);
-            ui::ThumbnailImage(static_cast<ImTextureID>(handle.ptr), thumbnailSize);
-        } else if (layerSettings != nullptr) {
+        if (layerSettings != nullptr) {
             ImGui::Dummy(ImVec2(kNodeWidth, 2.0f));
             D3D12_GPU_DESCRIPTOR_HANDLE result = GraphLayerThumbnail(node.id);
             // 合成結果が無いとき（メッシュシーン表示中や未評価の枝）は、割り当てた材質のサムネイルを出す。
@@ -709,11 +623,6 @@ void Application::DrawGraphNode(const graph::Node& node) {
                     }
                 }
                 ImGui::EndDragDropTarget();
-            }
-            if (graph::IsLayerMaskSourceKind(node.kind)) {
-                ImGui::SameLine();
-                const D3D12_GPU_DESCRIPTOR_HANDLE mask = GraphMaskThumbnail(node.id, 0);
-                ui::ThumbnailImage(static_cast<ImTextureID>(mask.ptr), thumbnailSize);
             }
         }
     }
@@ -947,9 +856,7 @@ void Application::DrawGraphEditor() {
             }
             if (auto* settings = std::get_if<graph::LayerNodeSettings>(&node->settings)) {
                 // 追加時の初期値は旧レイヤーパネルと同じ既定値を使う。
-                settings->layer = (kind == graph::NodeKind::Heightmap)
-                                      ? kDefaultHeightmapLayer
-                                      : DefaultLayerFor(graph::LayerKindFor(kind));
+                settings->layer = DefaultLayerFor(graph::LayerKindFor(kind));
                 settings->layer.name +=
                     " " + std::to_string(m_graph.Nodes().size());
             }
@@ -1074,9 +981,9 @@ void Application::DrawGraphPanel() {
     }
     if (const graph::Node* selected = m_graph.FindNode(m_selectedGraphNode);
         selected != nullptr && graph::IsLayerNodeKind(selected->kind)) {
-        ui::HintText("選択したノードまでを表示中（選択を外すと出力まで）");
+        ui::HintText("選択したノードまでを表示中（選択を外すと既定の下地）");
     } else {
-        ui::HintText("出力ノードへ繋いだチェーンがプレビューになる");
+        ui::HintText("Surface の出力ピンを選ぶと、その鎖がプレビューになる");
     }
 
     float editorHeight = ui::Scaled(m_graphEditorHeight);
@@ -1133,8 +1040,7 @@ void Application::DrawGraphPanel() {
             }
         }
         ui::HintText("出力ピンをクリック（またはノードをダブルクリック）で、"
-                     "ビューポートに出す出力を切り替える。"
-                     "Mask の出力を選ぶと、そのマスクが白黒で貼られる");
+                     "ビューポートに出す出力を切り替える");
         ImGui::Spacing();
     }
 
@@ -1472,12 +1378,10 @@ void Application::DrawGraphPanel() {
             ui::EndPropertyTable();
         }
         // 「下地」入力が繋がっていないノードは一番下のレイヤー扱い。
-        // ソース（ハイトマップ）はそもそも入力を持たないので常にこちら。
         const bool isBase =
             selected->inputs.empty() ||
             m_graph.FindUpstreamNodeForPin(selected->inputs.front().id) == nullptr;
-        const bool isSource = graph::IsSourceNodeKind(selected->kind);
-        // Mask 入力にノードが繋がっていれば、マスクの出どころはそちら。
+        // Mask 入力にノードが繋がっていれば、マスクの出どころはそちら（旧ファイルの名残）。
         bool maskFromNode = false;
         for (const graph::Pin& pin : selected->inputs) {
             if (pin.valueType == graph::ValueType::Mask &&
@@ -1485,152 +1389,7 @@ void Application::DrawGraphPanel() {
                 maskFromNode = true;
             }
         }
-        changed |= DrawLayerSettings(settings->layer, isBase, isSource, maskFromNode,
-                                     m_graph.MaskSourceResolves(*selected));
-
-        // 地形の実寸。**ソースだけが持ち、読み込むときに一度だけ決める。**
-        // プレビュー設定ではなくここに置くのは、実寸が見え方の設定ではなく
-        // 読み込んだデータそのものの性質だから。
-        if (isSource) {
-            ui::SectionHeader("スケール");
-            if (ui::BeginPropertyTable("graphNodeScaleRows")) {
-                const graph::TerrainScale defaults;
-                changed |= ui::PropertyFloat(
-                    "サイズ", &settings->scale.sizeMeters, 0.5f, 8192.0f, defaults.sizeMeters,
-                    "地形の一辺の長さ（m）。カメラと影の範囲もこれに追従する", "%.1f m",
-                    ImGuiSliderFlags_Logarithmic);
-                changed |= ui::PropertyFloat(
-                    "標高差", &settings->scale.heightMeters, 0.0f,
-                    std::max(1.0f, settings->scale.sizeMeters * 0.5f), defaults.heightMeters,
-                    "ハイト 0〜1 の全幅が何 m になるか（最低地点から最高地点までの差）",
-                    "%.1f m", ImGuiSliderFlags_Logarithmic);
-                ui::EndPropertyTable();
-            }
-            ui::HintText("読み込んだ地形の実寸。プレビュー設定の平面のサイズと変位量はこれに従う");
-        }
-        if (changed) {
-            m_graph.MarkDirty();
-            MarkDocumentChanged();
-        }
-    } else if (auto* mask = std::get_if<graph::MaskNodeSettings>(&selected->settings)) {
-        bool changed = false;
-        const char* header = "マスク画像";
-        const char* hint =
-            "レイヤーの Mask 入力へ繋ぐと、白い所にだけそのレイヤーが乗る。"
-            "効き方（係数 / カーブ / レベル）はレイヤー側で決める";
-        switch (selected->kind) {
-            case graph::NodeKind::MaskNoise:
-                header = "ノイズ";
-                hint = "下地に依らないノイズをマスクにする。"
-                       "周波数は整数へ丸めて使うので、出力は必ずタイルする";
-                break;
-            case graph::NodeKind::MaskFluvial:
-                header = "川筋";
-                hint = "下地の高さから水の集まる所（川筋）を作る。"
-                       "Base にどこまでのハイトを使うかを繋ぐ";
-                break;
-            case graph::NodeKind::MaskHeight:
-                header = "標高";
-                hint = "下地の標高帯（m）をマスクにする。"
-                       "0 m は地形の一番低い所で、標高差 m が一番高い所。"
-                       "Base にどこまでのハイトを使うかを繋ぐ";
-                break;
-            case graph::NodeKind::MaskSlope:
-                header = "傾斜";
-                hint = "下地の傾斜（角度）をマスクにする。"
-                       "Base にどこまでのハイトを使うかを繋ぐ";
-                break;
-            case graph::NodeKind::MaskCurvature:
-                header = "曲率";
-                hint = "下地の凹凸をマスクにする。周りの平均と比べて、"
-                       "高い所（尾根）か低い所（谷）を拾う。"
-                       "Base にどこまでのハイトを使うかを繋ぐ";
-                break;
-            case graph::NodeKind::MaskLevels:
-                header = "レベル";
-                hint = "入力のマスクの黒点 / 白点 / ガンマを整える";
-                break;
-            case graph::NodeKind::MaskBlur:
-                header = "ぼかし";
-                hint = "入力のマスクをぼかす。境界のギザギザや、"
-                       "しきい値で二値になったマスクを馴染ませるのに使う";
-                break;
-            case graph::NodeKind::MaskBlend:
-                header = "合成";
-                hint = "マスク 2 枚を合成する。片方だけ繋いだときはそれを通す";
-                break;
-            case graph::NodeKind::MaskPath:
-                header = "パスの足跡";
-                hint = "Path 入力の線を、点ごとの幅とフェザーでマスクにする。"
-                       "形はパスの点が持ち、ここでは調整だけ";
-                break;
-            case graph::NodeKind::MaskArea:
-                header = "パスの面";
-                hint = "Path 入力の閉じた鎖を多角形とみなし、内側を 1 にする。"
-                       "輪の中に輪を描けば穴になる。開いた鎖と点ごとの幅は読まない";
-                break;
-            default:
-                break;
-        }
-        ui::SectionHeader(header);
-        if (ui::BeginPropertyTable("graphMaskRows")) {
-            switch (selected->kind) {
-                case graph::NodeKind::MaskNoise:
-                    changed |= DrawNoiseRows(mask->noise, graph::MaskNodeSettings().noise);
-                    break;
-                case graph::NodeKind::MaskFluvial:
-                    changed |= DrawFluvialRows(mask->fluvial);
-                    break;
-                case graph::NodeKind::MaskHeight:
-                    changed |= DrawHeightMaskRows(mask->height);
-                    break;
-                case graph::NodeKind::MaskSlope:
-                    changed |= DrawSlopeRows(mask->slope);
-                    break;
-                case graph::NodeKind::MaskCurvature:
-                    changed |= DrawCurvatureRows(mask->curvature);
-                    break;
-                case graph::NodeKind::MaskLevels:
-                    changed |= DrawLevelsRows(mask->levels);
-                    break;
-                case graph::NodeKind::MaskBlur:
-                    changed |= DrawMaskBlurRows(mask->blur);
-                    break;
-                case graph::NodeKind::MaskBlend:
-                    changed |= DrawBlendRows(mask->blend);
-                    break;
-                case graph::NodeKind::MaskPath:
-                    changed |= DrawPathMaskRows(mask->pathMask);
-                    break;
-                case graph::NodeKind::MaskArea:
-                    changed |= DrawAreaMaskRows(mask->areaMask);
-                    break;
-                default:
-                    changed |= DrawMapSlotRow("画像", mask->map, m_textureLibrary);
-                    break;
-            }
-            ui::EndPropertyTable();
-        }
-        ui::HintText("%s", hint);
-        // Mask Area は閉じた鎖しか読まない。無いと黙って空のマスクになるので注意書きを出す。
-        if (selected->kind == graph::NodeKind::MaskArea) {
-            const graph::Node* pathNode = m_graph.FindUpstreamNodeForPin(selected->inputs.front().id);
-            const auto* pathSettings =
-                (pathNode != nullptr) ? std::get_if<graph::PathNodeSettings>(&pathNode->settings)
-                                      : nullptr;
-            bool hasClosed = false;
-            if (pathSettings != nullptr) {
-                for (const graph::PathStrand& strand : graph::BuildPathStrands(pathSettings->path)) {
-                    hasClosed |= strand.closed;
-                }
-            }
-            if (pathSettings == nullptr) {
-                ui::HintText("Path 入力が繋がっていないので、マスクは空になる");
-            } else if (!hasClosed) {
-                ui::HintText("閉じた鎖が無いので、マスクは空になる。端の点を始点へ重ねるか、"
-                             "鎖を右クリック → 閉じる");
-            }
-        }
+        changed |= DrawLayerSettings(settings->layer, isBase, maskFromNode);
         if (changed) {
             m_graph.MarkDirty();
             MarkDocumentChanged();
@@ -1641,7 +1400,7 @@ void Application::DrawGraphPanel() {
             MarkDocumentChanged();
         }
     } else {
-        ui::HintText("出力ノード。「マテリアル」へ繋いだチェーンがプレビューになる");
+        ui::HintText("このノードに設定は無い");
     }
     ImGui::EndChild();
 
@@ -1649,3 +1408,4 @@ void Application::DrawGraphPanel() {
 }
 
 }  // namespace tg
+

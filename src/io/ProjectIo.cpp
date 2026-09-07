@@ -156,10 +156,6 @@ const char* const kNoiseTypeNames[] = {"fbm",    "ridged", "worley",
 const char* const kMaskSourceNames[] = {"constant", "noise",     "texture", "height",
                                         "slope",    "curvature", "cavity",  "paint",
                                         "node"};
-const char* const kFluvialCurveNames[] = {"log", "threshold", "linear"};
-// 曲率マスクの向き。compositor::CurvatureMode の並びと一致させること。
-const char* const kCurvatureModeNames[] = {"ridges", "valleys", "absolute"};
-const char* const kMaskBlendModeNames[] = {"add", "multiply", "min", "max", "subtract"};
 const char* const kChannelNames[] = {"baseColor", "normal", "surface", "height"};
 const char* const kLayerKindNames[] = {"surface",   "shape", "liquid", "blur",    "sediment",
                                        "crumbling", "snow",  "river",  "droplet", "scatter"};
@@ -352,223 +348,6 @@ uint32_t ReadChannelMask(const json& node, const char* key, uint32_t fallback) {
         }
     }
     return mask;
-}
-
-json WriteFluvial(const compositor::FluvialParams& fluvial) {
-    json node;
-    node["curve"] = EnumName(kFluvialCurveNames, static_cast<uint32_t>(fluvial.curve));
-    node["threshold"] = fluvial.threshold;
-    node["gamma"] = fluvial.gamma;
-    node["softness"] = fluvial.softness;
-    node["edgePower"] = fluvial.edgePower;
-    node["detail"] = fluvial.detailMeters;
-    node["concentration"] = fluvial.concentration;
-    node["resolution"] = fluvial.resolution;
-    return node;
-}
-
-compositor::FluvialParams ReadFluvial(const json& parent, const char* key) {
-    const compositor::FluvialParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::FluvialParams fluvial;
-    fluvial.curve = static_cast<compositor::FluvialCurve>(
-        EnumValue(kFluvialCurveNames, *node, "curve", static_cast<uint32_t>(defaults.curve)));
-    fluvial.threshold = ReadFloat(*node, "threshold", defaults.threshold);
-    fluvial.gamma = ReadFloat(*node, "gamma", defaults.gamma);
-    fluvial.softness = ReadFloat(*node, "softness", defaults.softness);
-    fluvial.edgePower = ReadFloat(*node, "edgePower", defaults.edgePower);
-    fluvial.detailMeters = ReadFloat(*node, "detail", defaults.detailMeters);
-    fluvial.concentration = ReadFloat(*node, "concentration", defaults.concentration);
-    fluvial.resolution =
-        static_cast<uint32_t>(ReadInt(*node, "resolution", static_cast<int>(defaults.resolution)));
-    return fluvial;
-}
-
-json WriteHeightMask(const compositor::HeightParams& height) {
-    json node;
-    node["fullRange"] = height.useFullRange;
-    node["min"] = height.minMeters;
-    node["max"] = height.maxMeters;
-    node["feather"] = height.featherMeters;
-    node["gamma"] = height.gamma;
-    node["invert"] = height.invert;
-    return node;
-}
-
-compositor::HeightParams ReadHeightMask(const json& parent, const char* key) {
-    const compositor::HeightParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::HeightParams height;
-    height.useFullRange = ReadBool(*node, "fullRange", defaults.useFullRange);
-    height.minMeters = ReadFloat(*node, "min", defaults.minMeters);
-    height.maxMeters = ReadFloat(*node, "max", defaults.maxMeters);
-    height.featherMeters = ReadFloat(*node, "feather", defaults.featherMeters);
-    height.gamma = ReadFloat(*node, "gamma", defaults.gamma);
-    height.invert = ReadBool(*node, "invert", defaults.invert);
-    return height;
-}
-
-json WriteSlope(const compositor::SlopeParams& slope) {
-    json node;
-    node["detail"] = slope.detailMeters;
-    node["min"] = slope.minDegrees;
-    node["max"] = slope.maxDegrees;
-    node["gamma"] = slope.gamma;
-    node["invert"] = slope.invert;
-    return node;
-}
-
-json WriteCurvature(const compositor::CurvatureParams& curvature) {
-    json node;
-    node["mode"] = EnumName(kCurvatureModeNames, static_cast<uint32_t>(curvature.mode));
-    node["detail"] = curvature.detailMeters;
-    node["sensitivity"] = curvature.sensitivityMeters;
-    node["threshold"] = curvature.threshold;
-    node["gamma"] = curvature.gamma;
-    return node;
-}
-
-compositor::CurvatureParams ReadCurvature(const json& parent, const char* key) {
-    const compositor::CurvatureParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::CurvatureParams curvature;
-    curvature.mode = static_cast<compositor::CurvatureMode>(
-        EnumValue(kCurvatureModeNames, *node, "mode", static_cast<uint32_t>(defaults.mode)));
-    curvature.detailMeters = ReadFloat(*node, "detail", defaults.detailMeters);
-    curvature.sensitivityMeters = ReadFloat(*node, "sensitivity", defaults.sensitivityMeters);
-    curvature.threshold = ReadFloat(*node, "threshold", defaults.threshold);
-    curvature.gamma = ReadFloat(*node, "gamma", defaults.gamma);
-    return curvature;
-}
-
-compositor::SlopeParams ReadSlope(const json& parent, const char* key) {
-    const compositor::SlopeParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::SlopeParams slope;
-    slope.detailMeters = ReadFloat(*node, "detail", defaults.detailMeters);
-    slope.minDegrees = ReadFloat(*node, "min", defaults.minDegrees);
-    slope.maxDegrees = ReadFloat(*node, "max", defaults.maxDegrees);
-    slope.gamma = ReadFloat(*node, "gamma", defaults.gamma);
-    slope.invert = ReadBool(*node, "invert", defaults.invert);
-    return slope;
-}
-
-json WriteLevels(const compositor::LevelsParams& levels) {
-    json node;
-    node["black"] = levels.blackPoint;
-    node["white"] = levels.whitePoint;
-    node["gamma"] = levels.gamma;
-    node["invert"] = levels.invert;
-    return node;
-}
-
-compositor::LevelsParams ReadLevels(const json& parent, const char* key) {
-    const compositor::LevelsParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::LevelsParams levels;
-    levels.blackPoint = ReadFloat(*node, "black", defaults.blackPoint);
-    levels.whitePoint = ReadFloat(*node, "white", defaults.whitePoint);
-    levels.gamma = ReadFloat(*node, "gamma", defaults.gamma);
-    levels.invert = ReadBool(*node, "invert", defaults.invert);
-    return levels;
-}
-
-json WriteMaskBlur(const compositor::MaskBlurParams& blur) {
-    json node = json::object();
-    node["radius"] = blur.radiusMeters;
-    node["strength"] = blur.strength;
-    node["iterations"] = blur.iterations;
-    return node;
-}
-
-compositor::MaskBlurParams ReadMaskBlur(const json& parent, const char* key) {
-    const compositor::MaskBlurParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::MaskBlurParams blur;
-    blur.radiusMeters = ReadFloat(*node, "radius", defaults.radiusMeters);
-    blur.strength = ReadFloat(*node, "strength", defaults.strength);
-    blur.iterations = ReadInt(*node, "iterations", defaults.iterations);
-    return blur;
-}
-
-json WriteBlend(const compositor::BlendParams& blend) {
-    json node;
-    node["mode"] = EnumName(kMaskBlendModeNames, static_cast<uint32_t>(blend.mode));
-    node["intensity"] = blend.intensity;
-    return node;
-}
-
-compositor::BlendParams ReadBlend(const json& parent, const char* key) {
-    const compositor::BlendParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::BlendParams blend;
-    blend.mode = static_cast<compositor::MaskBlendMode>(
-        EnumValue(kMaskBlendModeNames, *node, "mode", static_cast<uint32_t>(defaults.mode)));
-    blend.intensity = ReadFloat(*node, "intensity", defaults.intensity);
-    return blend;
-}
-
-json WritePathMask(const compositor::PathMaskParams& params) {
-    json node;
-    node["gamma"] = params.gamma;
-    node["invert"] = params.invert;
-    return node;
-}
-
-compositor::PathMaskParams ReadPathMask(const json& parent, const char* key) {
-    const compositor::PathMaskParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::PathMaskParams params;
-    params.gamma = ReadFloat(*node, "gamma", defaults.gamma);
-    params.invert = ReadBool(*node, "invert", defaults.invert);
-    return params;
-}
-
-json WriteAreaMask(const compositor::AreaMaskParams& params) {
-    json node;
-    node["feather"] = params.featherMeters;
-    node["offset"] = params.offsetMeters;
-    node["gamma"] = params.gamma;
-    node["invert"] = params.invert;
-    return node;
-}
-
-compositor::AreaMaskParams ReadAreaMask(const json& parent, const char* key) {
-    const compositor::AreaMaskParams defaults;
-    const json* node = FindMember(parent, key);
-    if (node == nullptr || !node->is_object()) {
-        return defaults;
-    }
-    compositor::AreaMaskParams params;
-    params.featherMeters = ReadFloat(*node, "feather", defaults.featherMeters);
-    params.offsetMeters = ReadFloat(*node, "offset", defaults.offsetMeters);
-    params.gamma = ReadFloat(*node, "gamma", defaults.gamma);
-    params.invert = ReadBool(*node, "invert", defaults.invert);
-    return params;
 }
 
 // パス。実寸座標はposition:[X,Y,Z]。旧地形PathだけはUVと相対高さを維持する。
@@ -1198,27 +977,6 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
         item["outputs"] = std::move(outputs);
         if (const auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings)) {
             item["layer"] = WriteLayer(settings->layer, writeTexture, writeMaterial, writePaint);
-            // 地形の実寸（m）。ソース（Heightmap）だけが持つ。
-            if (graph::IsSourceNodeKind(node.kind)) {
-                json scale;
-                scale["size"] = settings->scale.sizeMeters;
-                scale["height"] = settings->scale.heightMeters;
-                item["scale"] = std::move(scale);
-            }
-        } else if (const auto* mask = std::get_if<graph::MaskNodeSettings>(&node.settings)) {
-            // マスクのノードは種類ごとに使う設定が違うが、**全部書く**。
-            // 種類を変えて戻したときに値が消えていると驚くため。
-            item["map"] = WriteMapSlot(mask->map, writeTexture);
-            item["noise"] = WriteNoise(mask->noise);
-            item["fluvial"] = WriteFluvial(mask->fluvial);
-            item["height"] = WriteHeightMask(mask->height);
-            item["slope"] = WriteSlope(mask->slope);
-            item["curvature"] = WriteCurvature(mask->curvature);
-            item["levels"] = WriteLevels(mask->levels);
-            item["blur"] = WriteMaskBlur(mask->blur);
-            item["blend"] = WriteBlend(mask->blend);
-            item["maskPath"] = WritePathMask(mask->pathMask);
-            item["maskArea"] = WriteAreaMask(mask->areaMask);
         } else if (const auto* road = std::get_if<graph::RoadNodeSettings>(&node.settings)) {
             item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters},
                             {"lanesForward", road->lanesForward}, {"lanesBackward", road->lanesBackward},
@@ -1329,8 +1087,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
 // 呼び出し側が旧 layers からの移行に切り替える。
 bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReader& readTexture,
                const std::function<compositor::MaterialAssetId(const json&)>& readMaterial,
-               const std::function<compositor::PaintMaskId(const json&)>& readPaint,
-               const graph::TerrainScale& scaleFallback) {
+               const std::function<compositor::PaintMaskId(const json&)>& readPaint) {
     std::vector<graph::Node> nodes;
     std::vector<graph::Link> links;
     graph::GraphId maxId = 0;
@@ -1425,33 +1182,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     layer != nullptr && layer->is_object()) {
                     settings.layer = ReadLayer(*layer, readTexture, readMaterial, readPaint);
                 }
-                // scale を持たないのは、実寸をノードへ移す前に保存されたファイル。
-                // **プレビュー設定の値を引き継ぐ**（既定値を入れると地形の
-                // 大きさが勝手に変わってしまう）。
-                settings.scale = scaleFallback;
-                if (const json* scale = FindMember(item, "scale");
-                    scale != nullptr && scale->is_object()) {
-                    settings.scale.sizeMeters =
-                        ReadFloat(*scale, "size", scaleFallback.sizeMeters);
-                    settings.scale.heightMeters =
-                        ReadFloat(*scale, "height", scaleFallback.heightMeters);
-                }
                 // 種類とレイヤー種別は常に一致させる（ファイルの食い違いは種類を信じる）。
                 settings.layer.kind = graph::LayerKindFor(created.kind);
-                created.settings = std::move(settings);
-            } else if (graph::IsMaskNodeKind(created.kind)) {
-                graph::MaskNodeSettings settings;
-                settings.map = ReadMapSlot(item, "map", readTexture);
-                settings.noise = ReadNoise(item, "noise", graph::MaskNodeSettings().noise);
-                settings.fluvial = ReadFluvial(item, "fluvial");
-                settings.height = ReadHeightMask(item, "height");
-                settings.slope = ReadSlope(item, "slope");
-                settings.curvature = ReadCurvature(item, "curvature");
-                settings.levels = ReadLevels(item, "levels");
-                settings.blur = ReadMaskBlur(item, "blur");
-                settings.blend = ReadBlend(item, "blend");
-                settings.pathMask = ReadPathMask(item, "maskPath");
-                settings.areaMask = ReadAreaMask(item, "maskArea");
                 created.settings = std::move(settings);
             } else if (created.kind == graph::NodeKind::Road) {
                 graph::RoadNodeSettings settings;
@@ -1616,7 +1348,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                 settings.path = ReadPath(item, "path");
                 created.settings = std::move(settings);
             } else {
-                created.settings = graph::OutputNodeSettings{};
+                // Mesh Output は設定を持たない。
+                created.settings = std::monostate{};
             }
             nodes.push_back(std::move(created));
         }
@@ -1668,8 +1401,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
 }
 
 // 旧形式（版 3 以前）の layers[] をグラフへ移行する。
-// 下から上のレイヤー列を「下地」チェーンとして繋ぎ、末尾を出力ノードへ繋ぐ。
-// CompileLayers() が同じ列を返すので、見た目は移行前と変わらない。
+// 下から上のレイヤー列を Surface の「下地」チェーンとして繋ぐ。
+// 旧地形のノード（Shape / Liquid / Output）は無くなったので、種類はすべて Surface にする。
 graph::NodeGraph MigrateLayersToGraph(std::vector<compositor::MaterialLayer> layers) {
     graph::NodeGraph migrated;
     if (layers.empty()) {
@@ -1678,19 +1411,14 @@ graph::NodeGraph MigrateLayersToGraph(std::vector<compositor::MaterialLayer> lay
     graph::GraphId previousOutput = 0;
     float x = 60.0f;
     for (compositor::MaterialLayer& layer : layers) {
-        graph::NodeKind kind = graph::NodeKind::Surface;
-        if (layer.kind == compositor::LayerKind::Shape) {
-            kind = graph::NodeKind::Shape;
-        } else if (layer.kind == compositor::LayerKind::Liquid) {
-            kind = graph::NodeKind::Liquid;
-        }
-        const graph::GraphId nodeId = migrated.CreateNode(kind);
+        const graph::GraphId nodeId = migrated.CreateNode(graph::NodeKind::Surface);
         graph::Node* node = migrated.FindMutableNode(nodeId);
         if (node == nullptr) {
             continue;
         }
         if (auto* settings = std::get_if<graph::LayerNodeSettings>(&node->settings)) {
             settings->layer = std::move(layer);
+            settings->layer.kind = graph::LayerKindFor(graph::NodeKind::Surface);
         }
         node->posX = x;
         node->posY = 120.0f;
@@ -1700,15 +1428,6 @@ graph::NodeGraph MigrateLayersToGraph(std::vector<compositor::MaterialLayer> lay
             migrated.CreateLink(previousOutput, node->inputs.front().id);
         }
         previousOutput = node->outputs.empty() ? 0 : node->outputs.front().id;
-    }
-    const graph::GraphId outputId = migrated.CreateNode(graph::NodeKind::Output);
-    if (graph::Node* output = migrated.FindMutableNode(outputId)) {
-        output->posX = x;
-        output->posY = 120.0f;
-        output->positionValid = true;
-        if (previousOutput != 0 && !output->inputs.empty()) {
-            migrated.CreateLink(previousOutput, output->inputs.front().id);
-        }
     }
     return migrated;
 }
@@ -2383,18 +2102,6 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
         }
     }
 
-    // 実寸（scale）を持たないソースが引き継ぐ値。実寸をノードへ移す前のファイルは、
-    // プレビュー設定に平面のサイズと変位量を持っている。**そちらを正とする**
-    // （既定値を入れると、開いただけで地形の大きさが変わってしまう）。
-    graph::TerrainScale scaleFallback;
-    if (const json* preview = FindMember(document, "preview");
-        preview != nullptr && preview->is_object()) {
-        const renderer::PreviewDefaults& previewDefaults = renderer::kPreviewDefaults;
-        scaleFallback.sizeMeters = ReadFloat(*preview, "planeSize", previewDefaults.planeSize);
-        scaleFallback.heightMeters =
-            ReadFloat(*preview, "displacementScale", previewDefaults.displacementScale);
-    }
-
     // グラフの決め方。
     //   版 4 以降: graph 節が唯一の合成（無ければ既定へ戻す）。
     //   版 3 以前: 「プレビューに適用」（apply）がオンで保存されていれば graph 節を、
@@ -2407,8 +2114,7 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
         const bool legacyApply = ReadBool(*graphNode, "apply", version >= 4);
         if (version >= 4 || legacyApply || legacyLayers.empty()) {
             graphLoaded =
-                ReadGraph(*graphNode, refs.graph, readTexture, readMaterial, readPaint,
-                          scaleFallback);
+                ReadGraph(*graphNode, refs.graph, readTexture, readMaterial, readPaint);
         }
     }
     if (!graphLoaded) {

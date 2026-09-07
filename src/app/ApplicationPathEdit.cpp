@@ -2436,18 +2436,14 @@ bool Application::BakePathRouteTerrain(const graph::Node& node) {
         cache.stackHash = 0;
         return false;
     }
-    // Base のチェーンをレイヤー列へ落とす（プレビューと同じ経路）。実寸はチェーンの根の
-    // Heightmap が持つ。無ければプレビュー設定のジオメトリの値。
+    // Base のチェーンをレイヤー列へ落とす（プレビューと同じ経路）。実寸はプレビュー設定の
+    // ジオメトリの値。
     graph::CompiledGraph compiled = m_graph.CompileLayersTo(node.id);
     compositor::MaterialStack stack;
     stack.Layers() = std::move(compiled.layers);
     stack.MaskOps() = std::move(compiled.maskOps);
-    float sizeMeters = m_renderer.PlaneSize();
-    float heightMeters = m_renderer.DisplacementScale();
-    if (const graph::TerrainScale* scale = m_graph.FindChainScale(node.id)) {
-        sizeMeters = scale->sizeMeters;
-        heightMeters = scale->heightMeters;
-    }
+    const float sizeMeters = m_renderer.PlaneSize();
+    const float heightMeters = m_renderer.DisplacementScale();
     stack.SetTerrainScale(sizeMeters, heightMeters);
     const uint64_t hash = compositor::HashStackHeightState(stack);
     if (cache.valid && cache.stackHash == hash) {

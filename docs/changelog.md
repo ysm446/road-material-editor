@@ -1,9 +1,15 @@
 # Changelog
 
 作成日時: 2026-08-31 06:18
-更新日時: 2026-09-07 12:30
+更新日時: 2026-09-07 13:00
 
 ## 未リリース
+
+### 2026-09-07 13:00 — 旧地形ノードの撤去（第二段の 1）
+
+- Heightmap・Shape・Liquid・Heightmap Blur・侵食系（Sediment / Crumbling / Snow / River / Droplet / Scatter）・Mask 系 11 種・Output のノードをコードごと削除した。残るノードは Road / Lane Marking / Road Mask / Decal / Shoulder / Merge / Crack / Mesh Output / Path / Surface の 10 種。
+- 旧ファイルは開けるが、これらのノードは読み飛ばされる（道路のノードと Surface はそのまま）。保存形式の版は変えていない。
+- Surface のプロパティは「基本」「マテリアル」「合成」だけになった。プレビュー設定の「平面のサイズ」「変位量」は常に編集できる（Heightmap の実寸に従う仕組みが無くなったため）。
 
 ### 2026-09-07 12:30 — 旧地形の仕様を UI から外す（第一段）
 

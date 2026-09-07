@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-07 12:30
+更新日時: 2026-09-07 13:00
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -20,6 +20,14 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
+
+### 2026-09-07 13:00 — 旧地形ノードの撤去（第二段の 1）
+
+- `NodeKind` を 10 種に絞り、旧ノードのピン表・設定構造体（`MaskNodeSettings` / `OutputNodeSettings` / `TerrainScale`）・マスク op の生成（`EmitMaskOps` 系）・プロパティ UI・保存読込・テストを削除（10 ファイル、−2775 行）。
+- `CompileLayers` は Surface の鎖だけを評価する。`CompiledGraph::maskOps` と `MaterialStack::MaskOps()` は常に空だが、合成器の API はまだ触っていない。
+- Surface の Mask 入力ピンは残っている（未接続なら隠す）。`ValueType::Mask` を作るノードは無い。
+- 確認: sample_road / sample_road_crack / sample_road_merge を起動して描画が変わらないこと、テスト全件成功。
+- 次（第二段の 2）: 合成器の侵食・河川・水滴・散布・マスク op のパスとシェーダ（CompositeSediment / Crumbling / Snow / River / Droplet / Scatter / Fluvial / Mask / MaskOps / MaskPath）、`compositor::LayerKind` の Surface 以外、ペイントマスク。プレビュー設定の「合成結果」節。
 
 ### 2026-09-07 12:30 — 旧地形の仕様を UI から外す（第一段）
 

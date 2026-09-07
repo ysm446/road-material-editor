@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/ShadowCascades.h"
 
 #include "compositor/MaterialEvaluator.h"
 #include "compositor/TextureLibrary.h"
@@ -153,6 +154,7 @@ struct PreviewDefaults {
     bool skyboxBlur = false;
     bool shadowEnabled = true;
     uint32_t shadowResolution = 2048;
+    uint32_t shadowCascadeCount = 4;
 };
 inline constexpr PreviewDefaults kPreviewDefaults{};
 
@@ -216,6 +218,10 @@ public:
     bool& SkyboxBlur() { return m_skyboxBlur; }
     // ディレクショナルライトの影を落とすか。落とさないとシャドウパスも走らない。
     bool& ShadowEnabled() { return m_shadowEnabled; }
+    uint32_t ShadowCascadeCount() const { return m_requestedShadowCascadeCount; }
+    void RequestShadowCascadeCount(uint32_t count) {
+        m_requestedShadowCascadeCount = count == 1 ? 1 : kPreviewDefaults.shadowCascadeCount;
+    }
     uint32_t ShadowResolution() const { return m_requestedShadowResolution; }
     void RequestShadowResolution(uint32_t resolution) {
         m_requestedShadowResolution = (resolution == 1024 || resolution == 2048 || resolution == 4096)
@@ -256,7 +262,6 @@ private:
     void ApplyActiveSky(rhi::Device& device, rhi::PipelineCache& pipelineCache);
 
     // ライトから見たビュー×投影。プレビューの被写体を囲む平行投影。
-    DirectX::XMMATRIX LightViewProjection() const;
     void ReleaseTargets(rhi::Device& device);
     // 作業グリッドの線。トーンマップ後の表示用テクスチャへ、シーンの深度でテストして描く。
     void DrawGuideOverlay(rhi::Device& device, rhi::PipelineCache& pipelineCache,
@@ -284,8 +289,10 @@ private:
     rhi::GpuTexture m_depth;
     rhi::GpuTexture m_output;  // トーンマップ後の表示用
     // ディレクショナルライトから見た深度。ビューポートの大きさとは無関係に固定。
-    rhi::GpuTexture m_shadowMap;
-    bool ResizeShadowMap(rhi::Device& device, uint32_t resolution);
+    std::array<rhi::GpuTexture, kShadowCascadeCount> m_shadowMaps;
+    bool ResizeShadowMap(rhi::Device& device, uint32_t resolution, uint32_t count);
+    uint32_t m_shadowCascadeCount = kPreviewDefaults.shadowCascadeCount;
+    uint32_t m_requestedShadowCascadeCount = kPreviewDefaults.shadowCascadeCount;
     uint32_t m_shadowResolution = kPreviewDefaults.shadowResolution;
     uint32_t m_requestedShadowResolution = kPreviewDefaults.shadowResolution;
 

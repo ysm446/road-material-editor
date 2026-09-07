@@ -72,12 +72,14 @@ struct MeshConstants
     float roadMetersPerUv;
     uint meshDisplayFlags;
 
-    float4x4 lightViewProjection;
-
-    uint shadowIndex;  // 0xFFFFFFFF なら影を落とさない
+    float4x4 lightViewProjections[4];
+    uint4 shadowIndices;
+    float4 shadowSplits;
+    float4 shadowBiases;
     float shadowTexelSize;
-    float shadowBias;
-    float pad5;
+    float shadowBlend;
+    float shadowNear;
+    uint shadowCascadeCount;
 
     // テセレーションの分割量を画面上の辺の長さから決めるために使う。
     // **シャドウパスでも本描画と同じ値を渡す。** 分割が違うと形がずれ、
@@ -499,7 +501,7 @@ float SampleShadow(float3 worldPosition, float nDotL, uint shadowIndex, float te
     const float3 ndc = lightClip.xyz / lightClip.w;
     const float2 uv = ndc.xy * float2(0.5f, -0.5f) + 0.5f;
     // 範囲の外は影を落とさない（シャドウマップが覆っていない）。
-    if (any(uv < 0.0f) || any(uv > 1.0f) || ndc.z > 1.0f)
+    if (any(uv < 0.0f) || any(uv > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f)
     {
         return 1.0f;
     }
@@ -507,7 +509,7 @@ float SampleShadow(float3 worldPosition, float nDotL, uint shadowIndex, float te
     // 斜めに当たっているほど自己遮蔽しやすいので、下駄を増やす。
     const float slopeBias = bias * (1.0f + 3.0f * (1.0f - saturate(nDotL)));
 
-    Texture2D<float> shadowMap = ResourceDescriptorHeap[shadowIndex];
+    Texture2D<float> shadowMap = ResourceDescriptorHeap[NonUniformResourceIndex(shadowIndex)];
     float visibility = 0.0f;
     [unroll]
     for (int y = -1; y <= 1; ++y)
@@ -521,6 +523,29 @@ float SampleShadow(float3 worldPosition, float nDotL, uint shadowIndex, float te
         }
     }
     return visibility / 9.0f;
+}
+
+// カメラ前方距離で選択し、隣接する区間の重複範囲で混ぜる。
+float SampleCascadedShadow(float3 worldPosition, float nDotL)
+{
+    if (g_mesh.shadowIndices.x == 0xFFFFFFFFu) return 1.0f;
+    if (g_mesh.shadowCascadeCount == 1)
+        return SampleShadow(worldPosition, nDotL, g_mesh.shadowIndices.x,
+            g_mesh.shadowTexelSize, g_mesh.shadowBiases.x, g_mesh.lightViewProjections[0]);
+    const float distance = -mul(g_mesh.view, float4(worldPosition, 1.0f)).z;
+    if (distance > g_mesh.shadowSplits.w) return 1.0f;
+    uint cascade = 0;
+    while (cascade < 3 && distance > g_mesh.shadowSplits[cascade]) ++cascade;
+    const float visibility = SampleShadow(worldPosition, nDotL, g_mesh.shadowIndices[cascade],
+        g_mesh.shadowTexelSize, g_mesh.shadowBiases[cascade], g_mesh.lightViewProjections[cascade]);
+    const float start = cascade == 0 ? g_mesh.shadowNear : g_mesh.shadowSplits[cascade - 1];
+    const float end = g_mesh.shadowSplits[cascade];
+    const float blendStart = end - (end - start) * g_mesh.shadowBlend;
+    if (distance <= blendStart) return visibility;
+    const uint nextCascade = min(cascade + 1, 3u);
+    const float next = cascade < 3 ? SampleShadow(worldPosition, nDotL, g_mesh.shadowIndices[nextCascade],
+        g_mesh.shadowTexelSize, g_mesh.shadowBiases[nextCascade], g_mesh.lightViewProjections[nextCascade]) : 1.0f;
+    return lerp(visibility, next, smoothstep(blendStart, end, distance));
 }
 
 // --- ディスプレイスメント -------------------------------------------------
@@ -960,9 +985,7 @@ float4 PsMain(VsOutput input) : SV_Target0
 
     const float3 lightDirection = normalize(g_mesh.lightDirection);
     // 影は直接光にだけ掛ける。環境光（IBL）は別に扱う。
-    const float shadow = SampleShadow(input.worldPosition, dot(normal, lightDirection),
-                                      g_mesh.shadowIndex, g_mesh.shadowTexelSize,
-                                      g_mesh.shadowBias, g_mesh.lightViewProjection);
+    const float shadow = SampleCascadedShadow(input.worldPosition, dot(normal, lightDirection));
 
     float3 radiance = ShadeDirectionalLight(normal, viewDirection, lightDirection,
                                             g_mesh.lightColor, g_mesh.lightIlluminance,

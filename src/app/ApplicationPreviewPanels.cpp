@@ -70,6 +70,12 @@ void Application::DrawMaterialPanel() {
         if (ui::BeginPropertyTable("shadowRows")) {
             ui::PropertyBool("有効", &m_renderer.ShadowEnabled(), renderer::kPreviewDefaults.shadowEnabled,
                 "太陽の影を表示する。素材のハイトによる凹凸も影に反映する");
+            const char* modes[] = {"1枚", "4カスケード"};
+            int mode = m_renderer.ShadowCascadeCount() == 1 ? 0 : 1;
+            if (ui::PropertyCombo("方式", &mode, modes, 2,
+                renderer::kPreviewDefaults.shadowCascadeCount == 1 ? 0 : 1,
+                "1枚はシーン全体を覆う軽量な方式。4カスケードは近景に解像度を重点配分する"))
+                m_renderer.RequestShadowCascadeCount(mode == 0 ? 1u : renderer::kShadowCascadeCount);
             const char* labels[] = {"1024 × 1024", "2048 × 2048", "4096 × 4096"};
             const uint32_t values[] = {1024, 2048, 4096};
             int selected = 0, defaultIndex = 0;
@@ -78,7 +84,7 @@ void Application::DrawMaterialPanel() {
                 if (values[i] == renderer::kPreviewDefaults.shadowResolution) defaultIndex = i;
             }
             if (ui::PropertyCombo("解像度", &selected, labels, 3, defaultIndex,
-                "高くすると影の輪郭が細かくなる。解像度を2倍にすると画素数と必要なメモリは4倍になる"))
+                "シャドウマップ1枚あたりの解像度。解像度を2倍にすると画素数と必要なメモリは4倍になる"))
                 m_renderer.RequestShadowResolution(values[selected]);
             ui::EndPropertyTable();
         }

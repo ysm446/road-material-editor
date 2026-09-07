@@ -166,6 +166,8 @@ set(tg_sources
     src/rhi/ShaderCompiler.h
     src/rhi/UploadRing.cpp
     src/rhi/UploadRing.h
+    src/renderer/ShadowCascades.cpp
+    src/renderer/ShadowCascades.h
     src/renderer/Camera.cpp
     src/renderer/Camera.h
     src/renderer/Environment.cpp
@@ -281,6 +283,9 @@ enable_testing()
 
 add_executable(road_editor_tests
     tests/TestMain.cpp
+    tests/ShadowCascadeTests.cpp
+    src/renderer/ShadowCascades.cpp
+    src/renderer/Camera.cpp
     tests/RoadTests.cpp
     tests/SurfaceLayoutTests.cpp
     tests/ConnectionPrototypeTests.cpp

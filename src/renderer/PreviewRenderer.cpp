@@ -41,16 +41,6 @@ struct OverlayLineConstants {
 constexpr float kSkyboxBlurMip = 1.6f;
 constexpr DXGI_FORMAT kShadowDsvFormat = DXGI_FORMAT_D32_FLOAT;
 
-// 影を落とす範囲。**被写体を包む球の半径に対する倍率**で持つ。
-// 数 m の部品と数百 m の道路では大きさが違うので、m の固定値では片方でしか使えない。
-// 係数は、従来の固定値（半径 1.41 のときに 2.2m / 6.0m）と一致するよう選んである。
-// **基準より小さい被写体では従来の固定値のまま**にする（下限で止める）。
-constexpr float kShadowRadiusMin = 2.2f;
-constexpr float kShadowDistanceMin = 6.0f;
-constexpr float kShadowRadiusRatio = 2.2f / 1.41421356f;
-constexpr float kShadowDistanceRatio = 6.0f / 1.41421356f;
-// 自己遮蔽（シャドウアクネ）を避けるための下駄。傾きに応じてシェーダ側で増やす。
-constexpr float kShadowBias = 0.0018f;
 // シェーダの「影を落とさない」印。
 constexpr uint32_t kNoShadowIndex = 0xFFFFFFFFu;
 
@@ -115,12 +105,14 @@ struct MeshConstants {
     float roadMetersPerUv;
     uint32_t meshDisplayFlags;
 
-    XMFLOAT4X4 lightViewProjection;
-
-    uint32_t shadowIndex;  // 影を落とさないときは kNoShadowIndex
+    XMFLOAT4X4 lightViewProjections[kShadowCascadeCount];
+    uint32_t shadowIndices[kShadowCascadeCount];
+    float shadowSplits[kShadowCascadeCount];
+    float shadowBiases[kShadowCascadeCount];
     float shadowTexelSize;
-    float shadowBias;
-    float pad5;
+    float shadowBlend;
+    float shadowNear;
+    uint32_t shadowCascadeCount;
 
     XMFLOAT4X4 tessellationViewProjection;
     float viewportSize[2];
@@ -321,10 +313,10 @@ bool PreviewRenderer::Initialize(rhi::Device& device, rhi::PipelineCache& pipeli
         return false;
     }
 
-    return ResizeShadowMap(device, m_requestedShadowResolution);
+    return ResizeShadowMap(device, m_requestedShadowResolution, m_requestedShadowCascadeCount);
 }
 
-bool PreviewRenderer::ResizeShadowMap(rhi::Device& device, uint32_t resolution) {
+bool PreviewRenderer::ResizeShadowMap(rhi::Device& device, uint32_t resolution, uint32_t count) {
     rhi::TextureDesc shadowDesc;
     shadowDesc.width = resolution;
     shadowDesc.height = resolution;
@@ -336,37 +328,19 @@ bool PreviewRenderer::ResizeShadowMap(rhi::Device& device, uint32_t resolution) 
     shadowDesc.clearDepth = 1.0f;
     shadowDesc.initialState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     shadowDesc.debugName = L"ShadowMap";
-    rhi::GpuTexture replacement;
-    if (!device.Allocator().CreateTexture2D(shadowDesc, replacement)) {
-        device.DeferRelease(replacement);
-        return false;
+    std::array<rhi::GpuTexture, kShadowCascadeCount> replacements;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!device.Allocator().CreateTexture2D(shadowDesc, replacements[i])) {
+            for (auto& allocated : replacements) device.DeferRelease(allocated);
+            return false;
+        }
     }
-    // 使用中の影とディスクリプタは、GPUが参照を終えるまで保持する。
-    device.DeferRelease(m_shadowMap);
-    m_shadowMap = std::move(replacement);
+    // 必要な枚数を確保できてから切り替える。旧ビューもGPU完了後に解放する。
+    for (auto& map : m_shadowMaps) device.DeferRelease(map);
+    m_shadowMaps = std::move(replacements);
     m_shadowResolution = resolution;
+    m_shadowCascadeCount = count;
     return true;
-}
-
-// ライトから見たビュー×投影。プレビューの被写体を囲む平行投影で足りる。
-XMMATRIX PreviewRenderer::LightViewProjection() const {
-    // 影の範囲は被写体の大きさに追従させる。
-    const float radius = BoundingRadius();
-    const float shadowRadius = std::max(kShadowRadiusMin, radius * kShadowRadiusRatio);
-    const float shadowDistance = std::max(kShadowDistanceMin, radius * kShadowDistanceRatio);
-
-    const XMFLOAT3 direction = m_light.Direction();  // サーフェスから光源へ
-    const XMVECTOR lightDirection = XMVector3Normalize(XMLoadFloat3(&direction));
-    const XMVECTOR eye = XMVectorScale(lightDirection, shadowDistance);
-    // 真上・真下からのときに上方向が縮退しないよう、軸を入れ替える。
-    const XMVECTOR up = (std::abs(direction.y) > 0.99f) ? XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f)
-                                                        : XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-    const XMMATRIX view = XMMatrixLookAtRH(eye, XMVectorZero(), up);
-    // 手前のクリップも比例させる。固定の 0.05m だと地形スケールで精度を使い切る。
-    const XMMATRIX projection = XMMatrixOrthographicRH(
-        shadowRadius * 2.0f, shadowRadius * 2.0f,
-        std::max(0.05f, radius * 0.035f), shadowDistance + shadowRadius);
-    return XMMatrixMultiply(view, projection);
 }
 
 bool PreviewRenderer::SetGeneratedMeshScene(rhi::Device& device, const MeshScene& scene) {
@@ -505,7 +479,7 @@ void PreviewRenderer::ClearMeshScene(rhi::Device& device) {
 void PreviewRenderer::Shutdown(rhi::Device& device) {
     m_diagnostics.Shutdown(device);
     ClearMeshScene(device);
-    device.DeferRelease(m_shadowMap);
+    for (auto& map : m_shadowMaps) device.DeferRelease(map);
     m_environment.Shutdown(device);
     ReleaseTargets(device);
 }
@@ -513,11 +487,12 @@ void PreviewRenderer::Shutdown(rhi::Device& device) {
 void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
                                         rhi::PipelineCache& pipelineCache) {
     if (!m_meshSceneEnabled && !m_sceneMeshes.empty()) ClearMeshScene(device);
-    if (m_requestedShadowResolution != m_shadowResolution) {
-        if (!ResizeShadowMap(device, m_requestedShadowResolution)) {
+    if (m_requestedShadowResolution != m_shadowResolution || m_requestedShadowCascadeCount != m_shadowCascadeCount) {
+        if (!ResizeShadowMap(device, m_requestedShadowResolution, m_requestedShadowCascadeCount)) {
             m_requestedShadowResolution = m_shadowResolution;
-            TG_LOG_ERROR("影の解像度を変更できませんでした。元の解像度を維持します");
-        } else TG_LOG_INFO("影の解像度を %u に変更しました", m_shadowResolution);
+            m_requestedShadowCascadeCount = m_shadowCascadeCount;
+            TG_LOG_ERROR("影の設定を変更できませんでした。元の設定を維持します");
+        } else TG_LOG_INFO("影の設定を %u 枚・解像度 %u に変更しました", m_shadowCascadeCount, m_shadowResolution);
     }
 
     // 合成解像度の変更。シーンの評価器（スロット 1〜4）を作り直す。
@@ -563,6 +538,7 @@ void PreviewRenderer::ResetSettings() {
     m_skyboxBlur = defaults.skyboxBlur;
     m_shadowEnabled = defaults.shadowEnabled;
     RequestShadowResolution(defaults.shadowResolution);
+    RequestShadowCascadeCount(defaults.shadowCascadeCount);
     // 解像度の作り直しは GPU 待機を伴うので、要求だけ積む。
     RequestMaterialResolution(defaults.materialResolution);
 
@@ -1038,14 +1014,24 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     // --- シャドウマップ ----------------------------------------------------
     // ライトから深度だけを描く。同じ頂点シェーダを通るので、
     // ディスプレイスメントで押し出した形がそのまま影になる。
-    constants.shadowIndex = kNoShadowIndex;
+    for (auto& index : constants.shadowIndices) index = kNoShadowIndex;
     constants.shadowTexelSize = 1.0f / static_cast<float>(m_shadowResolution);
-    constants.shadowBias = kShadowBias;
+    constants.shadowBlend = kShadowCascadeBlend;
+    constants.shadowCascadeCount = m_shadowCascadeCount;
 
     // 描くものが無ければシャドウパスも走らせない。
-    if (m_shadowEnabled && m_shadowMap.IsValid() && !m_sceneMeshes.empty()) {
-        const XMMATRIX lightViewProjection = LightViewProjection();
-        XMStoreFloat4x4(&constants.lightViewProjection, lightViewProjection);
+    if (m_shadowEnabled && m_shadowMaps[0].IsValid() && !m_sceneMeshes.empty()) {
+        float displacementMargin = 0;
+        for (const auto& mesh : m_meshScene.meshes)
+            displacementMargin = std::max(displacementMargin, std::abs(mesh.displacementMeters));
+        const auto cascades = BuildShadowCascades(m_camera, m_light.Direction(), BoundingRadius() + displacementMargin,
+            float(m_width) / float(std::max(m_height, 1u)), m_shadowResolution, m_shadowCascadeCount);
+        constants.shadowNear = cascades.nearDistance;
+        for (uint32_t i = 0; i < kShadowCascadeCount; ++i) {
+            constants.lightViewProjections[i] = cascades.matrices[i];
+            constants.shadowSplits[i] = cascades.splits[i];
+            constants.shadowBiases[i] = cascades.biases[i];
+        }
 
         rhi::GraphicsPipelineDesc shadowPipelineDesc;
         shadowPipelineDesc.shaderPath = L"MeshPbr.hlsl";
@@ -1065,35 +1051,38 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         ID3D12PipelineState* shadowPipeline = pipelineCache.GetGraphics(shadowPipelineDesc);
 
         if (shadowPipeline != nullptr) {
-            // ライトから見た行列で描く。ほかの値は本描画と同じ。
-            MeshConstants shadowConstants = constants;
-            XMStoreFloat4x4(&shadowConstants.viewProjection, lightViewProjection);
+            for (uint32_t cascade = 0; cascade < m_shadowCascadeCount; ++cascade) {
+                auto& shadowMap = m_shadowMaps[cascade];
+                // ライトから見た行列で描く。ほかの値は本描画と同じ。
+                MeshConstants shadowConstants = constants;
+                shadowConstants.viewProjection = cascades.matrices[cascade];
 
-            PIXBeginEvent(commandList, PIX_COLOR(220, 200, 120), "PreviewShadow");
-            TransitionIfNeeded(commandList, m_shadowMap, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+                PIXBeginEvent(commandList, PIX_COLOR(220, 200, 120), "PreviewShadowCascade %u", cascade);
+                TransitionIfNeeded(commandList, shadowMap, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-            const D3D12_CPU_DESCRIPTOR_HANDLE shadowDsv = m_shadowMap.dsv.cpu;
-            commandList->OMSetRenderTargets(0, nullptr, FALSE, &shadowDsv);
-            commandList->ClearDepthStencilView(shadowDsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0,
-                                               nullptr);
+                const D3D12_CPU_DESCRIPTOR_HANDLE shadowDsv = shadowMap.dsv.cpu;
+                commandList->OMSetRenderTargets(0, nullptr, FALSE, &shadowDsv);
+                commandList->ClearDepthStencilView(shadowDsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0,
+                                                   nullptr);
 
-            const auto shadowViewport =
-                CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(m_shadowResolution),
-                                 static_cast<float>(m_shadowResolution));
-            const auto shadowScissor = CD3DX12_RECT(0, 0, static_cast<LONG>(m_shadowResolution),
-                                                    static_cast<LONG>(m_shadowResolution));
-            commandList->RSSetViewports(1, &shadowViewport);
-            commandList->RSSetScissorRects(1, &shadowScissor);
+                const auto shadowViewport =
+                    CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(m_shadowResolution),
+                                     static_cast<float>(m_shadowResolution));
+                const auto shadowScissor = CD3DX12_RECT(0, 0, static_cast<LONG>(m_shadowResolution),
+                                                        static_cast<LONG>(m_shadowResolution));
+                commandList->RSSetViewports(1, &shadowViewport);
+                commandList->RSSetScissorRects(1, &shadowScissor);
 
-            commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
-            commandList->SetPipelineState(shadowPipeline);
-            drawMeshes(shadowConstants, kPassOpaque | kPassDecal);
+                commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
+                commandList->SetPipelineState(shadowPipeline);
+                drawMeshes(shadowConstants, kPassOpaque | kPassDecal);
 
-            TransitionIfNeeded(commandList, m_shadowMap,
-                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            PIXEndEvent(commandList);
+                TransitionIfNeeded(commandList, shadowMap,
+                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                PIXEndEvent(commandList);
 
-            constants.shadowIndex = m_shadowMap.SrvIndex();
+                constants.shadowIndices[cascade] = shadowMap.SrvIndex();
+            }
         }
     }
 

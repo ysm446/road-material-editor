@@ -1,7 +1,6 @@
 #pragma once
 
 #include "compositor/MaterialLayer.h"
-#include "compositor/MaskGraph.h"
 #include "graph/Path.h"
 
 #include <cstdint>
@@ -17,8 +16,8 @@
 //     （imgui-node-editor の NodeId / PinId / LinkId にそのまま流用できる）。
 //   - ノードの設定は種類ごとの構造体を std::variant で持つ。
 //     terrain-editor の「全種類の設定を 1 構造体に持つファット構造体」はやめた。
-//   - 材質（Surface の鎖）は既存の GPU 評価器を使う。グラフは CompileLayers() で
-//     レイヤー列（下から上）へ落とし、MaterialStack として評価する。
+//   - 材質（Surface）は既存の GPU 評価器を使う。グラフは CompileLayersTo() で
+//     レイヤー列へ落とし、MaterialStack として評価する。
 //
 // UI / D3D12 には依存しない（compositor のデータ構造にだけ依存する）。
 namespace tg::graph {
@@ -33,8 +32,6 @@ enum class PinKind : uint32_t {
 // ピンを流れる値の型。同じ型どうしだけ接続できる。
 enum class ValueType : uint32_t {
     Material = 0,
-    // マスク（0〜1 の 1 チャンネル）。旧地形の Surface の Mask 入力が受ける（出すノードは無い）。
-    Mask = 1,
     // パス（向き付きの線）。Path ノードが出し、Road / Decal / Shoulder が読む。
     Path = 2,
     Mesh = 3,
@@ -94,7 +91,7 @@ struct Pin {
 // (3) NodeGraph.cpp の定義テーブルへ登録し、(4) 保存とプロパティ UI の
 // 対応を足す。それ以外の場所を触る必要がないように保つ。
 
-// サーフェス。既存のレイヤーそのもの（kind も layer が持つ）。
+// サーフェス。既存のレイヤーそのもの。
 struct LayerNodeSettings {
     compositor::MaterialLayer layer;
 };
@@ -282,11 +279,9 @@ struct RoadMarkingNodeSettings {
     bool uvAlongU = false;
 };
 
-// グラフを評価器の入力へ落とした結果。レイヤー列と、マスクの op の列。
+// グラフを評価器の入力へ落とした結果。レイヤー列（道路の材質では Surface 1 枚）。
 struct CompiledGraph {
     std::vector<compositor::MaterialLayer> layers;
-    // マスクの op。マスクを出すノードは無くなったので、いまは常に空（評価器の入力の形を保つ）。
-    compositor::MaskProgram maskOps;
     // レイヤーごとの元ノードの ID（添字は layers と同じ。既定の下地は 0）。
     // グラフパネルがノードに合成結果のサムネイルを出すのに使う。
     std::vector<GraphId> layerSources;
@@ -349,12 +344,11 @@ public:
     const RoadNetworkSettings& RoadNetwork() const { return m_roadNetwork; }
     void SetRoadNetwork(const RoadNetworkSettings& settings) { m_roadNetwork = settings; MarkDirty(); }
 
-    // 既定のレイヤー列。出力ノードは無くなったのでチェーンは空で、
-    // 下地 1 枚（MaterialStack::MakeBaseLayer と同じもの）を返す。
+    // 既定のレイヤー列。下地 1 枚（MaterialStack::MakeBaseLayer と同じもの）を返す。
     CompiledGraph CompileLayers() const;
-    // 指定したノード**まで**の Surface の鎖をレイヤー列（下から上）にする。
+    // 指定した Surface のレイヤー 1 枚をレイヤー列にする。
     // Road の材質スロットに繋いだ Surface の評価と、ノードを選んでのプレビューに使う。
-    // Surface 以外のノードはレイヤー列を持たないので CompileLayers() と同じ。
+    // Surface 以外のノードや無効な Surface はレイヤー列を持たないので CompileLayers() と同じ。
     // outputPin は互換のために残してある（Surface の出力は 1 本なので使わない）。
     CompiledGraph CompileLayersTo(GraphId nodeId, GraphId outputPin = 0) const;
 
@@ -369,12 +363,8 @@ private:
     GraphId AllocateGraphId() { return m_nextGraphId++; }
     RoadNetworkSettings m_roadNetwork;
     void RebuildNextGraphId();
-    // top から「下地」チェーンを遡る（上から下の順）。
-    std::vector<const Node*> ChainFrom(const Node* top) const;
-    static void RecordLayerSources(const std::vector<const Node*>& layerNodes,
-                                   CompiledGraph& compiled);
-    // top から「下地」チェーンを遡ってレイヤー列（下から上）にする共通部。
-    CompiledGraph CompileChainFrom(const Node* top) const;
+    // Surface 1 つ（null なら無し）をレイヤー列にする共通部。
+    CompiledGraph CompileSurface(const Node* surface) const;
     // producer の出力を辿って target に届くか（循環チェック用）。
     bool ReachesDownstream(GraphId fromNodeId, GraphId targetNodeId) const;
 
@@ -395,7 +385,5 @@ bool IsMeshNodeKind(NodeKind kind);
 // 選ぶとプレビューの対象になる種類か。Surface と Path、道路メッシュのノード。
 // 道路メッシュのノードはそのノードまでの鎖をメッシュシーンに出す。
 bool IsPreviewableNodeKind(NodeKind kind);
-// 種類に対応するレイヤー種別（レイヤー設定を持つ種類のみ意味を持つ）。いまは常に Surface。
-compositor::LayerKind LayerKindFor(NodeKind kind);
 
 }  // namespace tg::graph

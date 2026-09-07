@@ -1,13 +1,13 @@
 #pragma once
 
 #include "compositor/MaterialLayer.h"
-#include "compositor/MaskGraph.h"
 
 #include <vector>
 
 namespace tg::compositor {
 
 // レイヤーを下から上へ積んだもの。index 0 が一番下（下地）。
+// 道路の材質は Surface 1 枚なので、実際には 1 枚だけ入る。
 class MaterialStack {
 public:
     MaterialStack();
@@ -22,10 +22,6 @@ public:
     std::vector<MaterialLayer>& Layers() { return m_layers; }
     const std::vector<MaterialLayer>& Layers() const { return m_layers; }
 
-    // マスクのノードグラフを落とした op の列。レイヤーは添字で参照する。
-    MaskProgram& MaskOps() { return m_maskOps; }
-    const MaskProgram& MaskOps() const { return m_maskOps; }
-
     MaterialLayer& Add(const MaterialLayer& layer);
     void Remove(size_t index);
     void Move(size_t index, int delta);
@@ -33,8 +29,8 @@ public:
     void MoveTo(size_t from, size_t to);
 
     // 地形の実寸（m）。法線を実寸の勾配として作るために評価器が使う。
-    // 出どころはグラフの Heightmap ノード（graph::TerrainScale）で、
-    // ノードが無いときはプレビュー設定のジオメトリの値を入れる。
+    // 道路では 1 UV タイルの実寸（Road.cpp の BuildStack）、平面プレビューでは
+    // プレビュー設定のジオメトリの値を入れる。
     // **形（ディスプレイスメント）と同じ値であること。** 食い違うと、
     // 押し出した形と陰影の起伏が別物になる。
     float SizeMeters() const { return m_sizeMeters; }
@@ -50,7 +46,6 @@ public:
 
 private:
     std::vector<MaterialLayer> m_layers;
-    MaskProgram m_maskOps;
     float m_sizeMeters = 1024.0f;
     float m_heightMeters = 200.0f;
     uint64_t m_revision = 1;

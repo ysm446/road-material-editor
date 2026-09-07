@@ -59,9 +59,6 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
 // 暗い盤面でどちらも同じ強さで読める。
 ImVec4 PinTypeColor(graph::ValueType valueType) {
     switch (valueType) {
-        // マスクはオレンジ。0〜1 の 1 チャンネル。
-        case graph::ValueType::Mask:
-            return ImVec4(0.82f, 0.64f, 0.36f, 1.0f);
         // パスは水色。線（点とエッジ）が流れる。緑 / オレンジと色相が離れていて、
         // 明度は同じくらいなので暗い盤面で同じ強さで読める。
         case graph::ValueType::Path:
@@ -327,9 +324,6 @@ void Application::SyncGraphStack() {
     // レイヤー列が変わらなくても実寸だけ動くことがあるため、早期 return より前に置く。
     m_graphStack.SetTerrainScale(m_renderer.PlaneSize(), m_renderer.DisplacementScale());
 
-    // マスクを出すノードは無くなったので、マスクのプレビューは常にオフ。
-    m_renderer.MaskPreviewActive() = false;
-
     if (m_compiledGraphRevision == m_graph.Revision() && m_compiledGraphTarget == target &&
         m_compiledGraphTargetPin == m_previewGraphPin) {
         return;
@@ -341,29 +335,26 @@ void Application::SyncGraphStack() {
                                         ? m_graph.CompileLayersTo(target, m_previewGraphPin)
                                         : m_graph.CompileLayers();
     m_graphStack.Layers() = std::move(compiled.layers);
-    m_graphStack.MaskOps() = std::move(compiled.maskOps);
     m_graphStack.MarkDirty();
 
     // レイヤーの出どころを版ごとに控える。評価が追いつくまでの数版ぶんあれば足りる。
     constexpr size_t kKeepRevisions = 4;
-    GraphMaskOpSources sources;
+    GraphLayerSources sources;
     sources.revision = m_graphStack.Revision();
     sources.layers = std::move(compiled.layerSources);
-    m_graphMaskOpSources.push_back(std::move(sources));
-    while (m_graphMaskOpSources.size() > kKeepRevisions) {
-        m_graphMaskOpSources.erase(m_graphMaskOpSources.begin());
+    m_graphLayerSources.push_back(std::move(sources));
+    while (m_graphLayerSources.size() > kKeepRevisions) {
+        m_graphLayerSources.erase(m_graphLayerSources.begin());
     }
 }
 
 D3D12_GPU_DESCRIPTOR_HANDLE Application::GraphLayerThumbnail(graph::GraphId nodeId) const {
     const compositor::MaterialEvaluator& evaluator = m_renderer.Evaluator();
     const uint64_t revision = evaluator.EvaluatedRevision();
-    for (const GraphMaskOpSources& sources : m_graphMaskOpSources) {
+    for (const GraphLayerSources& sources : m_graphLayerSources) {
         if (sources.revision != revision) {
             continue;
         }
-        // 同じノードが Mask だけの差し込み（maskOnly）で先に並ぶことがあるので、
-        // 後ろから探して Result のほう（本流）を取る。
         for (size_t i = sources.layers.size(); i-- > 0;) {
             if (sources.layers[i] == nodeId) {
                 return evaluator.LayerThumbnailHandle(i);
@@ -517,14 +508,8 @@ void Application::DrawGraphNode(const graph::Node& node) {
     // 丸ピン 1 つぶん（丸の幅 + ImGui の項目間隔）。
     const float pinWidth = 14.0f + ImGui::GetStyle().ItemSpacing.x;
     float rowWidth = 0.0f;
-    // レイヤーノード（Surface など）の Mask 入力は旧地形の合成用で、Road / Shoulder のスロットへ繋ぐ材質では
-    // 意味を持たない。繋がっていないときは出さない（道路の Road Mask と二重に見えるのを避ける）。
     std::vector<const graph::Pin*> visibleInputs;
     for (const graph::Pin& input : node.inputs) {
-        // Base（Material 型）も旧地形の積み重ね用。道路の材質としては単独で使うので、繋がっていなければ隠す。
-        const bool legacyInput = graph::IsLayerNodeKind(node.kind) &&
-                                 (input.valueType == graph::ValueType::Mask || input.valueType == graph::ValueType::Material);
-        if (legacyInput && m_graph.FindUpstreamNodeForPin(input.id) == nullptr) continue;
         visibleInputs.push_back(&input);
     }
     for (size_t row = 0; row < std::max(visibleInputs.size(), node.outputs.size()); ++row) {
@@ -856,7 +841,7 @@ void Application::DrawGraphEditor() {
             }
             if (auto* settings = std::get_if<graph::LayerNodeSettings>(&node->settings)) {
                 // 追加時の初期値は旧レイヤーパネルと同じ既定値を使う。
-                settings->layer = DefaultLayerFor(graph::LayerKindFor(kind));
+                settings->layer = kDefaultLayer;
                 settings->layer.name +=
                     " " + std::to_string(m_graph.Nodes().size());
             }
@@ -1377,19 +1362,7 @@ void Application::DrawGraphPanel() {
                                         "無効にすると合成から外れる");
             ui::EndPropertyTable();
         }
-        // 「下地」入力が繋がっていないノードは一番下のレイヤー扱い。
-        const bool isBase =
-            selected->inputs.empty() ||
-            m_graph.FindUpstreamNodeForPin(selected->inputs.front().id) == nullptr;
-        // Mask 入力にノードが繋がっていれば、マスクの出どころはそちら（旧ファイルの名残）。
-        bool maskFromNode = false;
-        for (const graph::Pin& pin : selected->inputs) {
-            if (pin.valueType == graph::ValueType::Mask &&
-                m_graph.FindUpstreamNodeForPin(pin.id) != nullptr) {
-                maskFromNode = true;
-            }
-        }
-        changed |= DrawLayerSettings(settings->layer, isBase, maskFromNode);
+        changed |= DrawLayerSettings(settings->layer);
         if (changed) {
             m_graph.MarkDirty();
             MarkDocumentChanged();

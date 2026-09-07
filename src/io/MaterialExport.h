@@ -2,7 +2,6 @@
 
 #include "compositor/MaterialLibrary.h"
 #include "compositor/MaterialStack.h"
-#include "compositor/PaintMask.h"
 #include "compositor/TextureLibrary.h"
 #include "rhi/Device.h"
 #include "rhi/PipelineCache.h"
@@ -44,7 +43,6 @@ struct ExportRefs {
     const compositor::MaterialStack& stack;
     const compositor::TextureLibrary& textures;
     const compositor::MaterialLibrary& materials;
-    const compositor::PaintMaskStore& paintMasks;
 };
 
 // 合成結果を画像として書き出す。書き出せた枚数を返す（0 なら失敗）。

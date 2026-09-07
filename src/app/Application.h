@@ -2,7 +2,6 @@
 
 #include "compositor/MaterialLibrary.h"
 #include "compositor/MaterialStack.h"
-#include "compositor/PaintMask.h"
 #include "compositor/TextureLibrary.h"
 #include "core/Log.h"
 #include "core/FrameLimiter.h"
@@ -116,12 +115,8 @@ private:
     void DrawGraphNode(const graph::Node& node);
     // ノードに出す合成結果のサムネイル（そのノードのレイヤーまで合成した見た目）。
     D3D12_GPU_DESCRIPTOR_HANDLE GraphLayerThumbnail(graph::GraphId nodeId) const;
-    // グラフノードのレイヤー設定のプロパティ行。
-    // 変更があれば true。isBase はマスクが効かない一番下のレイヤーのとき。
-    // maskFromNode が真のとき、マスクの出どころは Mask 入力に繋いだノード。
-    // ソースと画像の行は出さない（同じ値を 2 か所から編集させない）。
-    bool DrawLayerSettings(compositor::MaterialLayer& layer, bool isBase,
-                           bool maskFromNode = false);
+    // グラフノードのレイヤー設定のプロパティ行。変更があれば true。
+    bool DrawLayerSettings(compositor::MaterialLayer& layer);
     // グラフの変更をコンパイル結果（m_graphStack）へ反映する。フレームの頭で呼ぶ。
     void SyncGraphStack();
     void SyncMeshGraph();
@@ -228,8 +223,8 @@ private:
     void DrawTextureRemoveModal();
     // --- アンドゥ -----------------------------------------------------------
     // 対象はグラフ（ノード / リンク / 設定 / 位置）とマテリアル。
-    // テクスチャの読み込みと削除、ペイントの筆致、プレビュー設定は含めない
-    // （前者 2 つは GPU リソースそのもの、ペイントは PaintMaskStore が別の履歴を持つ）。
+    // テクスチャの読み込みと削除、プレビュー設定は含めない
+    // （前者 2 つは GPU リソースそのもの）。
     // ノードの移動だけでは段を積まない（位置は他の変更の段に相乗りする）。
     //
     // いまの文書を写し取る。
@@ -238,34 +233,23 @@ private:
     void ApplyDocument(const DocumentSnapshot& snapshot);
     // レイヤーかマテリアルを変えたときに呼ぶ。フレームの終わりに 1 段積まれる。
     void MarkDocumentChanged();
-    // 文書からも履歴からも参照されなくなったペイントマスクを破棄する。
-    // レイヤーを消してもすぐには捨てないため、ここで回収する。
-    void SweepPaintMasks();
     // 存在しないテクスチャ ID を「なし」に落とす。
     // テクスチャは履歴の外で消えるため、書き戻した参照が宙に浮くことがある。
     compositor::TextureId ValidTexture(compositor::TextureId id) const;
-    // ペイントの対象になるレイヤー。ペイントモードで、選択中のレイヤーが
-    // ペイントマスクを持つときだけ返す。
-    compositor::MaterialLayer* CurrentPaintLayer();
-    // レイヤーパネルのマスク欄に出すペイント関連の UI。
-    bool DrawPaintSection(compositor::MaterialLayer& layer);
     // ビューポートに重ねる操作（表示モードと、重ねる情報の切り替え）。
     // 画像の描画より後に呼ぶ。右上には FPS を出すので、右端の座標も渡す。
     void DrawViewportOverlay(const ImVec2& viewportMin, const ImVec2& viewportMax);
     // ビューポート上の L + 左ドラッグでライトの向きを変える。
-    // 掴んでいる間は true を返す（軌道やブラシへ渡さない）。
+    // 掴んでいる間は true を返す（軌道やパス編集へ渡さない）。
     bool HandleLightDrag(bool itemActive);
     // ビューポート上の F / A キーで視点をメッシュへ戻す。
     void HandleCameraShortcuts(bool itemHovered);
     // ライトの向きを示すギズモ。動かしている間と、その直後だけ出す。
     void DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewportMax);
-    // ビューポート上のドラッグをブラシへ渡す。ペイントモードのときだけ呼ぶ。
-    void HandlePaintInput(compositor::MaterialLayer& layer, bool itemActive,
-                          const ImVec2& imageOrigin, const ImVec2& imageSize);
 
     // --- パスの編集（ApplicationPathEdit.cpp） --------------------------------
     // 編集の対象になる Path ノード。グラフで Path ノードを選んでいるときだけ返す
-    // （ペイントと同じく、選択がビューポートの操作モードを決める）。
+    // （選択がビューポートの操作モードを決める）。
     graph::Node* CurrentPathNode();
     // ビューポート上の入力をパスの編集へ渡す。Path ノードが選ばれているときだけ呼ぶ。
     // 変更があれば文書の変更を記録する。
@@ -322,12 +306,12 @@ private:
     // コンパイルしたレイヤーの出どころを、スタックの版ごとに控える。評価は非同期なので、
     // 表側にある結果はいまのコンパイルより古いことがある。ノードのサムネイルは
     // 「表側の結果の版」に合う対応で引かないと、別のノードの模様が出る。
-    struct GraphMaskOpSources {
+    struct GraphLayerSources {
         uint64_t revision = 0;
         // レイヤーごとの元ノード（添字はレイヤーの添字）。結果サムネイル用。
         std::vector<graph::GraphId> layers;
     };
-    std::vector<GraphMaskOpSources> m_graphMaskOpSources;
+    std::vector<GraphLayerSources> m_graphLayerSources;
     graph::GraphId m_selectedGraphNode = 0;
     // エディタで選ばれているノード全部。コピーはこれを見る
     // （プロパティに出すのは先頭の 1 つ = m_selectedGraphNode）。
@@ -384,20 +368,12 @@ private:
     // 環境は作っているマテリアルそのものではなく、見え方の設定に近い
     // （プレビュー設定を履歴に載せないのと同じ理由）。
     renderer::SkyLibrary m_skyLibrary;
-    compositor::PaintMaskStore m_paintMasks;
     int m_selectedMaterial = 0;
     // ORD をまとめて割り当てるときに選ぶテクスチャ（UI の一時状態）。
     compositor::TextureId m_ordTexture = compositor::kNoTexture;
-    compositor::BrushSettings m_brush;
-    // ペイントモード中はビューポートの左ドラッグがブラシになる。
-    bool m_paintMode = false;
     // ライトの向きを掴んでいる間。ギズモは離してからも少しの間だけ残す。
     bool m_lightDragActive = false;
     double m_lightGizmoUntil = 0.0;
-    // ストローク中の状態。前フレームのカーソル位置から線分としてブラシを積む。
-    bool m_strokeActive = false;
-    float m_strokeLastX = 0.0f;
-    float m_strokeLastY = 0.0f;
 
     // パスの編集の状態。ノードが変わったら捨てる。
     // 点 / エッジの ID はそのパスの中でしか意味を持たないので、毎フレーム実在を確かめる。
@@ -601,8 +577,6 @@ private:
     bool m_documentJoinsEdit = false;
     // -1 でアンドゥ、+1 でリドゥ。マテリアルの破棄を伴うのでフレームの外で処理する。
     int m_pendingHistoryStep = 0;
-    // 参照が切れたペイントマスクの回収を予約する。破棄は GPU 待機を伴う。
-    bool m_pendingPaintSweep = false;
 
     ImGuiLayer m_imgui;
     // 右下に出す通知。保存の完了などを知らせる。

@@ -117,12 +117,6 @@ struct MeshConstants {
     float tessellationMaxFactor;
     float tessellationTargetPixels;
 
-    // マスクのプレビューで飽和した所へ斜線を引く。**HLSL 側と同じ並びにすること。**
-    uint32_t maskPreviewHatch;
-    float maskPreviewLow;
-    float maskPreviewHigh;
-    float pad7;
-
     uint32_t displacementHeightIndex;
     uint32_t displacementUseRoadUv;
     // 不透明度の扱い。0 = 不透明、1 = マスク抜き（opacityThreshold 未満を捨てる）、2 = 半透明。
@@ -435,7 +429,6 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
     m_sceneMaterials.resize(scene.meshes.size());
     const auto assignStack = [](compositor::MaterialStack& target, const compositor::MaterialStack& source) {
         target.Layers() = source.Layers();
-        target.MaskOps() = source.MaskOps();
         target.SetTerrainScale(source.SizeMeters(), source.HeightMeters());
         target.MarkDirty();
     };
@@ -560,7 +553,6 @@ void PreviewRenderer::ResetSettings() {
     m_showSkybox = defaults.showSkybox;
     m_skyboxBlur = defaults.skyboxBlur;
     m_shadowEnabled = defaults.shadowEnabled;
-    m_maskSaturationHatch = defaults.maskSaturationHatch;
     // 解像度の作り直しは GPU 待機を伴うので、要求だけ積む。
     RequestMaterialResolution(defaults.materialResolution);
     RequestMeshSubdivisions(defaults.meshSubdivisions);
@@ -800,30 +792,11 @@ bool PreviewRenderer::Resize(rhi::Device& device, uint32_t width, uint32_t heigh
     return true;
 }
 
-compositor::PaintContext PreviewRenderer::PrepareUvBufferForRead(
-    ID3D12GraphicsCommandList* commandList) {
-    compositor::PaintContext context;
-    if (m_meshSceneEnabled || !m_materialUv.IsValid()) {
-        return context;
-    }
-
-    // 読むのは前フレームの内容。ブラシは 1 フレーム前のカーソル位置に対応する
-    // UV を見ることになるが、描き味に影響が出るほどの差にはならない。
-    TransitionIfNeeded(commandList, m_materialUv,
-                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-    context.uvBufferSrvIndex = m_materialUv.SrvIndex();
-    context.viewportWidth = m_width;
-    context.viewportHeight = m_height;
-    return context;
-}
-
 void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCache,
                              ID3D12GraphicsCommandList* commandList,
                              const compositor::MaterialStack& stack,
                              const compositor::TextureLibrary& textures,
-                             const compositor::MaterialLibrary& materials,
-                             const compositor::PaintMaskStore& paintMasks) {
+                             const compositor::MaterialLibrary& materials) {
     if (!m_sceneColor.IsValid() || !m_output.IsValid()) {
         return;
     }
@@ -839,7 +812,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     // レイヤースタックに変更があれば評価を投入し、終わった評価があれば結果を受け取る。
     // 評価はコンピュートキューで走るので、このフレームは前回の結果を描く。
     if (!m_meshSceneEnabled) {
-        m_evaluator.Update(device, pipelineCache, commandList, stack, textures, materials, paintMasks);
+        m_evaluator.Update(device, pipelineCache, commandList, stack, textures, materials);
     }
 
     if (m_meshSceneEnabled) {
@@ -857,11 +830,11 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             }
             if (material.evaluator)
                 material.evaluator->Update(device, pipelineCache, commandList, material.stack,
-                                           textures, materials, paintMasks);
+                                           textures, materials);
             for (size_t layer = 0; layer < 3; ++layer) {
                 if (material.layerEvaluators[layer])
                     material.layerEvaluators[layer]->Update(device, pipelineCache, commandList,
-                                                            material.layerStacks[layer], textures, materials, paintMasks);
+                                                            material.layerStacks[layer], textures, materials);
             }
         }
         m_sceneMaterialSourceRevision = stack.Revision();
@@ -953,11 +926,6 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     constants.viewportSize[1] = static_cast<float>(m_height);
     constants.tessellationMaxFactor = m_tessellationFactor;
     constants.tessellationTargetPixels = m_tessellationTargetPixels;
-    // マスクをプレビューしているときだけ斜線を引く（設定と両方が入のとき）。
-    constants.maskPreviewHatch =
-        (!m_meshSceneEnabled && m_maskSaturationHatch && m_maskPreviewActive) ? 1u : 0u;
-    constants.maskPreviewLow = compositor::kMaskPreviewLow;
-    constants.maskPreviewHigh = compositor::kMaskPreviewHigh;
 
     // メッシュの合成モード。材質の属性から決める。帯（白線）以外は常に不透明。
     const auto blendModeOf = [&](size_t i) {

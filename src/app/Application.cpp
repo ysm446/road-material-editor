@@ -178,7 +178,6 @@ void Application::Shutdown() {
     m_device.WaitForGpu();
     // ImGui のコンテキストより先に破棄する（エディタが ImGui に依存している）。
     DestroyGraphEditor();
-    m_paintMasks.Destroy(m_device);
     m_materialSphere.Destroy(m_device);
     m_skySphere.Destroy(m_device);
     m_materialLibrary.Destroy(m_device);
@@ -297,8 +296,7 @@ int Application::Run() {
             m_exportSettings.directory = m_options.exportDirectory;
             SyncGraphStack();
             // プレビューと同じくグラフのコンパイル結果を書き出す。
-            const io::ExportRefs refs{m_graphStack, m_textureLibrary, m_materialLibrary,
-                                      m_paintMasks};
+            const io::ExportRefs refs{m_graphStack, m_textureLibrary, m_materialLibrary};
             if (m_renderer.HasMeshScene()) {
                 TG_LOG_WARN("メッシュシーンのテクスチャ書き出しは未対応です");
             } else {
@@ -310,9 +308,9 @@ int Application::Run() {
         // 開発用: 数フレーム描いてからプロジェクトを保存して終了する。
         // 対話せずに保存と読み込みを確かめるために使う。
         if (!m_options.saveProjectPath.empty() && m_frameCounter >= m_options.screenshotFrame) {
-            const io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_paintMasks,
-                                       m_skyLibrary,     m_renderer,       m_graph};
-            io::SaveProject(m_options.saveProjectPath, m_device, refs);
+            const io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
+                                       m_renderer, m_graph};
+            io::SaveProject(m_options.saveProjectPath, refs);
             break;
         }
 
@@ -326,8 +324,6 @@ int Application::Run() {
         // 環境マップやマテリアル解像度の作り直しは GPU 待機を伴うため、
         // フレームの外で処理する。
         m_renderer.ProcessPendingWork(m_device, m_pipelineCache);
-        // ペイントマスクの解像度変更も作り直しを伴うため、フレームの外で処理する。
-        m_paintMasks.ProcessPendingWork(m_device, m_pipelineCache);
 
         // テクスチャ読み込みも GPU 待機を伴うため、フレームの外で処理する。
         if (!m_pendingTexturePaths.empty()) {
@@ -392,21 +388,6 @@ int Application::Run() {
             continue;
         }
 
-        // ブラシは前フレームの UV バッファを読むため、合成の評価より前に流す。
-        //
-        // **合成の評価が走っている間は流さない。** 評価はコンピュートキューで
-        // ペイントマスクを SRV として読んでいる。その最中にこちら（グラフィックス）で
-        // UAV へ遷移して書き込むと、別キューどうしで同じテクスチャを触ることになり、
-        // 読み取り結果が壊れる。積んだ操作は捨てず、評価が終わったフレームでまとめて流す
-        // （IsEvaluating はフェンスを見るので、終わった直後のフレームには通る）。
-        const compositor::PaintContext paintContext =
-            m_renderer.PrepareUvBufferForRead(commandList);
-        if (!m_renderer.Evaluator().IsEvaluating() &&
-            m_paintMasks.Process(m_device, m_pipelineCache, commandList, paintContext)) {
-            // マスクの中身が変わったので合成をやり直す。
-            m_graphStack.MarkDirty();
-        }
-
         // グリッドは深度テストのためレンダラが描く。設定の写しは持たない方針
         // だが、レンダラは AppSettings を知らないので、描く直前に毎フレーム渡す。
         m_renderer.ShowReferenceGrid() = m_settings.Display().showReferenceGrid;
@@ -417,7 +398,7 @@ int Application::Run() {
         // グラフをレイヤー列へコンパイルした結果で評価する。
         SyncGraphStack();
         m_renderer.Render(m_device, m_pipelineCache, commandList, m_graphStack,
-                          m_textureLibrary, m_materialLibrary, m_paintMasks);
+                          m_textureLibrary, m_materialLibrary);
 
         // マテリアルプレビューの球。**窓を開いている間だけ描く。**
         // ImGui はこのフレームで描いた中身をそのまま読む（submit 済みの
@@ -592,8 +573,6 @@ void Application::DrawUi() {
         m_documentJoinsEdit = false;
         m_undoHistory.Push(m_committed, editId);
         m_committed = CaptureDocument();
-        // 古い段が押し出されると、そこでしか参照されていなかったマスクが浮く。
-        m_pendingPaintSweep = true;
     }
     // 掴んでいたものが離れたら、次の編集は別の段にする。
     if (ImGui::GetActiveID() == 0) {
@@ -690,14 +669,7 @@ void Application::DrawStatusBar() {
         if (ImGui::BeginMenuBar()) {
             // --- 左: いまのモードと直近の通知 -------------------------------
             // モードでビューポートの操作が変わるので、常に見える場所へ出す。
-            if (const compositor::MaterialLayer* paintLayer = CurrentPaintLayer();
-                paintLayer != nullptr) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_CheckMark));
-                ImGui::Text("ペイント中: %s", paintLayer->name.c_str());
-                ImGui::PopStyleColor();
-                ImGui::TextDisabled("|");
-            }
-            // パスを編集している間は左クリックが点を置く。ペイントと同じく常に見せる。
+            // パスを編集している間は左クリックが点を置く。
             if (const graph::Node* pathNode = CurrentPathNode(); pathNode != nullptr) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_CheckMark));
                 ImGui::TextUnformatted("パス編集中");
@@ -965,8 +937,6 @@ void Application::DrawInfoWindow() {
                           m_renderer.MaterialResolution(),
                           m_renderer.Evaluator().EvaluatedLayerCount(),
                           m_renderer.Evaluator().EvaluatedTileCount());
-        ui::PropertyValue("ペイント", "%zu 枚 / %u^2 / 履歴 %zu 段", m_paintMasks.Count(),
-                          m_paintMasks.Resolution(), m_paintMasks.UndoCount());
         ui::PropertyValue("アンドゥ", "%zu 段 / やり直し %zu 段", m_undoHistory.UndoCount(),
                           m_undoHistory.RedoCount());
         // VRAM は 2 行に分ける。1 行目はプロセス全体（枠に対してどれだけ使っているか）、

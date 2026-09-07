@@ -118,11 +118,6 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
         if (m_materialLibrary.Find(layer.material) == nullptr) {
             layer.material = compositor::kNoMaterialAsset;
         }
-        layer.mask.texture.texture = ValidTexture(layer.mask.texture.texture);
-        layer.heightTexture.texture = ValidTexture(layer.heightTexture.texture);
-        if (m_paintMasks.Find(layer.mask.paint) == nullptr) {
-            layer.mask.paint = compositor::kNoPaintMask;
-        }
     }
     m_graph.Replace(std::move(nodes), snapshot.graphLinks);
     m_graph.SetRoadNetwork(snapshot.roadNetwork);
@@ -141,42 +136,6 @@ void Application::MarkDocumentChanged() {
     // マテリアルの編集はグラフの改版に映らないので、スタック側を直接叩いて
     // 再評価させる（グラフ自体の編集は Revision の変化で再コンパイルされる）。
     m_graphStack.MarkDirty();
-}
-
-// 文書からも履歴からも参照されなくなったペイントマスクを破棄する。
-//
-// レイヤーを消したときにすぐ捨ててしまうと、アンドゥで戻したときに
-// 描いた内容が失われる。参照が完全に無くなるまで持っておき、ここで回収する。
-void Application::SweepPaintMasks() {
-    if (m_paintMasks.Count() == 0) {
-        return;
-    }
-
-    std::vector<compositor::PaintMaskId> referenced;
-    const auto collectNodes = [&referenced](const std::vector<graph::Node>& nodes) {
-        for (const graph::Node& node : nodes) {
-            const auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings);
-            if (settings != nullptr &&
-                settings->layer.mask.paint != compositor::kNoPaintMask) {
-                referenced.push_back(settings->layer.mask.paint);
-            }
-        }
-    };
-
-    collectNodes(m_graph.Nodes());
-    collectNodes(m_committed.graphNodes);
-    for (const DocumentSnapshot& snapshot : m_undoHistory.UndoStack()) {
-        collectNodes(snapshot.graphNodes);
-    }
-    for (const DocumentSnapshot& snapshot : m_undoHistory.RedoStack()) {
-        collectNodes(snapshot.graphNodes);
-    }
-
-    for (const compositor::PaintMaskId id : m_paintMasks.Ids()) {
-        if (std::find(referenced.begin(), referenced.end(), id) == referenced.end()) {
-            m_paintMasks.Remove(m_device, id);
-        }
-    }
 }
 
 }  // namespace tg

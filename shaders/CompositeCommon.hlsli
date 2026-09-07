@@ -36,7 +36,6 @@ uint UnpackChannel(uint packed, uint slotIndex)
 #define TG_CHANNEL_SLOT_METALLIC  1u
 #define TG_CHANNEL_SLOT_AO        2u
 #define TG_CHANNEL_SLOT_HEIGHT    3u
-#define TG_CHANNEL_SLOT_MASK      4u
 #define TG_CHANNEL_SLOT_OPACITY   5u
 
 float3 DecodeTangentNormal(float2 xy)
@@ -67,63 +66,11 @@ float3 FlattenNormal(float3 normal, float amount)
     return normalize(float3(normal.xy * amount, normal.z));
 }
 
-// ハイトベースブレンド。
-//   下地の重み = 1 - mask、レイヤーの重み = mask として、
-//   「高さ + 重み」の大きいほうが上に出る。
-//   range を小さくすると硬い置き換え、大きくするとハイトの影響が薄れて
-//   マスクによる従来の合成に近づく。
-float HeightBlendWeight(float baseHeight, float layerHeight, float mask, float range)
-{
-    // **高さだけで決めた重み。** 起伏が拮抗する所で 0.5、レイヤーが range 分
-    // 勝てば 1、負ければ 0。境界を材質の凹凸なりにぎざぎざさせるのがこの項の役目。
-    const float t = saturate(0.5f + (layerHeight - baseHeight) / (2.0f * max(range, 1e-4f)));
-
-    // **マスクは被覆率。** t を上下にずらすことで、高い所から順に出る。
-    // mask = 0 なら必ず 0、mask = 1 なら必ず 1（t は 0〜1 なので端は必ず飽和する）。
-    //
-    // 以前はマスクを高さと同じ土俵（`下地 + (1 - mask)` と `レイヤー + mask`）で
-    // 競合させていた。端の値は同じだが、**中間はマスク 0.5 付近の
-    // 狭いしきい値として振る舞う**（沿わせたレイヤーでは概ね 0.43〜0.58）。
-    // 0〜0.4 しか持たないマスク（堆積の厚みなど）がまったく絵に出ず、
-    // 「マスクが効かない」と見えるため、被覆率として素直に効く形へ変えた。
-    // シェイプが `weight = mask` なのとも揃う。
-    return saturate(t + (mask * 2.0f - 1.0f));
-}
-
-// マスクのカーブ。
-//   contrast = 1  線形（そのまま）
-//   contrast > 1  S 字を強め、0 / 1 に寄せる（境界がはっきりする）
-//   contrast < 1  中間へ寄せ、全体をなだらかにする
-float ApplyMaskCurve(float value, float contrast)
-{
-    const float x = saturate(value);
-
-    if (contrast > 1.0f)
-    {
-        const float smooth = x * x * (3.0f - 2.0f * x);
-        return saturate(lerp(x, smooth, saturate(contrast - 1.0f)));
-    }
-    if (contrast < 1.0f)
-    {
-        return saturate(lerp(x, 0.5f, saturate(1.0f - contrast)));
-    }
-    return x;
-}
-
-// マスクのレベル調整と反転。
-float ApplyMaskLevels(float value, float low, float high, bool invert)
-{
-    const float range = max(high - low, 1e-4f);
-    float result = saturate((value - low) / range);
-    return invert ? (1.0f - result) : result;
-}
-
 // 合成の Height（正方形）を、解析グリッド（gridResolution^2）の 1 セルへ落とす。
 //
 // **セルが覆う矩形の平均を取る**（中心 1 点の間引きではない）。合成の Height には
 // 材質スケールの凹凸（下地サーフェスのハイトマップ）が入っていて、間引くと
-// それが粗いグリッドへエイリアスして、堆積 / 積雪 / 川筋のマスクに
-// 「見えているハイトと一致しない細かい模様」として出る。
+// それが粗いグリッドへエイリアスして「見えているハイトと一致しない細かい模様」が出る。
 // グリッドのほうが細かい（平均する相手が無い）ときは線形補間で拾う。
 // 矩形の中心は (cell + 0.5) × 比 で、間引いていた頃のサンプル位置と同じ。
 float DownsampleHeight(Texture2D<float> source, uint2 cell, uint gridResolution)

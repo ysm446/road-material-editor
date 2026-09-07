@@ -1,35 +1,22 @@
-// レイヤー（グラフノードの設定）のプロパティ行とペイントマスクの節。
+// レイヤー（Surface ノードの設定）のプロパティ行。
 // レイヤーパネルは廃止済みで、グラフパネルの下段から使われる。
 
 #include "app/Application.h"
 
 #include "app/ApplicationUiHelpers.h"
-#include "core/ColorSpace.h"
-#include "core/FileDialog.h"
-#include "core/Log.h"
-#include "io/ProjectIo.h"
 #include "ui/UiStyle.h"
 
 #include <imgui.h>
-#include <imgui_internal.h>
 
-#include <DirectXMath.h>
-
-#include <algorithm>
-#include <cmath>
 #include <cstdio>
-#include <filesystem>
-#include <string>
-#include <vector>
 
 namespace tg {
 
 // レイヤー 1 枚ぶんのプロパティ行。グラフパネルの下段から使う。
 // 変更の記録（アンドゥ / グラフの再コンパイル）は呼び出し側で行う。
-bool Application::DrawLayerSettings(compositor::MaterialLayer& layer, bool isBase,
-                                   bool maskFromNode) {
-    // 既定値マーカーは種類ごとの既定値を参照する（追加時の初期値と揃える）。
-    const compositor::MaterialLayer& defaults = DefaultLayerFor(layer.kind);
+bool Application::DrawLayerSettings(compositor::MaterialLayer& layer) {
+    // 既定値マーカーは追加時の初期値と揃える。
+    const compositor::MaterialLayer& defaults = kDefaultLayer;
     bool changed = false;
 
     ui::SectionHeader("基本");
@@ -61,82 +48,7 @@ bool Application::DrawLayerSettings(compositor::MaterialLayer& layer, bool isBas
         ui::HintText("色とサーフェスの値はマテリアル側で決まる");
     }
 
-    // マスクは「下地と競合させるための不透明度」。
-    // 旧地形の合成用なので、Mask 入力が繋がっているか設定済みのときだけ出す
-    // （Road / Shoulder のスロットへ繋ぐ材質では Road Mask を使う）。
-    const bool legacyMaskInUse = maskFromNode || layer.mask.source != compositor::MaskSource::Constant ||
-                                 layer.mask.constant < 1.0f;
-    if (legacyMaskInUse) {
-        ui::SectionHeader("マスク");
-        if (ui::BeginPropertyTable("layerMaskRows")) {
-            // Mask 入力にノードが繋がっているときは、そちらが出どころ。
-            if (maskFromNode) {
-                ui::PropertyValue("ソース", "%s", "画像（Mask 入力）");
-            } else {
-                int maskSource = static_cast<int>(layer.mask.source);
-                if (ui::PropertyCombo("ソース", &maskSource, kMaskSourceLabels,
-                                      IM_ARRAYSIZE(kMaskSourceLabels),
-                                      static_cast<int>(kDefaultLayer.mask.source),
-                                      "マスクは被覆率。1.0 で全面を覆い、"
-                                      "中間はこのレイヤーの起伏の高い所から順に出る")) {
-                    layer.mask.source = static_cast<compositor::MaskSource>(maskSource);
-                    changed = true;
-                }
-            }
-            changed |= ui::PropertyFloat("定数", &layer.mask.constant, 0.0f, 1.0f,
-                                         kDefaultLayer.mask.constant,
-                                         "ソースの値に掛ける係数", "%.2f");
-
-            if (!maskFromNode && layer.mask.source == compositor::MaskSource::Texture) {
-                changed |= DrawMapSlotRow("画像", layer.mask.texture, m_textureLibrary);
-            }
-            if (!maskFromNode && layer.mask.source == compositor::MaskSource::Noise) {
-                changed |= DrawNoiseRows(layer.mask.noise, kDefaultLayer.mask.noise);
-            }
-            if (compositor::IsDerivedMaskSource(layer.mask.source)) {
-                changed |= ui::PropertyFloat("強調", &layer.mask.derivedScale, 0.0f, 8.0f,
-                                             kDefaultLayer.mask.derivedScale,
-                                             "下地から作った値の効き方", "%.2f");
-            }
-
-            changed |= ui::PropertyFloat("カーブ", &layer.mask.contrast, 0.0f, 4.0f,
-                                         kDefaultLayer.mask.contrast,
-                                         "1 で線形。大きいほど境界がはっきりする", "%.2f");
-            changed |= ui::PropertyFloat("レベル下限", &layer.mask.levelsLow, 0.0f, 1.0f,
-                                         kDefaultLayer.mask.levelsLow, nullptr, "%.2f");
-            changed |= ui::PropertyFloat("レベル上限", &layer.mask.levelsHigh, 0.0f, 1.0f,
-                                         kDefaultLayer.mask.levelsHigh, nullptr, "%.2f");
-            changed |= ui::PropertyBool("反転", &layer.mask.invert, kDefaultLayer.mask.invert);
-            ui::EndPropertyTable();
-        }
-
-        if (isBase) {
-            ui::HintText("一番下のレイヤーは下地なのでマスクは効かない");
-        }
-        switch (layer.mask.source) {
-            case compositor::MaskSource::Slope:
-                ui::HintText("急な面ほど 1 に近づく");
-                break;
-            case compositor::MaskSource::Curvature:
-                ui::HintText("0.5 が平坦。凸で大、凹で小");
-                break;
-            case compositor::MaskSource::Cavity:
-                ui::HintText("窪んでいるほど 1 に近づく");
-                break;
-            case compositor::MaskSource::Height:
-                ui::HintText("下地が高いほど 1 に近づく");
-                break;
-            default:
-                break;
-        }
-    }
-
-    if (layer.mask.source == compositor::MaskSource::Paint) {
-        ui::SectionHeader("ペイント");
-        changed |= DrawPaintSection(layer);
-    }
-
-    // マテリアルの割り当てと合成の調整。
+    // マテリアルの割り当て。
     ui::SectionHeader("マテリアル");
     if (ui::BeginPropertyTable("layerMaterialRows")) {
         changed |= DrawMaterialSlotRow("マテリアル", layer.material, m_materialLibrary);
@@ -152,14 +64,6 @@ bool Application::DrawLayerSettings(compositor::MaterialLayer& layer, bool isBas
 
     ui::SectionHeader("合成");
     if (ui::BeginPropertyTable("layerBlendRows")) {
-        changed |= ui::PropertyFloat("境界の柔らかさ", &layer.blendRange, 0.0f, 1.0f,
-                                     defaults.blendRange,
-                                     "0 に近いほど硬い置き換えになる", "%.2f");
-        changed |= ui::PropertyBool("下地に沿わせる", &layer.wrapToUnderlying,
-                                    defaults.wrapToUnderlying,
-                                    "下地の形を保ったまま表面を被せる（コーティング）。"
-                                    "基準の高さの 0.5 からのずれが被せ物の厚みになる");
-
         ui::PropertyLabel("書き込み", "このレイヤーが書き込むチャンネル");
         for (uint32_t i = 0; i < IM_ARRAYSIZE(kChannelLabels); ++i) {
             bool enabled = (layer.channelMask & (1u << i)) != 0u;
@@ -175,87 +79,6 @@ bool Application::DrawLayerSettings(compositor::MaterialLayer& layer, bool isBas
         ui::EndPropertyTable();
     }
 
-    return changed;
-}
-
-bool Application::DrawPaintSection(compositor::MaterialLayer& layer) {
-    bool changed = false;
-
-    if (layer.mask.paint == compositor::kNoPaintMask) {
-        ui::HintText("このレイヤーにはまだペイントマスクがない");
-        if (ui::Button("マスクを作成", ui::kWideButtonWidth)) {
-            layer.mask.paint = m_paintMasks.Add(m_device, 0.0f);
-            m_paintMode = (layer.mask.paint != compositor::kNoPaintMask);
-            changed = true;
-        }
-        return changed;
-    }
-
-    if (ui::BeginPropertyTable("layerPaintRows")) {
-        ui::PropertyBool("ペイントモード", &m_paintMode, false,
-                         "オンの間、ビューポートのドラッグがブラシになる");
-        ui::PropertyFloat("ブラシ半径", &m_brush.radiusPixels, 4.0f, 256.0f,
-                          kDefaultBrush.radiusPixels,
-                          "画面上の半径。視点や UV スケールを変えても見た目の大きさは変わらない",
-                          "%.0f px");
-        ui::PropertyFloat("強さ", &m_brush.strength, 0.01f, 1.0f, kDefaultBrush.strength,
-                          "1 回の適用で足す量", "%.2f");
-        ui::PropertyFloat("減衰", &m_brush.falloff, 0.2f, 8.0f, kDefaultBrush.falloff,
-                          "1 で線形。大きいほど中心に集中する", "%.2f");
-        ui::PropertyBool("消しゴム", &m_brush.erase, kDefaultBrush.erase,
-                         "左右のドラッグの意味を入れ替える");
-
-        ui::PropertyLabelEmpty("paintFill");
-        if (ui::Button("全消去")) {
-            m_paintMasks.QueueSnapshot(m_device, layer.mask.paint);
-            m_paintMasks.QueueFill(layer.mask.paint, 0.0f);
-        }
-        ImGui::SameLine();
-        if (ui::Button("全塗り")) {
-            m_paintMasks.QueueSnapshot(m_device, layer.mask.paint);
-            m_paintMasks.QueueFill(layer.mask.paint, 1.0f);
-        }
-        ui::PropertyEnd();
-
-        ui::PropertyLabelEmpty("paintHistory");
-        ImGui::BeginDisabled(!m_paintMasks.CanUndo());
-        if (ui::Button("アンドゥ")) {
-            m_paintMasks.QueueUndo(m_device);
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!m_paintMasks.CanRedo());
-        if (ui::Button("リドゥ")) {
-            m_paintMasks.QueueRedo(m_device);
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("(%zu 段)", m_paintMasks.UndoCount());
-        ui::PropertyEnd();
-
-        // 解像度はすべてのペイントマスクで共通。
-        int resolution = ResolutionIndex(m_paintMasks.RequestedResolution());
-        if (ui::PropertyCombo("解像度", &resolution, kResolutionLabels,
-                              IM_ARRAYSIZE(kResolutionLabels), 1,
-                              "全ペイントマスクを拡大縮小する。履歴は破棄される")) {
-            m_paintMasks.RequestResolution(kResolutionValues[resolution]);
-        }
-
-        ui::PropertyLabelEmpty("paintDiscard");
-        if (ui::Button("マスクを破棄", ui::kWideButtonWidth)) {
-            // 実体はここでは消さない。履歴から参照されている間は SweepPaintMasks が
-            // 持っておき、アンドゥで戻したときに描いた内容が失われないようにする
-            // （RemoveLayer と同じ方針）。
-            layer.mask.paint = compositor::kNoPaintMask;
-            m_paintMode = false;
-            changed = true;
-        }
-        ui::PropertyEnd();
-        ui::EndPropertyTable();
-    }
-
-    ui::HintText("左ドラッグで塗る / 右ドラッグで消す / Alt + 左ドラッグで視点を回す");
     return changed;
 }
 

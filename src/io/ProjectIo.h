@@ -1,7 +1,6 @@
 #pragma once
 
 #include "compositor/MaterialLibrary.h"
-#include "compositor/PaintMask.h"
 #include "compositor/TextureLibrary.h"
 #include "graph/NodeGraph.h"
 #include "renderer/PreviewRenderer.h"
@@ -21,7 +20,6 @@ namespace tg::io {
 struct ProjectRefs {
     compositor::TextureLibrary& textures;
     compositor::MaterialLibrary& materials;
-    compositor::PaintMaskStore& paintMasks;
     renderer::SkyLibrary& skies;
     renderer::PreviewRenderer& renderer;
     graph::NodeGraph& graph;
@@ -31,11 +29,10 @@ struct ProjectRefs {
 //
 // マテリアルの構造は丸ごと埋め込む。開くのに別のマテリアルファイルは要らない。
 // テクスチャの画像だけは参照で持ち、パスはプロジェクトからの相対で書く。
-// ペイントマスクは手続きで再現できないので、`<名前>.assets/` へ PNG で書き出す。
 //
-// どちらも GPU 待機を伴うため、**フレームの外で呼ぶこと。**
+// 読み込みは GPU 待機を伴うため、**フレームの外で呼ぶこと。**
 
-bool SaveProject(const std::filesystem::path& path, rhi::Device& device, const ProjectRefs& refs);
+bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs);
 bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
                  rhi::PipelineCache& pipelineCache, const ProjectRefs& refs);
 

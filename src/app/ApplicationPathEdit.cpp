@@ -2441,7 +2441,6 @@ bool Application::BakePathRouteTerrain(const graph::Node& node) {
     graph::CompiledGraph compiled = m_graph.CompileLayersTo(node.id);
     compositor::MaterialStack stack;
     stack.Layers() = std::move(compiled.layers);
-    stack.MaskOps() = std::move(compiled.maskOps);
     const float sizeMeters = m_renderer.PlaneSize();
     const float heightMeters = m_renderer.DisplacementScale();
     stack.SetTerrainScale(sizeMeters, heightMeters);
@@ -2467,8 +2466,7 @@ bool Application::BakePathRouteTerrain(const graph::Node& node) {
     const bool submitted = m_device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
         PIXBeginEvent(commandList, PIX_COLOR(120, 200, 240), "PathRouteTerrain");
         evaluated = m_pathRouteEvaluator.Evaluate(m_device, m_pipelineCache, commandList, stack,
-                                                  m_textureLibrary, m_materialLibrary,
-                                                  m_paintMasks, tiles);
+                                                  m_textureLibrary, m_materialLibrary, tiles);
         PIXEndEvent(commandList);
     });
     if (!submitted || !evaluated ||

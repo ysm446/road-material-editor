@@ -151,19 +151,7 @@ const char* const kTextureChannelNames[] = {"r", "g", "b", "a"};
 const char* const kValueSourceNames[] = {"constant", "noise", "texture"};
 const char* const kNoiseTypeNames[] = {"fbm",    "ridged", "worley",
                                       "perlin", "billow", "cracks"};
-// マスクのソース。`node` はグラフのマスクノードの結果を指す
-// （どのノードかはグラフの繋ぎ方から決まるので、ここには書かない）。
-const char* const kMaskSourceNames[] = {"constant", "noise",     "texture", "height",
-                                        "slope",    "curvature", "cavity",  "paint",
-                                        "node"};
 const char* const kChannelNames[] = {"baseColor", "normal", "surface", "height"};
-const char* const kLayerKindNames[] = {"surface",   "shape", "liquid", "blur",    "sediment",
-                                       "crumbling", "snow",  "river",  "droplet", "scatter"};
-// 散布の形 / 向き。compositor::ScatterShape / ScatterOrientation の並びと一致させること。
-const char* const kScatterShapeNames[] = {"hemisphere", "cone"};
-const char* const kScatterOrientationNames[] = {"flat", "followGround", "slopeOriented"};
-// 岩片の形。compositor::RockStyle の並びと一致させること。
-const char* const kRockStyleNames[] = {"classic", "polygonal", "shard"};
 const char* const kTonemapNames[] = {"none", "reinhard", "aces"};
 const char* const kSkySourceNames[] = {"procedural", "hdri"};
 const char* const kApertureShapeNames[] = {"circle", "triangle", "hexagon", "octagon"};
@@ -579,46 +567,11 @@ graph::PathSettings ReadPath(const json& parent, const char* key) {
     return path;
 }
 
-json WriteMask(const compositor::LayerMask& mask, const TextureWriter& writeTexture,
-               const std::function<json(compositor::PaintMaskId)>& writePaint) {
-    json node;
-    node["source"] = EnumName(kMaskSourceNames, static_cast<uint32_t>(mask.source));
-    node["constant"] = mask.constant;
-    node["noise"] = WriteNoise(mask.noise);
-    node["derivedScale"] = mask.derivedScale;
-    node["contrast"] = mask.contrast;
-    node["levelsLow"] = mask.levelsLow;
-    node["levelsHigh"] = mask.levelsHigh;
-    node["invert"] = mask.invert;
-    node["paint"] = writePaint(mask.paint);
-    node["texture"] = WriteMapSlot(mask.texture, writeTexture);
-    return node;
-}
-
-void ReadMask(const json& node, compositor::LayerMask& mask, const TextureReader& readTexture,
-              const std::function<compositor::PaintMaskId(const json&)>& readPaint) {
-    const compositor::LayerMask defaults;
-    mask.source = static_cast<compositor::MaskSource>(
-        EnumValue(kMaskSourceNames, node, "source", static_cast<uint32_t>(defaults.source)));
-    mask.constant = ReadFloat(node, "constant", defaults.constant);
-    mask.noise = ReadNoise(node, "noise", defaults.noise);
-    mask.derivedScale = ReadFloat(node, "derivedScale", defaults.derivedScale);
-    mask.contrast = ReadFloat(node, "contrast", defaults.contrast);
-    mask.levelsLow = ReadFloat(node, "levelsLow", defaults.levelsLow);
-    mask.levelsHigh = ReadFloat(node, "levelsHigh", defaults.levelsHigh);
-    mask.invert = ReadBool(node, "invert", defaults.invert);
-    const json* paint = FindMember(node, "paint");
-    mask.paint = (paint != nullptr) ? readPaint(*paint) : compositor::kNoPaintMask;
-    mask.texture = ReadMapSlot(node, "texture", readTexture);
-}
-
-json WriteLayer(const compositor::MaterialLayer& layer, const TextureWriter& writeTexture,
-                const std::function<json(compositor::MaterialAssetId)>& writeMaterial,
-                const std::function<json(compositor::PaintMaskId)>& writePaint) {
+json WriteLayer(const compositor::MaterialLayer& layer,
+                const std::function<json(compositor::MaterialAssetId)>& writeMaterial) {
     json node;
     node["name"] = layer.name;
     node["enabled"] = layer.enabled;
-    node["kind"] = EnumName(kLayerKindNames, static_cast<uint32_t>(layer.kind));
     node["channels"] = WriteChannelMask(layer.channelMask);
     node["material"] = writeMaterial(layer.material);
 
@@ -634,129 +587,20 @@ json WriteLayer(const compositor::MaterialLayer& layer, const TextureWriter& wri
     height["base"] = layer.heightBase;
     height["gain"] = layer.heightGain;
     height["noise"] = WriteNoise(layer.heightNoise);
-    // レイヤー直結のハイトマップ（シェイプ用）。マテリアルがあれば使われない。
-    height["texture"] = WriteMapSlot(layer.heightTexture, writeTexture);
     node["height"] = std::move(height);
 
-    // 堆積（堆積レイヤーだけが使う）。
-    json sediment;
-    sediment["emission"] = layer.sediment.emissionMeters;
-    sediment["emissionTime"] = layer.sediment.emissionTime;
-    sediment["detail"] = layer.sediment.detailMeters;
-    sediment["iterations"] = layer.sediment.iterations;
-    sediment["stabilization"] = layer.sediment.stabilization;
-    sediment["viscosity"] = layer.sediment.viscosity;
-    sediment["convertTerrain"] = layer.sediment.convertTerrain;
-    sediment["resolution"] = layer.sediment.resolution;
-    sediment["maskContrast"] = layer.sediment.maskContrast;
-    sediment["maskThicknessMeters"] = layer.sediment.maskThicknessMeters;
-    node["sediment"] = std::move(sediment);
-
-    // 崩落（崩落レイヤーだけが使う）。
-    json crumbling;
-    crumbling["physicsCount"] = layer.crumbling.physicsCount;
-    crumbling["amount"] = layer.crumbling.amount;
-    crumbling["sizeMin"] = layer.crumbling.sizeMinMeters;
-    crumbling["sizeMax"] = layer.crumbling.sizeMaxMeters;
-    crumbling["style"] = EnumName(kRockStyleNames, static_cast<uint32_t>(layer.crumbling.style));
-    crumbling["gravity"] = layer.crumbling.gravity;
-    crumbling["spread"] = layer.crumbling.spread;
-    crumbling["seed"] = layer.crumbling.seed;
-    node["crumbling"] = std::move(crumbling);
-
-    // 積雪（積雪レイヤーだけが使う）。
-    json snow;
-    snow["emission"] = layer.snow.emissionMeters;
-    snow["emissionTime"] = layer.snow.emissionTime;
-    snow["iterations"] = layer.snow.iterations;
-    snow["settlingPasses"] = layer.snow.settlingPasses;
-    snow["motionSlopeDegrees"] = layer.snow.motionSlopeDegrees;
-    snow["transportRate"] = layer.snow.transportRate;
-    snow["surfaceSmoothing"] = layer.snow.surfaceSmoothing;
-    snow["detail"] = layer.snow.detailMeters;
-    snow["resolution"] = layer.snow.resolution;
-    snow["maskThresholdMeters"] = layer.snow.maskThresholdMeters;
-    snow["maskFeatherMeters"] = layer.snow.maskFeatherMeters;
-    node["snow"] = std::move(snow);
-
-    // 河川（河川レイヤーだけが使う）。
-    json river;
-    river["threshold"] = layer.river.threshold;
-    river["detail"] = layer.river.detailMeters;
-    river["concentration"] = layer.river.concentration;
-    river["resolution"] = layer.river.resolution;
-    river["mainWidth"] = layer.river.mainWidthMeters;
-    river["minWidth"] = layer.river.minWidthMeters;
-    river["widthExponent"] = layer.river.widthExponent;
-    river["bedDepth"] = layer.river.bedDepthMeters;
-    river["bankWidth"] = layer.river.bankWidthMeters;
-    river["bankHardness"] = layer.river.bankHardness;
-    river["fillWater"] = layer.river.fillWater;
-    river["minSlope"] = layer.river.minSlope;
-    river["shoreWidth"] = layer.river.shoreWidthMeters;
-    river["shoreHeight"] = layer.river.shoreHeightMeters;
-    river["shoreFeather"] = layer.river.shoreFeather;
-    node["river"] = std::move(river);
-
-    // 水滴侵食（水滴侵食レイヤーだけが使う）。
-    json droplet;
-    droplet["density"] = layer.droplet.dropletDensity;
-    droplet["travel"] = layer.droplet.travelMeters;
-    droplet["erosion"] = layer.droplet.erosionStrength;
-    droplet["deposition"] = layer.droplet.depositionStrength;
-    droplet["inertia"] = layer.droplet.inertia;
-    droplet["minSlope"] = layer.droplet.minSlope;
-    droplet["capacity"] = layer.droplet.sedimentCapacity;
-    droplet["evaporation"] = layer.droplet.evaporationPerMeter;
-    droplet["gravity"] = layer.droplet.gravity;
-    droplet["multigrid"] = layer.droplet.multigrid;
-    droplet["iterations"] = layer.droplet.iterations;
-    droplet["seed"] = layer.droplet.seed;
-    droplet["resolution"] = layer.droplet.resolution;
-    node["droplet"] = std::move(droplet);
-
-    // 散布（散布レイヤーだけが使う）。
-    json scatter;
-    scatter["shape"] = EnumName(kScatterShapeNames, static_cast<uint32_t>(layer.scatter.shape));
-    scatter["orientation"] =
-        EnumName(kScatterOrientationNames, static_cast<uint32_t>(layer.scatter.orientation));
-    scatter["seed"] = layer.scatter.seed;
-    scatter["density"] = layer.scatter.densityMeters;
-    scatter["coverage"] = layer.scatter.coverage;
-    scatter["sizeMin"] = layer.scatter.sizeMinMeters;
-    scatter["sizeMax"] = layer.scatter.sizeMaxMeters;
-    scatter["height"] = layer.scatter.heightMeters;
-    scatter["heightJitter"] = layer.scatter.heightJitter;
-    scatter["rotationVariation"] = layer.scatter.rotationVariation;
-    scatter["aspectVariation"] = layer.scatter.aspectVariation;
-    scatter["smoothness"] = layer.scatter.smoothness;
-    node["scatter"] = std::move(scatter);
-
-    // ぼかし（ブラーレイヤーだけが使う）。
-    json blur;
-    blur["radius"] = layer.blur.radiusMeters;
-    blur["strength"] = layer.blur.strength;
-    blur["iterations"] = layer.blur.iterations;
-    node["blur"] = std::move(blur);
-
-    node["mask"] = WriteMask(layer.mask, writeTexture, writePaint);
-    node["blendRange"] = layer.blendRange;
-    node["wrapToUnderlying"] = layer.wrapToUnderlying;
     node["uvScale"] = layer.uvScale;
     return node;
 }
 
+// 旧地形の種類（kind）・マスク・加工の節は読まない（撤去済み。キーが残っていても無視する）。
 compositor::MaterialLayer ReadLayer(
-    const json& node, const TextureReader& readTexture,
-    const std::function<compositor::MaterialAssetId(const json&)>& readMaterial,
-    const std::function<compositor::PaintMaskId(const json&)>& readPaint) {
+    const json& node,
+    const std::function<compositor::MaterialAssetId(const json&)>& readMaterial) {
     const compositor::MaterialLayer defaults;
     compositor::MaterialLayer layer;
     layer.name = ReadString(node, "name", defaults.name);
     layer.enabled = ReadBool(node, "enabled", defaults.enabled);
-    // kind の無い旧形式（版 2 以前）はサーフェスとして読む。
-    layer.kind = static_cast<compositor::LayerKind>(
-        EnumValue(kLayerKindNames, node, "kind", static_cast<uint32_t>(defaults.kind)));
     layer.channelMask = ReadChannelMask(node, "channels", defaults.channelMask);
     const json* material = FindMember(node, "material");
     layer.material =
@@ -773,7 +617,6 @@ compositor::MaterialLayer ReadLayer(
             kValueSourceNames, *height, "source", static_cast<uint32_t>(defaults.heightSource)));
         layer.heightBase = ReadFloat(*height, "base", defaults.heightBase);
         layer.heightNoise = ReadNoise(*height, "noise", defaults.heightNoise);
-        layer.heightTexture = ReadMapSlot(*height, "texture", readTexture);
 
         if (FindMember(*height, "gain") != nullptr) {
             layer.heightGain = ReadFloat(*height, "gain", defaults.heightGain);
@@ -792,155 +635,6 @@ compositor::MaterialLayer ReadLayer(
         }
     }
 
-    if (const json* sediment = FindMember(node, "sediment");
-        sediment != nullptr && sediment->is_object()) {
-        layer.sediment.emissionMeters =
-            ReadFloat(*sediment, "emission", defaults.sediment.emissionMeters);
-        layer.sediment.emissionTime =
-            ReadFloat(*sediment, "emissionTime", defaults.sediment.emissionTime);
-        layer.sediment.detailMeters =
-            ReadFloat(*sediment, "detail", defaults.sediment.detailMeters);
-        layer.sediment.iterations =
-            ReadInt(*sediment, "iterations", defaults.sediment.iterations);
-        layer.sediment.stabilization =
-            ReadInt(*sediment, "stabilization", defaults.sediment.stabilization);
-        layer.sediment.viscosity =
-            ReadFloat(*sediment, "viscosity", defaults.sediment.viscosity);
-        layer.sediment.convertTerrain =
-            ReadBool(*sediment, "convertTerrain", defaults.sediment.convertTerrain);
-        layer.sediment.resolution = static_cast<uint32_t>(ReadInt(
-            *sediment, "resolution", static_cast<int>(defaults.sediment.resolution)));
-        layer.sediment.maskContrast =
-            ReadFloat(*sediment, "maskContrast", defaults.sediment.maskContrast);
-        layer.sediment.maskThicknessMeters = ReadFloat(*sediment, "maskThicknessMeters",
-                                                       defaults.sediment.maskThicknessMeters);
-    }
-
-    if (const json* snow = FindMember(node, "snow"); snow != nullptr && snow->is_object()) {
-        layer.snow.emissionMeters = ReadFloat(*snow, "emission", defaults.snow.emissionMeters);
-        layer.snow.emissionTime =
-            ReadFloat(*snow, "emissionTime", defaults.snow.emissionTime);
-        layer.snow.iterations = ReadInt(*snow, "iterations", defaults.snow.iterations);
-        layer.snow.settlingPasses =
-            ReadInt(*snow, "settlingPasses", defaults.snow.settlingPasses);
-        layer.snow.motionSlopeDegrees =
-            ReadFloat(*snow, "motionSlopeDegrees", defaults.snow.motionSlopeDegrees);
-        layer.snow.transportRate =
-            ReadFloat(*snow, "transportRate", defaults.snow.transportRate);
-        layer.snow.surfaceSmoothing =
-            ReadFloat(*snow, "surfaceSmoothing", defaults.snow.surfaceSmoothing);
-        layer.snow.detailMeters = ReadFloat(*snow, "detail", defaults.snow.detailMeters);
-        layer.snow.resolution = static_cast<uint32_t>(
-            ReadInt(*snow, "resolution", static_cast<int>(defaults.snow.resolution)));
-        layer.snow.maskThresholdMeters =
-            ReadFloat(*snow, "maskThresholdMeters", defaults.snow.maskThresholdMeters);
-        layer.snow.maskFeatherMeters =
-            ReadFloat(*snow, "maskFeatherMeters", defaults.snow.maskFeatherMeters);
-    }
-
-    if (const json* river = FindMember(node, "river"); river != nullptr && river->is_object()) {
-        layer.river.threshold = ReadFloat(*river, "threshold", defaults.river.threshold);
-        layer.river.detailMeters = ReadFloat(*river, "detail", defaults.river.detailMeters);
-        layer.river.concentration =
-            ReadFloat(*river, "concentration", defaults.river.concentration);
-        layer.river.resolution = static_cast<uint32_t>(
-            ReadInt(*river, "resolution", static_cast<int>(defaults.river.resolution)));
-        layer.river.mainWidthMeters =
-            ReadFloat(*river, "mainWidth", defaults.river.mainWidthMeters);
-        layer.river.minWidthMeters = ReadFloat(*river, "minWidth", defaults.river.minWidthMeters);
-        layer.river.widthExponent =
-            ReadFloat(*river, "widthExponent", defaults.river.widthExponent);
-        layer.river.bedDepthMeters = ReadFloat(*river, "bedDepth", defaults.river.bedDepthMeters);
-        layer.river.bankWidthMeters =
-            ReadFloat(*river, "bankWidth", defaults.river.bankWidthMeters);
-        layer.river.bankHardness = ReadFloat(*river, "bankHardness", defaults.river.bankHardness);
-        layer.river.fillWater = ReadBool(*river, "fillWater", defaults.river.fillWater);
-        layer.river.minSlope = ReadFloat(*river, "minSlope", defaults.river.minSlope);
-        layer.river.shoreWidthMeters =
-            ReadFloat(*river, "shoreWidth", defaults.river.shoreWidthMeters);
-        layer.river.shoreHeightMeters =
-            ReadFloat(*river, "shoreHeight", defaults.river.shoreHeightMeters);
-        layer.river.shoreFeather = ReadFloat(*river, "shoreFeather", defaults.river.shoreFeather);
-    }
-
-    if (const json* crumbling = FindMember(node, "crumbling");
-        crumbling != nullptr && crumbling->is_object()) {
-        layer.crumbling.physicsCount =
-            ReadInt(*crumbling, "physicsCount", defaults.crumbling.physicsCount);
-        layer.crumbling.amount = ReadFloat(*crumbling, "amount", defaults.crumbling.amount);
-        layer.crumbling.sizeMinMeters =
-            ReadFloat(*crumbling, "sizeMin", defaults.crumbling.sizeMinMeters);
-        layer.crumbling.sizeMaxMeters =
-            ReadFloat(*crumbling, "sizeMax", defaults.crumbling.sizeMaxMeters);
-        layer.crumbling.style = static_cast<compositor::RockStyle>(EnumValue(
-            kRockStyleNames, *crumbling, "style",
-            static_cast<uint32_t>(defaults.crumbling.style)));
-        layer.crumbling.gravity = ReadFloat(*crumbling, "gravity", defaults.crumbling.gravity);
-        layer.crumbling.spread = ReadFloat(*crumbling, "spread", defaults.crumbling.spread);
-        layer.crumbling.seed = ReadInt(*crumbling, "seed", defaults.crumbling.seed);
-    }
-
-    if (const json* droplet = FindMember(node, "droplet");
-        droplet != nullptr && droplet->is_object()) {
-        layer.droplet.dropletDensity =
-            ReadFloat(*droplet, "density", defaults.droplet.dropletDensity);
-        layer.droplet.travelMeters = ReadFloat(*droplet, "travel", defaults.droplet.travelMeters);
-        layer.droplet.erosionStrength =
-            ReadFloat(*droplet, "erosion", defaults.droplet.erosionStrength);
-        layer.droplet.depositionStrength =
-            ReadFloat(*droplet, "deposition", defaults.droplet.depositionStrength);
-        layer.droplet.inertia = ReadFloat(*droplet, "inertia", defaults.droplet.inertia);
-        layer.droplet.minSlope = ReadFloat(*droplet, "minSlope", defaults.droplet.minSlope);
-        layer.droplet.sedimentCapacity =
-            ReadFloat(*droplet, "capacity", defaults.droplet.sedimentCapacity);
-        layer.droplet.evaporationPerMeter =
-            ReadFloat(*droplet, "evaporation", defaults.droplet.evaporationPerMeter);
-        layer.droplet.gravity = ReadFloat(*droplet, "gravity", defaults.droplet.gravity);
-        layer.droplet.multigrid = ReadBool(*droplet, "multigrid", defaults.droplet.multigrid);
-        layer.droplet.iterations = ReadInt(*droplet, "iterations", defaults.droplet.iterations);
-        layer.droplet.seed = ReadInt(*droplet, "seed", defaults.droplet.seed);
-        layer.droplet.resolution = static_cast<uint32_t>(
-            ReadInt(*droplet, "resolution", static_cast<int>(defaults.droplet.resolution)));
-    }
-
-    if (const json* scatter = FindMember(node, "scatter");
-        scatter != nullptr && scatter->is_object()) {
-        layer.scatter.shape = static_cast<compositor::ScatterShape>(
-            EnumValue(kScatterShapeNames, *scatter, "shape",
-                      static_cast<uint32_t>(defaults.scatter.shape)));
-        layer.scatter.orientation = static_cast<compositor::ScatterOrientation>(
-            EnumValue(kScatterOrientationNames, *scatter, "orientation",
-                      static_cast<uint32_t>(defaults.scatter.orientation)));
-        layer.scatter.seed = ReadInt(*scatter, "seed", defaults.scatter.seed);
-        layer.scatter.densityMeters =
-            ReadFloat(*scatter, "density", defaults.scatter.densityMeters);
-        layer.scatter.coverage = ReadFloat(*scatter, "coverage", defaults.scatter.coverage);
-        layer.scatter.sizeMinMeters =
-            ReadFloat(*scatter, "sizeMin", defaults.scatter.sizeMinMeters);
-        layer.scatter.sizeMaxMeters =
-            ReadFloat(*scatter, "sizeMax", defaults.scatter.sizeMaxMeters);
-        layer.scatter.heightMeters = ReadFloat(*scatter, "height", defaults.scatter.heightMeters);
-        layer.scatter.heightJitter =
-            ReadFloat(*scatter, "heightJitter", defaults.scatter.heightJitter);
-        layer.scatter.rotationVariation =
-            ReadFloat(*scatter, "rotationVariation", defaults.scatter.rotationVariation);
-        layer.scatter.aspectVariation =
-            ReadFloat(*scatter, "aspectVariation", defaults.scatter.aspectVariation);
-        layer.scatter.smoothness =
-            ReadFloat(*scatter, "smoothness", defaults.scatter.smoothness);
-    }
-
-    if (const json* blur = FindMember(node, "blur"); blur != nullptr && blur->is_object()) {
-        layer.blur.radiusMeters = ReadFloat(*blur, "radius", defaults.blur.radiusMeters);
-        layer.blur.strength = ReadFloat(*blur, "strength", defaults.blur.strength);
-        layer.blur.iterations = ReadInt(*blur, "iterations", defaults.blur.iterations);
-    }
-
-    if (const json* mask = FindMember(node, "mask"); mask != nullptr && mask->is_object()) {
-        ReadMask(*mask, layer.mask, readTexture, readPaint);
-    }
-    layer.blendRange = ReadFloat(node, "blendRange", defaults.blendRange);
-    layer.wrapToUnderlying = ReadBool(node, "wrapToUnderlying", defaults.wrapToUnderlying);
     layer.uvScale = ReadFloat(node, "uvScale", defaults.uvScale);
     return layer;
 }
@@ -951,9 +645,8 @@ compositor::MaterialLayer ReadLayer(
 // （「列挙は名前で書く」）。ピンはノードの定義から再生成するので、
 // ファイルには ID の並びだけを持つ（リンクがピン ID を参照するため）。
 
-json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTexture,
-                const std::function<json(compositor::MaterialAssetId)>& writeMaterial,
-                const std::function<json(compositor::PaintMaskId)>& writePaint) {
+json WriteGraph(const graph::NodeGraph& graphData,
+                const std::function<json(compositor::MaterialAssetId)>& writeMaterial) {
     json out;
     json nodes = json::array();
     for (const graph::Node& node : graphData.Nodes()) {
@@ -976,7 +669,7 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
         }
         item["outputs"] = std::move(outputs);
         if (const auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings)) {
-            item["layer"] = WriteLayer(settings->layer, writeTexture, writeMaterial, writePaint);
+            item["layer"] = WriteLayer(settings->layer, writeMaterial);
         } else if (const auto* road = std::get_if<graph::RoadNodeSettings>(&node.settings)) {
             item["road"] = {{"width", road->widthMeters}, {"uvRepeat", road->uvRepeatMeters},
                             {"lanesForward", road->lanesForward}, {"lanesBackward", road->lanesBackward},
@@ -1085,9 +778,8 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
 
 // 戻り値はノードを 1 つ以上読めたか。空のグラフ節は「グラフ未使用」とみなし、
 // 呼び出し側が旧 layers からの移行に切り替える。
-bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReader& readTexture,
-               const std::function<compositor::MaterialAssetId(const json&)>& readMaterial,
-               const std::function<compositor::PaintMaskId(const json&)>& readPaint) {
+bool ReadGraph(const json& node, graph::NodeGraph& graphData,
+               const std::function<compositor::MaterialAssetId(const json&)>& readMaterial) {
     std::vector<graph::Node> nodes;
     std::vector<graph::Link> links;
     graph::GraphId maxId = 0;
@@ -1180,10 +872,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                 graph::LayerNodeSettings settings;
                 if (const json* layer = FindMember(item, "layer");
                     layer != nullptr && layer->is_object()) {
-                    settings.layer = ReadLayer(*layer, readTexture, readMaterial, readPaint);
+                    settings.layer = ReadLayer(*layer, readMaterial);
                 }
-                // 種類とレイヤー種別は常に一致させる（ファイルの食い違いは種類を信じる）。
-                settings.layer.kind = graph::LayerKindFor(created.kind);
                 created.settings = std::move(settings);
             } else if (created.kind == graph::NodeKind::Road) {
                 graph::RoadNodeSettings settings;
@@ -1418,7 +1108,6 @@ graph::NodeGraph MigrateLayersToGraph(std::vector<compositor::MaterialLayer> lay
         }
         if (auto* settings = std::get_if<graph::LayerNodeSettings>(&node->settings)) {
             settings->layer = std::move(layer);
-            settings->layer.kind = graph::LayerKindFor(graph::NodeKind::Surface);
         }
         node->posX = x;
         node->posY = 120.0f;
@@ -1439,7 +1128,6 @@ json WritePreview(renderer::PreviewRenderer& renderer) {
     json node;
     node["tonemap"] = EnumName(kTonemapNames, static_cast<uint32_t>(renderer.Tonemap()));
     node["useMaterialTextures"] = renderer.UseMaterialTextures();
-    node["maskSaturationHatch"] = renderer.MaskSaturationHatch();
     node["displacementScale"] = renderer.DisplacementScale();
     node["planeSize"] = renderer.PlaneSize();
     node["tessellation"] = renderer.TessellationEnabled();
@@ -1509,8 +1197,6 @@ void ReadPreview(const json& node, renderer::PreviewRenderer& renderer) {
         EnumValue(kTonemapNames, node, "tonemap", static_cast<uint32_t>(previewDefaults.tonemap)));
     renderer.UseMaterialTextures() =
         ReadBool(node, "useMaterialTextures", previewDefaults.useMaterialTextures);
-    renderer.MaskSaturationHatch() =
-        ReadBool(node, "maskSaturationHatch", previewDefaults.maskSaturationHatch);
     renderer.DisplacementScale() =
         ReadFloat(node, "displacementScale", previewDefaults.displacementScale);
     // 平面のサイズ（m）。**カメラより先に読む。** 軌道の距離の範囲がこれで決まるので、
@@ -1757,56 +1443,9 @@ bool ReadJsonFile(const fs::path& path, const char* expectedFormat, int maxVersi
     return true;
 }
 
-// ペイントマスクを置く場所。`<プロジェクト名>.assets/`。
-fs::path PaintMaskDirectory(const fs::path& projectPath) {
-    return projectPath.parent_path() / (projectPath.stem().wstring() + L".assets");
-}
-
-std::string PaintMaskFileName(size_t index) {
-    char buffer[32] = {};
-    std::snprintf(buffer, sizeof(buffer), "paint_%04zu.png", index);
-    return buffer;
-}
-
-// 前回の保存で書いた PNG のうち、今回書かなかったものを消す。
-// **自分が書いた名前（paint_*.png）だけ**を対象にし、他のファイルには触らない。
-// 今回のぶんを書き終えてから呼ぶこと。先に消すと、書き出しに失敗したときに
-// 元の PNG まで失われてしまう。
-void RemoveStalePaintMasks(const fs::path& directory, const std::vector<fs::path>& keep) {
-    std::error_code error;
-    if (!fs::is_directory(directory, error)) {
-        return;
-    }
-    for (const fs::directory_entry& entry : fs::directory_iterator(directory, error)) {
-        if (!entry.is_regular_file(error)) {
-            continue;
-        }
-        const fs::path& file = entry.path();
-        if (file.extension() != L".png") {
-            continue;
-        }
-        if (file.filename().wstring().rfind(L"paint_", 0) != 0) {
-            continue;
-        }
-        bool kept = false;
-        for (const fs::path& name : keep) {
-            if (file.filename() == name) {
-                kept = true;
-                break;
-            }
-        }
-        if (kept) {
-            continue;
-        }
-        std::error_code removeError;
-        fs::remove(file, removeError);
-    }
-}
-
 }  // namespace
 
-bool SaveProject(const std::filesystem::path& path, rhi::Device& device,
-                 const ProjectRefs& refs) {
+bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs) {
     // 裸のファイル名（親ディレクトリ無し）で保存すると相対パスが作れず、
     // 全参照が絶対パスで書かれてしまう。先に絶対化してから基準を取る。
     std::error_code absoluteError;
@@ -1854,55 +1493,6 @@ bool SaveProject(const std::filesystem::path& path, rhi::Device& device,
     }
     document["materials"] = std::move(materials);
 
-    // --- ペイントマスク（PNG でサイドカーへ） -----------------------------
-    // 手続きで再現できないので画像として持ち出す。
-    // 参照しているのはレイヤーだけなので、レイヤーから辿って集める。
-    std::unordered_map<compositor::PaintMaskId, int> paintIndex;
-    json paintMasks = json::array();
-    const fs::path paintDir = PaintMaskDirectory(savePath);
-    // 今回書いたファイル名を控えておき、書き終えてから前回の残りを片付ける。
-    std::vector<fs::path> writtenPaintFiles;
-    const auto collectPaintMask = [&](compositor::PaintMaskId id) {
-        if (id == compositor::kNoPaintMask || paintIndex.count(id) != 0) {
-            return;
-        }
-        const std::vector<uint8_t> pixels = refs.paintMasks.ReadPixels(device, id);
-        const uint32_t resolution = refs.paintMasks.Resolution();
-        if (pixels.empty()) {
-            TG_LOG_WARN("ペイントマスクを読み出せませんでした（保存から外します）");
-            return;
-        }
-
-        const int index = static_cast<int>(paintMasks.size()) + 1;
-        const std::string fileName = PaintMaskFileName(static_cast<size_t>(index));
-        std::error_code error;
-        fs::create_directories(paintDir, error);
-        if (!SaveGray8Png(paintDir / FromUtf8(fileName), resolution, resolution, resolution,
-                          pixels.data())) {
-            TG_LOG_WARN("ペイントマスクを書き出せませんでした: %s", fileName.c_str());
-            return;
-        }
-
-        paintIndex[id] = index;
-        writtenPaintFiles.push_back(FromUtf8(fileName));
-        json node;
-        node["id"] = index;
-        node["resolution"] = resolution;
-        // サイドカーの場所はプロジェクト名から決まるので、ファイル名だけ持つ。
-        node["file"] = fileName;
-        paintMasks.push_back(std::move(node));
-    };
-    // ペイントマスクはグラフのノードから辿って集める。
-    for (const graph::Node& node : refs.graph.Nodes()) {
-        if (const auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings)) {
-            collectPaintMask(settings->layer.mask.paint);
-        }
-    }
-    document["paintMasks"] = std::move(paintMasks);
-    document["paintResolution"] = refs.paintMasks.Resolution();
-    // マスクを減らしたときに前回の PNG が残らないよう、ここで片付ける。
-    RemoveStalePaintMasks(paintDir, writtenPaintFiles);
-
     // --- ノードグラフ -----------------------------------------------------
     // 版 4 から layers 節は書かない。合成の構造はグラフだけが持つ。
     const std::function<json(compositor::MaterialAssetId)> writeMaterial =
@@ -1910,12 +1500,7 @@ bool SaveProject(const std::filesystem::path& path, rhi::Device& device,
             const auto it = materialIndex.find(id);
             return (it != materialIndex.end()) ? json(it->second) : json();
         };
-    const std::function<json(compositor::PaintMaskId)> writePaint =
-        [&paintIndex](compositor::PaintMaskId id) {
-            const auto it = paintIndex.find(id);
-            return (it != paintIndex.end()) ? json(it->second) : json();
-        };
-    document["graph"] = WriteGraph(refs.graph, writeTexture, writeMaterial, writePaint);
+    document["graph"] = WriteGraph(refs.graph, writeMaterial);
 
     // 天球はマテリアルと同じく、構造ごと埋め込む（画像だけ相対パスの参照）。
     json skies = json::array();
@@ -1947,7 +1532,6 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
     }
 
     const fs::path baseDir = path.parent_path();
-    const fs::path paintDir = PaintMaskDirectory(path);
 
     // 現在の文書を破棄する前にシーン全体を検証・アップロードする。
     if (const json* sceneNode = FindMember(document, "scene")) {
@@ -1962,7 +1546,6 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
 
     // ここから先は現在の中身を捨てて入れ替える。読み込みは GPU 待機を伴うため、
     // 呼び出し側がフレームの外で呼んでいること。
-    refs.paintMasks.Clear(device);
     refs.materials.Clear(device);
     refs.skies.Clear(device);
     refs.textures.Clear(device);
@@ -2030,49 +1613,6 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
         }
     }
 
-    // --- ペイントマスク ---------------------------------------------------
-    std::unordered_map<int, compositor::PaintMaskId> paintIds;
-    uint32_t paintResolution = ReadUInt(document, "paintResolution", 1024);
-    if (const json* paintMasks = FindMember(document, "paintMasks");
-        paintMasks != nullptr && paintMasks->is_array()) {
-        for (const json& node : *paintMasks) {
-            if (!node.is_object()) {
-                continue;
-            }
-            const int index = ReadInt(node, "id", 0);
-            const std::string fileName = ReadString(node, "file");
-            if (index <= 0 || fileName.empty()) {
-                continue;
-            }
-
-            LdrImage image;
-            if (!LoadLdrImage(paintDir / FromUtf8(fileName), image) || !image.IsValid()) {
-                TG_LOG_WARN("ペイントマスクを読み込めませんでした: %s", fileName.c_str());
-                continue;
-            }
-            if (image.width != image.height) {
-                TG_LOG_WARN("ペイントマスクが正方ではありません: %s", fileName.c_str());
-                continue;
-            }
-
-            // LoadLdrImage は RGBA8 で返す。R だけ取り出す。
-            std::vector<uint8_t> gray(static_cast<size_t>(image.width) * image.height);
-            for (size_t i = 0; i < gray.size(); ++i) {
-                gray[i] = image.pixels[i * 4];
-            }
-            const compositor::PaintMaskId id =
-                refs.paintMasks.AddFromPixels(device, image.width, gray);
-            if (id == compositor::kNoPaintMask) {
-                continue;
-            }
-            paintIds[index] = id;
-            paintResolution = image.width;
-        }
-    }
-    // 解像度の要求も揃える。揃えないと、次の ProcessPendingWork が
-    // 読み込む前の解像度へ戻そうとして全マスクをリサンプルしてしまう。
-    refs.paintMasks.RequestResolution(paintResolution);
-
     // --- ノードグラフ（旧形式は layers[] から移行） -----------------------
     const std::function<compositor::MaterialAssetId(const json&)> readMaterial =
         [&materialIds](const json& value) {
@@ -2082,14 +1622,6 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
             const auto it = materialIds.find(value.get<int>());
             return (it != materialIds.end()) ? it->second : compositor::kNoMaterialAsset;
         };
-    const std::function<compositor::PaintMaskId(const json&)> readPaint =
-        [&paintIds](const json& value) {
-            if (!value.is_number_integer()) {
-                return compositor::kNoPaintMask;
-            }
-            const auto it = paintIds.find(value.get<int>());
-            return (it != paintIds.end()) ? it->second : compositor::kNoPaintMask;
-        };
     // 旧形式の layers[]（版 3 以前）。移行用に一旦読み込んでおく。
     std::vector<compositor::MaterialLayer> legacyLayers;
     if (const json* layers = FindMember(document, "layers");
@@ -2098,7 +1630,7 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
             if (!node.is_object()) {
                 continue;
             }
-            legacyLayers.push_back(ReadLayer(node, readTexture, readMaterial, readPaint));
+            legacyLayers.push_back(ReadLayer(node, readMaterial));
         }
     }
 
@@ -2113,8 +1645,7 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
     if (graphNode != nullptr && graphNode->is_object()) {
         const bool legacyApply = ReadBool(*graphNode, "apply", version >= 4);
         if (version >= 4 || legacyApply || legacyLayers.empty()) {
-            graphLoaded =
-                ReadGraph(*graphNode, refs.graph, readTexture, readMaterial, readPaint);
+            graphLoaded = ReadGraph(*graphNode, refs.graph, readMaterial);
         }
     }
     if (!graphLoaded) {

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "compositor/MaterialEvaluator.h"
-#include "compositor/PaintMask.h"
 #include "compositor/TextureLibrary.h"
 #include "renderer/Camera.h"
 #include "renderer/Environment.h"
@@ -159,8 +158,6 @@ struct PreviewDefaults {
     bool showSkybox = true;
     bool skyboxBlur = false;
     bool shadowEnabled = true;
-    // マスクのプレビューで、0 か 1 に張り付いた所へ斜線を引くか。
-    bool maskSaturationHatch = false;
 };
 inline constexpr PreviewDefaults kPreviewDefaults{};
 
@@ -209,12 +206,7 @@ public:
     void Render(rhi::Device& device, rhi::PipelineCache& pipelineCache,
                 ID3D12GraphicsCommandList* commandList, const compositor::MaterialStack& stack,
                 const compositor::TextureLibrary& textures,
-                const compositor::MaterialLibrary& materials,
-                const compositor::PaintMaskStore& paintMasks);
-
-    // ペイントのブラシパスが UV バッファを読むための準備をする。
-    // フレーム内、Render より前に呼ぶこと（読むのは前フレームの内容）。
-    compositor::PaintContext PrepareUvBufferForRead(ID3D12GraphicsCommandList* commandList);
+                const compositor::MaterialLibrary& materials);
 
     Camera& GetCamera() { return m_camera; }
     const Camera& GetCamera() const { return m_camera; }
@@ -256,11 +248,6 @@ public:
     // メッシュシーンにワイヤーフレームを重ねる。テセレーションと変位の後の辺を見る。
     bool& ShowWireframe() { return m_showWireframe; }
     bool& ShowReferenceGrid() { return m_showReferenceGrid; }
-    // マスクのプレビューで、0 か 1 に張り付いた所へ斜線を引くか（設定）。
-    bool& MaskSaturationHatch() { return m_maskSaturationHatch; }
-    bool MaskSaturationHatch() const { return m_maskSaturationHatch; }
-    // いまマスクをプレビューしているか。Application が毎フレーム写す。
-    bool& MaskPreviewActive() { return m_maskPreviewActive; }
     const compositor::MaterialEvaluator& Evaluator() const { return m_evaluator; }
     // 直前のフレームの描画の量。
     const RenderStats& Stats() const { return m_stats; }
@@ -357,8 +344,6 @@ private:
     bool m_showRoadGrid = false;
     bool m_showUvChecker = false;
     bool m_showWireframe = false;
-    bool m_maskSaturationHatch = kPreviewDefaults.maskSaturationHatch;
-    bool m_maskPreviewActive = false;
     bool m_skyRebuildRequested = false;
     // Environment がいま持っている HDRI。較正倍率だけを掛け直せるかの判断に使う。
     std::filesystem::path m_loadedHdriPath;

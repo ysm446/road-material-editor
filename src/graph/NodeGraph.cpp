@@ -16,11 +16,9 @@ namespace {
 // **ノードの名前とピンのラベルは英語で書く。**
 // ノードグラフを持つツール（Substance / Houdini / Gaea など）はどれも英語表記で、
 // 素材やノードの呼び名もその語彙で流通している。説明文だけ日本語にする。
-// 合成レイヤーのピン。**Mask 入力は「どこに乗せるか」**を外から与えるもので、
-// 繋がっていなければノード側のマスク設定がそのまま効く。
-constexpr std::array<PinDefinition, 3> kLayerNodePins = {{
-    {PinKind::Input, ValueType::Material, "Base"},
-    {PinKind::Input, ValueType::Mask, "Mask"},
+// 材質（Surface）のピン。入力は無く、Result を Road / Shoulder / Decal などの Material へ繋ぐ。
+// 旧地形の Base / Mask 入力は撤去した（旧ファイルのリンクはピンが無いので読み込み時に捨てる）。
+constexpr std::array<PinDefinition, 1> kLayerNodePins = {{
     {PinKind::Output, ValueType::Material, "Result"},
 }};
 
@@ -139,11 +137,6 @@ bool IsMeshNodeKind(NodeKind kind) {
 bool IsPreviewableNodeKind(NodeKind kind) {
     // 道路メッシュのノードは、そのノードまでの鎖をメッシュシーンに出す。
     return IsLayerNodeKind(kind) || kind == NodeKind::Path || IsMeshNodeKind(kind);
-}
-
-compositor::LayerKind LayerKindFor(NodeKind /*kind*/) {
-    // レイヤー設定を持つのは Surface だけになった。
-    return compositor::LayerKind::Surface;
 }
 
 // --- NodeGraph ------------------------------------------------------------
@@ -315,9 +308,7 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
     node.id = AllocateGraphId();
     node.kind = kind;
     if (IsLayerNodeKind(kind)) {
-        LayerNodeSettings settings;
-        settings.layer.kind = LayerKindFor(kind);
-        node.settings = std::move(settings);
+        node.settings = LayerNodeSettings{};
     } else if (kind == NodeKind::Road) {
         node.settings = RoadNodeSettings{};
     } else if (kind == NodeKind::RoadMarking) {
@@ -413,65 +404,25 @@ void NodeGraph::RebuildNextGraphId() {
     m_nextGraphId = maxId + 1;
 }
 
-// 「下地」チェーンを上から下へ辿る。輪は visited で止める。
-std::vector<const Node*> NodeGraph::ChainFrom(const Node* top) const {
-    std::vector<const Node*> chain;
-    std::unordered_set<GraphId> visited;
-    const Node* current = top;
-    while (current != nullptr && IsLayerNodeKind(current->kind) &&
-           visited.insert(current->id).second) {
-        chain.push_back(current);
-        current = current->inputs.empty() ? nullptr
-                                          : FindUpstreamNodeForPin(current->inputs.front().id);
-    }
-    return chain;
-}
-
-// レイヤー列の元ノードを、コンパイル結果へ写す。列のほうが長ければ（プレビュー用の
-// 塗りレイヤー）残りは 0。
-void NodeGraph::RecordLayerSources(const std::vector<const Node*>& layerNodes,
-                                   CompiledGraph& compiled) {
-    compiled.layerSources.assign(compiled.layers.size(), 0);
-    for (size_t i = 0; i < layerNodes.size() && i < compiled.layers.size(); ++i) {
-        compiled.layerSources[i] = (layerNodes[i] != nullptr) ? layerNodes[i]->id : 0;
-    }
-}
-
-CompiledGraph NodeGraph::CompileChainFrom(const Node* top) const {
-    const std::vector<const Node*> chain = ChainFrom(top);
-
-    // 遡った順（上→下）を、レイヤー列の順（下→上）へ反転する。
+CompiledGraph NodeGraph::CompileSurface(const Node* surface) const {
     CompiledGraph compiled;
-    std::vector<const Node*> layerNodes;
-    compiled.layers.reserve(chain.size());
-    layerNodes.reserve(chain.size());
-    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        if (const auto* settings = std::get_if<LayerNodeSettings>(&(*it)->settings)) {
-            compiled.layers.push_back(settings->layer);
-            layerNodes.push_back(*it);
-        }
-    }
-
-    // 有効な下地が 1 枚も無ければ、評価器はどの出力テクスチャにも書かず、
+    const auto* settings =
+        (surface != nullptr) ? std::get_if<LayerNodeSettings>(&surface->settings) : nullptr;
+    // 有効な Surface が無ければ、評価器はどの出力テクスチャにも書かず、
     // 直前の評価結果がそのまま見えてしまう。変位 0 の中立平面へ戻す。
-    const bool hasEnabledBase =
-        std::any_of(compiled.layers.begin(), compiled.layers.end(), [](const auto& layer) {
-            return layer.enabled && !compositor::IsHeightOperationKind(layer.kind);
-        });
-    if (!hasEnabledBase) {
-        compiled.layers.clear();
+    if (settings == nullptr || !settings->layer.enabled) {
         compiled.layers.push_back(compositor::MaterialStack::MakeBaseLayer());
-        layerNodes.clear();
+        compiled.layerSources.push_back(0);
         return compiled;
     }
-
-    RecordLayerSources(layerNodes, compiled);
+    compiled.layers.push_back(settings->layer);
+    compiled.layerSources.push_back(surface->id);
     return compiled;
 }
 
 CompiledGraph NodeGraph::CompileLayers() const {
-    // 出力ノードは無くなった。既定のチェーンは空で、下地 1 枚になる。
-    return CompileChainFrom(nullptr);
+    // 既定は下地 1 枚。
+    return CompileSurface(nullptr);
 }
 
 CompiledGraph NodeGraph::CompileLayersTo(GraphId nodeId, GraphId /*outputPin*/) const {
@@ -480,7 +431,7 @@ CompiledGraph NodeGraph::CompileLayersTo(GraphId nodeId, GraphId /*outputPin*/) 
         // Path やメッシュのノードはレイヤー列を持たない。下地 1 枚（中立平面）になる。
         return CompileLayers();
     }
-    return CompileChainFrom(node);
+    return CompileSurface(node);
 }
 
 }  // namespace tg::graph

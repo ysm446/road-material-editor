@@ -201,7 +201,6 @@ void Application::HandleDroppedFiles(const std::vector<std::filesystem::path>& p
 
 void Application::ResetProject() {
     // どれも GPU 待機を伴う。フレームの外から呼ぶこと。
-    m_paintMasks.Clear(m_device);
     m_materialLibrary.Clear(m_device);
     m_skyLibrary.Clear(m_device);
     m_skyLibrary.EnsureDefault();
@@ -229,8 +228,6 @@ void Application::ResetProject() {
     m_selectedMaterial = 0;
     m_selectedTexture = 0;
     m_ordTexture = compositor::kNoTexture;
-    m_paintMode = false;
-    m_strokeActive = false;
 
     // 別の文書になるので履歴は捨てる。戻せてしまうと中身が混ざる。
     m_undoHistory.Clear();
@@ -263,12 +260,6 @@ void Application::ProcessPendingFileWork() {
             ApplyDocument(m_undoHistory.Redo(current));
         }
         m_committed = CaptureDocument();
-        m_pendingPaintSweep = true;
-    }
-
-    if (m_pendingPaintSweep) {
-        m_pendingPaintSweep = false;
-        SweepPaintMasks();
     }
 
     if (m_pendingProjectNew) {
@@ -282,8 +273,8 @@ void Application::ProcessPendingFileWork() {
         const std::filesystem::path path = m_pendingProjectOpen;
         m_pendingProjectOpen.clear();
 
-        io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_paintMasks,
-                             m_skyLibrary,     m_renderer,       m_graph};
+        io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
+                             m_renderer, m_graph};
         if (io::LoadProject(path, m_device, m_pipelineCache, refs)) {
             m_meshSelection = MeshSelectionState{};
             m_recentProjects.Add(path);
@@ -311,8 +302,6 @@ void Application::ProcessPendingFileWork() {
             m_selectedMaterial = 0;
             m_selectedTexture = 0;
             m_ordTexture = compositor::kNoTexture;
-            m_paintMode = false;
-            m_strokeActive = false;
             // 読み込んだ文書が新しい起点になる。前の文書の履歴は捨てる。
             m_undoHistory.Clear();
             m_documentDirty = false;
@@ -329,9 +318,9 @@ void Application::ProcessPendingFileWork() {
         const std::filesystem::path path = m_pendingProjectSave;
         m_pendingProjectSave.clear();
 
-        io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_paintMasks,
-                             m_skyLibrary,     m_renderer,       m_graph};
-        if (io::SaveProject(path, m_device, refs)) {
+        io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
+                             m_renderer, m_graph};
+        if (io::SaveProject(path, refs)) {
             m_recentProjects.Add(path);
             m_projectPath = path;
             UpdateWindowTitle();
@@ -394,17 +383,6 @@ void Application::ProcessPendingFileWork() {
                 asset->thumbnailDirty = true;
             }
         }
-        // グラフのノードが持つレイヤーから外す。
-        bool graphChanged = false;
-        for (graph::Node& node : m_graph.MutableNodes()) {
-            if (auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings)) {
-                graphChanged |= clearMap(settings->layer.mask.texture);
-                graphChanged |= clearMap(settings->layer.heightTexture);
-            }
-        }
-        if (graphChanged) {
-            m_graph.MarkDirty();
-        }
         clearSlot(m_ordTexture);
 
         // 解放は DeferRelease でフレーム同期後に行われるため、GPU 待機は不要。
@@ -439,8 +417,7 @@ void Application::ProcessPendingFileWork() {
         m_pendingExport = false;
         SyncGraphStack();
         // プレビューと同じくグラフのコンパイル結果を書き出す。
-        const io::ExportRefs refs{m_graphStack, m_textureLibrary, m_materialLibrary,
-                                  m_paintMasks};
+        const io::ExportRefs refs{m_graphStack, m_textureLibrary, m_materialLibrary};
         uint32_t written = 0;
             if (m_renderer.HasMeshScene()) {
                 TG_LOG_WARN("メッシュシーンのテクスチャ書き出しは未対応です");

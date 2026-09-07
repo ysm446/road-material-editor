@@ -1,4 +1,4 @@
-// ビューポートパネルと、その上の入力（軌道 / ライトドラッグ / ブラシ）、
+// ビューポートパネルと、その上の入力（軌道 / ライトドラッグ / パス編集 / 選択）、
 // 重ねて描くギズモ類。
 
 #include "app/Application.h"
@@ -92,24 +92,6 @@ void Application::HandleMeshSelection(bool hovered, const ImVec2& viewportMin,
                       ImGui::GetColorU32(ImGuiCol_Text), text);
     }
     draw->PopClipRect();
-}
-
-compositor::MaterialLayer* Application::CurrentPaintLayer() {
-    if (!m_paintMode) {
-        return nullptr;
-    }
-
-    // 選択中ノードのレイヤーがペイントの対象。
-    graph::Node* node = m_graph.FindMutableNode(m_selectedGraphNode);
-    auto* settings =
-        (node != nullptr) ? std::get_if<graph::LayerNodeSettings>(&node->settings) : nullptr;
-    compositor::MaterialLayer* layer = (settings != nullptr) ? &settings->layer : nullptr;
-
-    if (layer == nullptr || layer->mask.source != compositor::MaskSource::Paint ||
-        layer->mask.paint == compositor::kNoPaintMask) {
-        return nullptr;
-    }
-    return layer;
 }
 
 // 3 桁ごとに区切る。**桁数の多い数はそのままだと読めない。**
@@ -444,52 +426,6 @@ void Application::DrawLightGizmo(const ImVec2& viewportMin, const ImVec2& viewpo
     drawList->PopClipRect();
 }
 
-void Application::HandlePaintInput(compositor::MaterialLayer& layer, bool itemActive,
-                                   const ImVec2& imageOrigin, const ImVec2& imageSize) {
-    const ImGuiIO& io = ImGui::GetIO();
-
-    const bool addPressed = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-    const bool erasePressed = ImGui::IsMouseDown(ImGuiMouseButton_Right);
-    if (!itemActive || (!addPressed && !erasePressed)) {
-        m_strokeActive = false;
-        return;
-    }
-
-    // 画像はコンテンツ領域に合わせて拡縮して描いているため、
-    // ImGui の座標をレンダーターゲットのピクセル座標へ換算する。
-    const float scaleX = (imageSize.x > 0.0f)
-                             ? (static_cast<float>(m_renderer.Width()) / imageSize.x)
-                             : 1.0f;
-    const float scaleY = (imageSize.y > 0.0f)
-                             ? (static_cast<float>(m_renderer.Height()) / imageSize.y)
-                             : 1.0f;
-    const float x = (io.MousePos.x - imageOrigin.x) * scaleX;
-    const float y = (io.MousePos.y - imageOrigin.y) * scaleY;
-
-    if (!m_strokeActive) {
-        // ストロークを始める前の内容をアンドゥ履歴へ積む。
-        // アンドゥの単位は「1 ストローク」で、押しっぱなしの間は 1 段に収まる。
-        m_paintMasks.QueueSnapshot(m_device, layer.mask.paint);
-        m_strokeActive = true;
-        m_strokeLastX = x;
-        m_strokeLastY = y;
-    }
-
-    compositor::BrushStroke stroke;
-    stroke.target = layer.mask.paint;
-    stroke.fromX = m_strokeLastX;
-    stroke.fromY = m_strokeLastY;
-    stroke.toX = x;
-    stroke.toY = y;
-    stroke.brush = m_brush;
-    // 右ドラッグは加算 / 減算を入れ替える。消しゴムへ切り替えずに消せるようにするため。
-    stroke.brush.erase = erasePressed ? !m_brush.erase : m_brush.erase;
-    m_paintMasks.QueueStroke(stroke);
-
-    m_strokeLastX = x;
-    m_strokeLastY = y;
-}
-
 void Application::DrawViewportPanel() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     // ホイールでウィンドウがスクロールしないようにする（ズームに使うため）。
@@ -531,25 +467,14 @@ void Application::DrawViewportPanel() {
             const bool itemActive = ImGui::IsItemActive();
             const bool itemHovered = ImGui::IsItemHovered();
 
-            // L + 左ドラッグはライトの向き。ブラシや軌道より先に見る。
+            // L + 左ドラッグはライトの向き。軌道より先に見る。
             const bool lightDragging = HandleLightDrag(itemActive);
 
-            // ペイントモードの間は左 / 右ドラッグをブラシが受け取る。
-            // 視点操作を残すため、軌道は Alt + 左ドラッグへ移す。
-            compositor::MaterialLayer* paintLayer = CurrentPaintLayer();
-            const bool brushEnabled = (paintLayer != nullptr) && !io.KeyAlt && !lightDragging;
-
-            if (brushEnabled) {
-                HandlePaintInput(*paintLayer, itemActive, imageOrigin, available);
-            } else {
-                m_strokeActive = false;
-            }
-
             // Path ノードを選んでいる間は、左クリック / ドラッグと右クリックがパスの編集。
-            // ペイントと同じく、視点は Alt を押している間だけ動く。
+            // 視点は Alt を押している間だけ動く。
             const ImVec2 imageMax(imageOrigin.x + available.x, imageOrigin.y + available.y);
             graph::Node* pathNode = CurrentPathNode();
-            const bool pathEnabled = (pathNode != nullptr) && !brushEnabled && !lightDragging;
+            const bool pathEnabled = (pathNode != nullptr) && !lightDragging;
             if (pathEnabled && !io.KeyAlt) {
                 HandlePathInput(*pathNode, itemActive, itemHovered, imageOrigin, imageMax);
             } else {
@@ -558,7 +483,7 @@ void Application::DrawViewportPanel() {
                 m_pathEdit.dragPoint = 0;
             }
 
-            if (pathNode == nullptr && m_renderer.HasMeshScene() && !brushEnabled && !lightDragging && !io.KeyAlt) {
+            if (pathNode == nullptr && m_renderer.HasMeshScene() && !lightDragging && !io.KeyAlt) {
                 HandleMeshSelection(itemHovered, imageOrigin, imageMax);
             } else {
                 m_meshSelection.pending = m_meshSelection.dragging = false;
@@ -567,8 +492,8 @@ void Application::DrawViewportPanel() {
             // 視点操作は Alt を押している間だけ受ける（Maya と同じ割り当て）。
             //
             // Alt なしのドラッグは、将来の選択や範囲選択のために空けてある。
-            // Alt を押している間はブラシもライトも無効になる（上の brushEnabled と
-            // HandleLightDrag が !io.KeyAlt を見る）ので、ここで競合は起きない。
+            // Alt を押している間はライトも無効になる（HandleLightDrag が !io.KeyAlt を見る）ので、
+            // ここで競合は起きない。
             if (itemActive && io.KeyAlt) {
                 if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                     camera.Orbit(io.MouseDelta.x * 0.006f, io.MouseDelta.y * 0.006f);
@@ -595,16 +520,6 @@ void Application::DrawViewportPanel() {
             // ビューポートに重ねる操作。左上に表示モードの切り替え、右上に FPS。
             DrawViewportOverlay(imageOrigin, imageMax);
 
-            // ブラシの当たる範囲を円で示す。半径はビューポートのピクセル単位なので、
-            // 表示倍率で割って ImGui の座標へ戻す。
-            if (brushEnabled && itemHovered && available.x > 0.0f) {
-                const float displayScale =
-                    available.x / static_cast<float>(std::max(m_renderer.Width(), 1u));
-                const float radius = m_brush.radiusPixels * displayScale;
-                ImDrawList* drawList = ImGui::GetWindowDrawList();
-                drawList->AddCircle(io.MousePos, radius + 1.0f, IM_COL32(0, 0, 0, 140), 0, 3.0f);
-                drawList->AddCircle(io.MousePos, radius, IM_COL32(235, 235, 235, 200), 0, 1.5f);
-            }
         }
     }
     ImGui::End();

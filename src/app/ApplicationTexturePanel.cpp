@@ -59,19 +59,6 @@ std::vector<std::string> Application::CollectTextureUsers(compositor::TextureId 
             add("ハイト");
         }
     }
-
-    for (const graph::Node& node : m_graph.Nodes()) {
-        const auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings);
-        if (settings == nullptr) {
-            continue;
-        }
-        if (settings->layer.mask.texture.texture == id) {
-            users.push_back("ノード「" + settings->layer.name + "」のマスク");
-        }
-        if (settings->layer.heightTexture.texture == id) {
-            users.push_back("ノード「" + settings->layer.name + "」のハイト");
-        }
-    }
     return users;
 }
 
@@ -87,14 +74,6 @@ size_t Application::CountTextureUsers(compositor::TextureId id) const {
         count += (asset.metallic.texture == id) ? 1 : 0;
         count += (asset.ambientOcclusion.texture == id) ? 1 : 0;
         count += (asset.height.texture == id) ? 1 : 0;
-    }
-    for (const graph::Node& node : m_graph.Nodes()) {
-        const auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings);
-        if (settings == nullptr) {
-            continue;
-        }
-        count += (settings->layer.mask.texture.texture == id) ? 1 : 0;
-        count += (settings->layer.heightTexture.texture == id) ? 1 : 0;
     }
     return count;
 }

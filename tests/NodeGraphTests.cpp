@@ -21,15 +21,14 @@ bool IsNeutralPlane(const tg::graph::CompiledGraph& compiled) {
         return false;
     }
     const tg::compositor::MaterialLayer& layer = compiled.layers.front();
-    return layer.enabled && !tg::compositor::IsHeightOperationKind(layer.kind) &&
-           layer.heightSource == tg::compositor::ValueSource::Constant &&
+    return layer.enabled && layer.heightSource == tg::compositor::ValueSource::Constant &&
            layer.heightBase == tg::compositor::kHeightPivot;
 }
 
 }  // namespace
 
 void RunNodeGraphTests() {
-    Section("ノードグラフ — 既定の下地と Surface の鎖");
+    Section("ノードグラフ — 既定の下地と Surface");
     {
         NodeGraph graph = NodeGraph::CreateDefault();
         Check(graph.Nodes().size() == 1 && graph.Nodes().front().kind == NodeKind::Surface,
@@ -37,19 +36,21 @@ void RunNodeGraphTests() {
         Check(IsNeutralPlane(graph.CompileLayers()),
               "出力ノードは無いので、既定のレイヤー列は変位 0 の平面になる");
 
-        // Surface → Surface の鎖は、下から上のレイヤー列になる。
-        const tg::graph::GraphId baseId = graph.Nodes().front().id;
-        const tg::graph::GraphId topId = graph.CreateNode(NodeKind::Surface);
-        const tg::graph::Node* base = graph.FindNode(baseId);
-        const tg::graph::Node* top = graph.FindNode(topId);
-        const bool linked = base != nullptr && top != nullptr && !base->outputs.empty() &&
-                            !top->inputs.empty() &&
-                            graph.CreateLink(base->outputs.front().id, top->inputs.front().id);
-        const tg::graph::CompiledGraph compiled = graph.CompileLayersTo(topId);
-        Check(linked && compiled.layers.size() == 2 && compiled.layerSources.size() == 2 &&
-                  compiled.layerSources[0] == baseId && compiled.layerSources[1] == topId,
-              "Surface の鎖は下から上のレイヤー列になり、元ノードを控える");
-        Check(compiled.maskOps.empty(), "マスクを出すノードは無いので op の列は空");
+        // Surface は入力を持たず、それ 1 枚がレイヤー列になる。
+        const tg::graph::GraphId surfaceId = graph.CreateNode(NodeKind::Surface);
+        tg::graph::Node* surface = graph.FindMutableNode(surfaceId);
+        Check(surface != nullptr && surface->inputs.empty() && surface->outputs.size() == 1,
+              "Surface は入力を持たず、Result だけを出す");
+        std::get<tg::graph::LayerNodeSettings>(surface->settings).layer.roughness = 0.31f;
+        const tg::graph::CompiledGraph compiled = graph.CompileLayersTo(surfaceId);
+        Check(compiled.layers.size() == 1 && compiled.layers.front().roughness == 0.31f &&
+                  compiled.layerSources.size() == 1 && compiled.layerSources[0] == surfaceId,
+              "Surface 1 つがそのままレイヤー列になり、元ノードを控える");
+
+        // 無効な Surface は中立平面へ落ちる（古い結果を残さない）。
+        std::get<tg::graph::LayerNodeSettings>(surface->settings).layer.enabled = false;
+        Check(IsNeutralPlane(graph.CompileLayersTo(surfaceId)),
+              "無効な Surface は変位 0 の平面になる");
     }
 
     Section("パス — 実寸カーブの範囲外編集");
@@ -181,35 +182,6 @@ void RunNodeGraphTests() {
               "PastePathClip は新しい ID で同じ形を、ずらした位置に貼る");
         Check(tg::graph::BuildPathStrands(path).size() == 2,
               "貼った鎖は元の鎖と別の鎖になる");
-    }
-
-    Section("パス — 面の線分列");
-    {
-        using tg::graph::PathElementId;
-        using tg::graph::PathSettings;
-        // 開いた鎖だけなら面の線分は無い。
-        PathSettings open;
-        const PathElementId o1 = tg::graph::AddPathPoint(open, 0.2f, 0.2f, 0);
-        const PathElementId o2 = tg::graph::AddPathPoint(open, 0.8f, 0.2f, o1);
-        tg::graph::AddPathPoint(open, 0.8f, 0.8f, o2);
-        Check(tg::graph::BuildPathAreaSegments(open).empty(),
-              "開いた鎖だけの BuildPathAreaSegments は空");
-
-        // 三角形の輪。線分は輪を一周して先頭へ戻る。
-        PathSettings loop;
-        const PathElementId a = tg::graph::AddPathPoint(loop, 0.2f, 0.2f, 0);
-        const PathElementId b = tg::graph::AddPathPoint(loop, 0.8f, 0.2f, a);
-        const PathElementId c = tg::graph::AddPathPoint(loop, 0.5f, 0.8f, b);
-        tg::graph::ConnectPathPoints(loop, c, a);
-        const auto segments = tg::graph::BuildPathAreaSegments(loop);
-        bool chained = !segments.empty();
-        for (size_t i = 0; i + 1 < segments.size(); ++i) {
-            chained &= (segments[i].bx == segments[i + 1].ax && segments[i].by == segments[i + 1].ay);
-        }
-        const bool closed = !segments.empty() && segments.back().bx == segments.front().ax &&
-                            segments.back().by == segments.front().ay;
-        Check(segments.size() == 3 && chained && closed,
-              "閉じた鎖の BuildPathAreaSegments は輪を一周して先頭へ戻る");
     }
 
     Section("ノードグラフ — Path の入力");

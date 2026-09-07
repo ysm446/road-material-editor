@@ -9,7 +9,6 @@
 #include "compositor/MaterialLayer.h"
 #include "core/PathUtf8.h"
 #include "compositor/MaterialLibrary.h"
-#include "compositor/PaintMask.h"
 #include "compositor/TextureLibrary.h"
 #include "renderer/Camera.h"
 #include "renderer/PreviewRenderer.h"
@@ -50,133 +49,12 @@ inline float WrapAngle(float radians) {
 // 既定値マーカーが参照する値。数値リテラルではなく設定構造体の初期値を使う。
 inline const compositor::MaterialLayer kDefaultLayer;
 
-// シェイプレイヤーの既定値。追加時の初期値と既定値マーカーの参照先を兼ねる。
-// 地形スケールの起伏が役割なので、ノイズは低周波にする。
-inline const compositor::MaterialLayer kDefaultShapeLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Shape;
-    layer.name = "Shape";
-    layer.heightSource = compositor::ValueSource::Noise;
-    layer.heightBase = 0.5f;  // 0.5 で持ち上げなし
-    layer.heightGain = 0.6f;
-    layer.heightNoise = compositor::NoiseParams{compositor::NoiseType::Fbm, 3.0f, 1.0f, 5, 0.0f};
-    return layer;
-}();
-
-// 水面レイヤーの既定値。値の根拠は docs/design/compositing.md の「水面レイヤー」。
-// 水の拡散反射はほぼゼロで、見える色は水中の散乱・吸収の色（赤が最も吸収される）。
-inline const compositor::MaterialLayer kDefaultLiquidLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Liquid;
-    layer.name = "Liquid";
-    layer.baseColor = {0.01f, 0.03f, 0.035f};
-    layer.roughness = 0.07f;
-    layer.metallic = 0.0f;
-    layer.heightSource = compositor::ValueSource::Constant;
-    layer.heightBase = 0.35f;   // 水位
-    layer.blendRange = 0.01f;   // 汀線のフェザー幅
-    return layer;
-}();
-
-// ブラーノードの既定値。**合成しない加工**なので、色もマスクも使わない。
-// 半径は terrain-editor の既定（3 セル）にならい、1024m / 1024px を想定して 3m。
-inline const compositor::MaterialLayer kDefaultBlurLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Blur;
-    layer.name = "Blur";
-    return layer;
-}();
-
-// 崩落ノードの既定値。値は terrain-editor の Crumbling に合わせてある。
-inline const compositor::MaterialLayer kDefaultCrumblingLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Crumbling;
-    layer.name = "Crumbling";
-    return layer;
-}();
-
-// 堆積ノードの既定値。値は terrain-editor の Sediment に合わせてある。
-inline const compositor::MaterialLayer kDefaultSedimentLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Sediment;
-    layer.name = "Sediment";
-    return layer;
-}();
-
-// 積雪ノードの既定値。値は terrain-editor の Snow に合わせてある。
-inline const compositor::MaterialLayer kDefaultSnowLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Snow;
-    layer.name = "Snow";
-    return layer;
-}();
-
-// 河川ノードの既定値。設計は docs/reference/river-node.md。
-inline const compositor::MaterialLayer kDefaultRiverLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::River;
-    layer.name = "River";
-    return layer;
-}();
-
-// 散布ノードの既定値。値は terrain-editor の Scatter に合わせてある。
-inline const compositor::MaterialLayer kDefaultScatterLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Scatter;
-    layer.name = "Scatter";
-    // 既定は**高さ 0**。まず分布（Mask）を見ながら密度と大きさを決め、
-    // 地形へ盛るかどうかは後から選べるようにする（terrain-editor と同じ既定）。
-    layer.scatter = {};
-    return layer;
-}();
-
-// 水滴侵食ノードの既定値。値は terrain-editor の Droplet Erosion に合わせてある。
-inline const compositor::MaterialLayer kDefaultDropletLayer = [] {
-    compositor::MaterialLayer layer;
-    layer.kind = compositor::LayerKind::Droplet;
-    layer.name = "Droplet Erosion";
-    return layer;
-}();
-
-inline const compositor::MaterialLayer& DefaultLayerFor(compositor::LayerKind kind) {
-    switch (kind) {
-        case compositor::LayerKind::Shape:
-            return kDefaultShapeLayer;
-        case compositor::LayerKind::Liquid:
-            return kDefaultLiquidLayer;
-        case compositor::LayerKind::Blur:
-            return kDefaultBlurLayer;
-        case compositor::LayerKind::Sediment:
-            return kDefaultSedimentLayer;
-        case compositor::LayerKind::Crumbling:
-            return kDefaultCrumblingLayer;
-        case compositor::LayerKind::Snow:
-            return kDefaultSnowLayer;
-        case compositor::LayerKind::River:
-            return kDefaultRiverLayer;
-        case compositor::LayerKind::Droplet:
-            return kDefaultDropletLayer;
-        case compositor::LayerKind::Scatter:
-            return kDefaultScatterLayer;
-        default:
-            return kDefaultLayer;
-    }
-}
-
-inline const compositor::BrushSettings kDefaultBrush;
 inline const renderer::LightSettings kDefaultLight;
 inline const renderer::ExposureSettings kDefaultExposure;
 inline const renderer::MaterialSettings kDefaultMaterial;
 inline const renderer::CameraState kDefaultCamera;
 inline const renderer::SkySettings kDefaultSky;
 
-inline const char* const kNoiseTypeLabels[] = {"fBm",    "尾根状", "セル状",
-                                              "Perlin", "雲状",   "割れ目"};
-// **「ノード」は選ばせない。** グラフで Mask 入力へ繋ぐと自動でそれになる。
-inline const char* const kMaskSourceLabels[] = {
-    "定数",       "ノイズ",     "テクスチャ", "下地の高さ",
-    "下地の傾斜", "下地の曲率", "下地の窪み", "ペイント",
-};
 inline const char* const kChannelLabels[] = {"BaseColor", "Normal", "Surface", "Height"};
 
 // ビューポートの表示モード。renderer::DebugView と並びを合わせること。
@@ -251,40 +129,6 @@ inline int ResolutionIndex(uint32_t resolution) {
         }
     }
     return 1;
-}
-
-// ノイズの種類を選ぶ行。
-inline bool DrawNoiseTypeRow(const char* label, compositor::NoiseType& type,
-                      compositor::NoiseType defaultType) {
-    int selected = static_cast<int>(type);
-    if (ui::PropertyCombo(label, &selected, kNoiseTypeLabels, IM_ARRAYSIZE(kNoiseTypeLabels),
-                          static_cast<int>(defaultType),
-                          "fBm: 一般的な起伏 / 尾根状: 稜線や割れ目 / セル状: 石畳や砂利")) {
-        type = static_cast<compositor::NoiseType>(selected);
-        return true;
-    }
-    return false;
-}
-
-// ノイズのパラメータをまとめて並べる。ハイトとマスクで共通。
-// ハイトでは寄与の量を heightGain が担うので、showAmount を false にして「量」を出さない。
-inline bool DrawNoiseRows(compositor::NoiseParams& noise, const compositor::NoiseParams& defaults,
-                   bool showAmount = true) {
-    bool changed = DrawNoiseTypeRow("種類", noise.type, defaults.type);
-    // 周波数はタイルするよう整数へ丸めて評価される（Common.hlsli の SampleNoise）。
-    // スライダーの刻みも 1 にして、丸めと表示がずれないようにする。
-    changed |= ui::PropertyFloat("周波数", &noise.scale, 1.0f, 64.0f, defaults.scale,
-                                 "大きいほど細かい模様になる。タイルさせるため整数で使う",
-                                 "%.0f", 0, 1.0f);
-    if (showAmount) {
-        changed |= ui::PropertyFloat("量", &noise.amount, 0.0f, 3.0f, defaults.amount,
-                                     "ノイズの寄与。0 で効かなくなる", "%.2f");
-    }
-    changed |= ui::PropertyInt("オクターブ", &noise.octaves, 1, 8, defaults.octaves,
-                               "重ねる段数。多いほど細部が増え、計算も増える");
-    changed |= ui::PropertyFloat("オフセット", &noise.offset, 0.0f, 64.0f, defaults.offset,
-                                 "同じ設定で別の模様がほしいときにずらす", "%.1f", 0, 0.5f);
-    return changed;
 }
 
 // マテリアルを選ぶ行。サムネイル付きの一覧から選ぶ。

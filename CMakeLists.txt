@@ -115,8 +115,6 @@ set(tg_sources
     src/compositor/MaterialLibrary.h
     src/compositor/MaterialStack.cpp
     src/compositor/MaterialStack.h
-    src/compositor/PaintMask.cpp
-    src/compositor/PaintMask.h
     src/compositor/TextureLibrary.cpp
     src/compositor/TextureLibrary.h
     src/core/FileDialog.cpp

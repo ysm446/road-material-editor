@@ -245,7 +245,7 @@ uint32_t ExportMaterialTextures(rhi::Device& device, rhi::PipelineCache& pipelin
     const bool submitted = device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
         PIXBeginEvent(commandList, PIX_COLOR(200, 160, 80), "ExportEvaluate");
         evaluated = evaluator.Evaluate(device, pipelineCache, commandList, refs.stack,
-                                       refs.textures, refs.materials, refs.paintMasks, tiles);
+                                       refs.textures, refs.materials, tiles);
         PIXEndEvent(commandList);
     });
     if (!submitted || !evaluated) {

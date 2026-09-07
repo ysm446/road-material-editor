@@ -184,7 +184,8 @@ void EnsureRoadsideTransitions(SurfaceBand& band) {
     for (auto& span : band.spans) ClampSpanBlends(span);
     for (size_t i = 1; i < band.spans.size(); ++i) {
         auto& left = band.spans[i - 1]; auto& right = band.spans[i];
-        if (left.preset == right.preset || left.blendOutMeters + right.blendInMeters > 0) continue;
+        if ((left.preset == right.preset && left.boundaryMaterial == right.boundaryMaterial) ||
+            left.blendOutMeters + right.blendInMeters > 0) continue;
         const BoundaryContract defaults;
         left.blendOutMeters = right.blendInMeters = std::min({defaults.transitionMeters,
             (left.endMeters - left.startMeters) * 0.5f, (right.endMeters - right.startMeters) * 0.5f});

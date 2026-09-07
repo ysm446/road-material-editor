@@ -156,10 +156,11 @@ struct MeshConstants {
         uint32_t mask, height, alongU, invertMask;
         float center, acrossSign, width, repeat;
         float depth, heightCenter, pad0, pad1;
-    } boundaries[2];
+    } boundaries[16];
     uint32_t boundaryControlIndex;
     float boundaryFrameSign;
-    float boundaryPad[2];
+    uint32_t boundaryCount;
+    float boundaryPad;
 };
 
 // 道路空間マスク（RGBA8）を GPU へ上げる。ミップは持たない（低解像度でぼかして読む）。
@@ -959,9 +960,11 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             const auto& control = m_sceneMaterials[layerSource].boundaryControl;
             drawConstants.boundaryControlIndex = control.IsValid() ? control.SrvIndex() : kNoShadowIndex;
             drawConstants.boundaryFrameSign = connection.connectionFrameSign;
-            for (size_t boundary = 0; boundary < 2; ++boundary) {
+            drawConstants.boundaryCount = 0;
+            for (size_t boundary = 0; boundary < connection.boundaries.size(); ++boundary) {
                 const auto& input = connection.boundaries[boundary];
                 const auto& settings = input.material;
+                if (settings.id) drawConstants.boundaryCount = static_cast<uint32_t>(boundary + 1);
                 auto& output = drawConstants.boundaries[boundary];
                 output.mask = textures.SrvIndex(settings.mask, false);
                 output.height = textures.SrvIndex(settings.height, false);

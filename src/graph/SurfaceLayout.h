@@ -91,13 +91,13 @@ struct SurfaceSpan {
     float blendInMeters = 0, blendOutMeters = 0;
     uint32_t seed = 1;
     std::vector<SpanParameter> parameters;
+    SurfaceId boundaryMaterial = 0;
 };
 struct SurfaceBand {
     SurfaceId id = 0;
     SurfaceSide side = SurfaceSide::Road;
     // 同じ側はRoadに近い帯から順に格納。区間の切れ目は帯ごとに独立。
     std::vector<SurfaceSpan> spans;
-    SurfaceId boundaryMaterial = 0;
 };
 struct RoadLayout {
     SurfaceId id = 0;

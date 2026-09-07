@@ -163,14 +163,17 @@ bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& sourceDocument, std::st
         if (!idValid(layout.id) || layout.roadNode <= 0 || !roads.insert(layout.roadNode).second) return fail("道路配置のID・接続先が不正または重複しています");
         size_t roadBands = 0;
         for (const auto& band : layout.bands) {
-            if (band.boundaryMaterial && (band.side == SurfaceSide::Road ||
-                std::none_of(document.boundaryMaterials.begin(), document.boundaryMaterials.end(),
-                    [&](const auto& m) { return m.id == band.boundaryMaterial; })))
-                return fail("沿道の境界マテリアル参照が不正です");
             if (!idValid(band.id) || static_cast<uint32_t>(band.side) > 2) return fail("帯のID・側が不正です");
             roadBands += band.side == SurfaceSide::Road ? 1 : 0;
             float previousEnd = 0;
+            std::unordered_set<SurfaceId> boundaryIds;
             for (const auto& span : band.spans) {
+                if (span.boundaryMaterial) {
+                    if (band.side == SurfaceSide::Road || std::none_of(document.boundaryMaterials.begin(), document.boundaryMaterials.end(),
+                        [&](const auto& m) { return m.id == span.boundaryMaterial; })) return fail("区間の境界マテリアル参照が不正です");
+                    boundaryIds.insert(span.boundaryMaterial);
+                    if (boundaryIds.size() > 8) return fail("境界マテリアルは片側につき8種類までです");
+                }
                 const auto found = presets.find(span.preset);
                 if (!idValid(span.id) || found == presets.end()) return fail("区間のID・プリセット参照が不正です");
                 if (!range(span.startMeters, 0, 50) || !range(span.endMeters, 0, 50) || span.startMeters >= span.endMeters ||

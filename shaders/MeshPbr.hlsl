@@ -131,10 +131,11 @@ struct MeshConstants
     float2 connectionSecondHeightFade;
     uint connectionRoadMixIndex;
     uint connectionEndPad;
-    BoundaryConstants boundaries[2];
+    BoundaryConstants boundaries[16];
     uint boundaryControlIndex;
     float boundaryFrameSign;
-    float2 boundaryPad;
+    uint boundaryCount;
+    float boundaryPad;
 };
 
 
@@ -288,10 +289,10 @@ float LayerHeightLevel(LayerContext c, uint slot, float2 uv)
 
 // プリセット内の合成と、プリセット間の被覆を別々に評価する。
 // 両面で同じ境界座標を使う。Uは道路側から沿道側、Vは道路沿いの実距離。
-float4 BoundaryControl(float2 meters) {
+float4 BoundaryControl(float2 meters, uint slot) {
     if (g_mesh.boundaryControlIndex == kNoTextureIndex) return 0;
     Texture2D<float4> control = ResourceDescriptorHeap[g_mesh.boundaryControlIndex];
-    return control.SampleLevel(g_samplerLinearClamp, float2(0.5f, meters.y * g_mesh.roadMaskScale.y), 0);
+    return control.SampleLevel(g_samplerLinearClamp, float2((slot + 0.5f) / 8.0f, meters.y * g_mesh.roadMaskScale.y), 0);
 }
 float2 BoundaryUv(BoundaryConstants b, float2 meters) {
     float2 uv = float2((meters.x - b.center) * b.acrossSign / max(b.width, 0.02f) + 0.5f,
@@ -302,11 +303,11 @@ float BoundaryEnvelope(BoundaryConstants b, float2 meters) {
     return 1 - smoothstep(0.4f, 0.5f, abs(meters.x - b.center) / max(b.width, 0.02f));
 }
 float BoundaryHeight(float2 meters) {
-    const float4 control = BoundaryControl(meters);
     float result = 0;
-    [unroll] for (uint i = 0; i < 2; ++i) {
+    [loop] for (uint i = 0; i < g_mesh.boundaryCount; ++i) {
+        const float4 control = BoundaryControl(meters, i / 2);
         const BoundaryConstants b = g_mesh.boundaries[i];
-        const float weight = control[i * 2] * BoundaryEnvelope(b, meters);
+        const float weight = control[(i % 2) * 2] * BoundaryEnvelope(b, meters);
         if (weight <= 0 || b.height == kNoTextureIndex || b.depth <= 0) continue;
         Texture2D<float4> map = ResourceDescriptorHeap[b.height];
         result += (map.SampleLevel(g_samplerLinearClamp, BoundaryUv(b, meters), 0).r - b.heightCenter) * 2 * b.depth * weight;
@@ -319,18 +320,24 @@ ConnectionMix ConnectionWeights(float2 meters)
     Texture2D<float4> mask = ResourceDescriptorHeap[g_mesh.roadMaskIndex];
     float4 coverage = saturate(mask.SampleLevel(g_samplerLinearClamp, meters * g_mesh.roadMaskScale, 0));
     if (g_mesh.connectionContextCount < 5) coverage.ba = 0;
-    const float4 boundaryControl = BoundaryControl(meters);
-    [unroll] for (uint boundary = 0; boundary < 2; ++boundary) {
+    const float4 originalCoverage = coverage;
+    float4 replacement = 0;
+    float2 replaced = 0;
+    [loop] for (uint boundary = 0; boundary < g_mesh.boundaryCount; ++boundary) {
+        const uint side = boundary % 2;
+        const float4 boundaryControl = BoundaryControl(meters, boundary / 2);
         const BoundaryConstants b = g_mesh.boundaries[boundary];
-        const float weight = boundaryControl[boundary * 2] * BoundaryEnvelope(b, meters);
+        const float weight = boundaryControl[side * 2] * BoundaryEnvelope(b, meters);
         if (weight <= 0 || b.mask == kNoTextureIndex) continue;
         Texture2D<float4> map = ResourceDescriptorHeap[b.mask];
         float maskValue = saturate(map.SampleLevel(g_samplerLinearClamp, BoundaryUv(b, meters), 0).r);
         if (b.invertMask != 0) maskValue = 1 - maskValue;
-        const float second = boundaryControl[boundary * 2 + 1];
-        coverage[boundary * 2] = lerp(coverage[boundary * 2], (1 - maskValue) * (1 - second), weight);
-        coverage[boundary * 2 + 1] = lerp(coverage[boundary * 2 + 1], (1 - maskValue) * second, weight);
+        const float second = boundaryControl[side * 2 + 1];
+        replaced[side] += weight;
+        replacement[side * 2] += (1 - maskValue) * (1 - second) * weight;
+        replacement[side * 2 + 1] += (1 - maskValue) * second * weight;
     }
+    coverage = originalCoverage * (1 - saturate(replaced.xxyy)) + replacement;
     const float base = saturate(1 - dot(coverage, 1.0f));
     const float total = max(base + dot(coverage, 1.0f), 1e-6f);
     ConnectionMix result = (ConnectionMix)0;

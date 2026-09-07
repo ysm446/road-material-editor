@@ -102,7 +102,7 @@ struct SceneMesh {
     compositor::MaterialAssetId blendMaterial = compositor::kNoMaterialAsset;
     // 材質の合成モード（マスク抜き / 半透明）を使うか。白線などの帯だけ真。
     bool useBlendMode = false;
-    std::array<Boundary, 2> boundaries;
+    std::array<Boundary, 16> boundaries;
 };
 
 struct MeshScene {

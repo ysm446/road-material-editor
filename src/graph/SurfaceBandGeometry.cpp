@@ -475,13 +475,20 @@ bool ConnectSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& grap
         mesh->roadMask.width = 512;
         mesh->roadMask.height = std::max(16u, static_cast<uint32_t>(std::ceil(length * 64)));
         mesh->roadMask.rgba.resize(size_t(mesh->roadMask.width) * mesh->roadMask.height * 4);
-        const auto boundary = std::find_if(document.boundaryMaterials.begin(), document.boundaryMaterials.end(),
-            [&](const auto& m) { return m.id == band->boundaryMaterial; });
-        if (boundary != document.boundaryMaterials.end()) {
-            mesh->boundaries[0] = {*boundary, width, 1};
-            mesh->boundaries[0].material.widthMeters = std::min({boundary->widthMeters, width, totalWidth - width});
-            mesh->boundaryControl.width = 1; mesh->boundaryControl.height = mesh->roadMask.height;
-            mesh->boundaryControl.rgba.resize(size_t(mesh->roadMask.height) * 4);
+        size_t slot = 0;
+        for (const auto& span : band->spans) {
+            if (!span.boundaryMaterial || std::any_of(mesh->boundaries.begin(), mesh->boundaries.end(),
+                [&](const auto& b) { return b.material.id == span.boundaryMaterial; })) continue;
+            const auto boundary = std::find_if(document.boundaryMaterials.begin(), document.boundaryMaterials.end(),
+                [&](const auto& m) { return m.id == span.boundaryMaterial; });
+            if (boundary == document.boundaryMaterials.end() || slot >= 8) continue; // 文書検証で拒否済み。
+            mesh->boundaries[slot * 2] = {*boundary, width, 1};
+            mesh->boundaries[slot * 2].material.widthMeters = std::min({boundary->widthMeters, width, totalWidth - width});
+            ++slot;
+        }
+        if (slot) {
+            mesh->boundaryControl.width = 8; mesh->boundaryControl.height = mesh->roadMask.height;
+            mesh->boundaryControl.rgba.assign(size_t(mesh->roadMask.height) * 8 * 4, 0);
         }
     }
     // 同じ物理座標と種から境界を評価する。KeepStep/輪郭保持だけは面の側に応じて分離する。
@@ -489,17 +496,23 @@ bool ConnectSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& grap
         const float distance = (float(y) + 0.5f) * length / float(roadMesh.roadMask.height);
         const auto samples = SampleSurfaceBand(document, *band, distance);
         for (auto* mesh : {&roadMesh, &sideMesh}) if (mesh->boundaryControl.IsValid()) {
-            float enabled = 0, second = 0;
-            for (const auto& sample : samples) {
-                const auto index = std::find_if(presets.begin(), presets.end(), [&](const auto* p) { return p->id == sample.preset; }) - presets.begin();
-                const auto& contract = presets[index]->boundaries[0];
-                if (contract.mode == BoundaryMode::Blend && !contract.preserveOutline && contract.transitionMeters > 0) {
-                    enabled += sample.weight; if (index == 1) second += sample.weight;
+            for (size_t slot = 0; slot < 8; ++slot) {
+                const auto id = mesh->boundaries[slot * 2].material.id;
+                if (!id) continue;
+                float enabled = 0, second = 0;
+                for (const auto& sample : samples) {
+                    const auto span = std::find_if(band->spans.begin(), band->spans.end(), [&](const auto& s) { return s.id == sample.span; });
+                    if (span == band->spans.end() || span->boundaryMaterial != id) continue;
+                    const auto index = std::find_if(presets.begin(), presets.end(), [&](const auto* p) { return p->id == sample.preset; }) - presets.begin();
+                    const auto& contract = presets[index]->boundaries[0];
+                    if (contract.mode == BoundaryMode::Blend && !contract.preserveOutline && contract.transitionMeters > 0) {
+                        enabled += sample.weight; if (index == 1) second += sample.weight;
+                    }
                 }
+                auto* pixel = &mesh->boundaryControl.rgba[(size_t(y) * 8 + slot) * 4];
+                pixel[0] = static_cast<uint8_t>(std::lround(enabled * 255));
+                pixel[1] = static_cast<uint8_t>(std::lround(second / std::max(enabled, 1e-6f) * 255));
             }
-            auto* pixel = &mesh->boundaryControl.rgba[size_t(y) * 4];
-            pixel[0] = static_cast<uint8_t>(std::lround(enabled * 255));
-            pixel[1] = static_cast<uint8_t>(std::lround(second / std::max(enabled, 1e-6f) * 255));
         }
         for (uint32_t x = 0; x < roadMesh.roadMask.width; ++x) {
             const float offset = (float(x) + 0.5f) * totalWidth / float(roadMesh.roadMask.width) - width;
@@ -601,16 +614,19 @@ bool ConnectBothSurfaceBands(CompiledMeshGraph& scene, const NodeGraph& graph,
         mesh.connectionHeightFade.x += rightWidth;
         mesh.connectionSecondHeightFade = rightRoad.connectionHeightFade;
         mesh.connectionSecondHeightFade.x = rightWidth;
-        mesh.boundaries[0] = leftRoad.boundaries[0];
-        mesh.boundaries[0].center += rightWidth;
-        mesh.boundaries[1] = rightRoad.boundaries[0];
-        mesh.boundaries[1].center = rightWidth; mesh.boundaries[1].acrossSign = -1;
+        for (size_t slot = 0; slot < 8; ++slot) {
+            mesh.boundaries[slot * 2] = leftRoad.boundaries[slot * 2];
+            mesh.boundaries[slot * 2].center += rightWidth;
+            mesh.boundaries[slot * 2 + 1] = rightRoad.boundaries[slot * 2];
+            mesh.boundaries[slot * 2 + 1].center = rightWidth;
+            mesh.boundaries[slot * 2 + 1].acrossSign = -1;
+        }
         if (leftRoad.boundaryControl.IsValid() || rightRoad.boundaryControl.IsValid()) {
-            mesh.boundaryControl.width = 1; mesh.boundaryControl.height = mesh.roadMask.height;
-            mesh.boundaryControl.rgba.assign(size_t(mesh.roadMask.height) * 4, 0);
-            for (uint32_t y = 0; y < mesh.roadMask.height; ++y) for (size_t c = 0; c < 2; ++c) {
-                if (leftRoad.boundaryControl.IsValid()) mesh.boundaryControl.rgba[size_t(y) * 4 + c] = leftRoad.boundaryControl.rgba[size_t(y) * 4 + c];
-                if (rightRoad.boundaryControl.IsValid()) mesh.boundaryControl.rgba[size_t(y) * 4 + c + 2] = rightRoad.boundaryControl.rgba[size_t(y) * 4 + c];
+            mesh.boundaryControl.width = 8; mesh.boundaryControl.height = mesh.roadMask.height;
+            mesh.boundaryControl.rgba.assign(size_t(mesh.roadMask.height) * 8 * 4, 0);
+            for (size_t pixel = 0; pixel < size_t(mesh.roadMask.height) * 8; ++pixel) for (size_t c = 0; c < 2; ++c) {
+                if (leftRoad.boundaryControl.IsValid()) mesh.boundaryControl.rgba[pixel * 4 + c] = leftRoad.boundaryControl.rgba[pixel * 4 + c];
+                if (rightRoad.boundaryControl.IsValid()) mesh.boundaryControl.rgba[pixel * 4 + c + 2] = rightRoad.boundaryControl.rgba[pixel * 4 + c];
             }
         }
         mesh.roadWidthMeters = totalWidth;

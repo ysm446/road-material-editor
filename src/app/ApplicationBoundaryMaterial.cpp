@@ -43,7 +43,7 @@ void Application::DrawBoundaryMaterialLibrary() {
         if (remove && m_selectedBoundaryMaterial) {
             bool used = false;
             for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands)
-                used |= band.boundaryMaterial == m_selectedBoundaryMaterial;
+                for (const auto& span : band.spans) used |= span.boundaryMaterial == m_selectedBoundaryMaterial;
             if (used) ImGui::OpenPopup("使用中の境界");
             else {
                 std::erase_if(m_surfaceLayouts.boundaryMaterials, [&](const auto& m) { return m.id == m_selectedBoundaryMaterial; });

@@ -125,12 +125,12 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                     std::vector<graph::SurfaceId> boundaryIds{0};
                     int boundaryIndex = 0;
                     for (const auto& material : roadsideEdit.boundaryMaterials) {
-                        if (material.id == candidate.boundaryMaterial) boundaryIndex = static_cast<int>(boundaryIds.size());
+                        if (material.id == span.boundaryMaterial) boundaryIndex = static_cast<int>(boundaryIds.size());
                         boundaryIds.push_back(material.id); boundaryNames.push_back(material.name.c_str());
                     }
                     if (ui::PropertyCombo("境界マテリアル", &boundaryIndex, boundaryNames.data(), static_cast<int>(boundaryNames.size()), 0,
-                        "選択した側の沿道全体へ適用。材質をなじませる設定をオンにする")) {
-                        candidate.boundaryMaterial = boundaryIds[boundaryIndex]; changed = true;
+                        "選択した沿道区間へ適用。なしへの移行も区間の移行距離でなじませる。片側8種類まで")) {
+                        span.boundaryMaterial = boundaryIds[boundaryIndex]; changed = true;
                     }
                     std::vector<graph::SurfaceId> presetIds;
                     std::vector<const char*> presetNames;

@@ -621,23 +621,35 @@ void RunSurfaceLayoutTests() {
         boundary.id = boundaryDoc.AllocateId(); boundary.name = "舗装端";
         boundary.mask = 12; boundary.height = 13; boundary.widthMeters = 0.7f;
         boundaryDoc.boundaryMaterials.push_back(boundary);
-        boundaryDoc.layouts[0].bands[1].boundaryMaterial = boundary.id;
+        for (auto& span : boundaryDoc.layouts[0].bands[1].spans) span.boundaryMaterial = boundary.id;
         Check(graph::ValidateSurfaceLayouts(boundaryDoc, error), "境界マテリアルを沿道へ割り当てられる");
         const auto saved = io::WriteSurfaceLayouts(boundaryDoc);
+        auto legacyBoundary = saved;
+        legacyBoundary["version"] = 5;
+        for (auto& legacyLayout : legacyBoundary["layouts"]) for (auto& legacyBand : legacyLayout["bands"]) {
+            legacyBand["boundaryMaterial"] = legacyBand["spans"].empty() ? nlohmann::json(0) : legacyBand["spans"][0]["boundaryMaterial"];
+            for (auto& span : legacyBand["spans"]) span.erase("boundaryMaterial");
+        }
+        graph::SurfaceLayoutDocument migratedBoundary;
+        Check(io::ReadSurfaceLayouts(legacyBoundary, migratedBoundary, error) &&
+              io::WriteSurfaceLayouts(migratedBoundary) == saved, "旧全体境界設定を各区間へ移行する");
+        if (!error.empty()) std::printf("Boundary migration: %s\n", error.c_str());
+        else if (io::WriteSurfaceLayouts(migratedBoundary) != saved)
+            std::printf("Boundary migration diff: %s\n", nlohmann::json::diff(saved, io::WriteSurfaceLayouts(migratedBoundary)).dump().c_str());
         graph::SurfaceLayoutDocument restored;
-        Check(saved["version"] == 5 && io::ReadSurfaceLayouts(saved, restored, error) && io::WriteSurfaceLayouts(restored) == saved,
+        Check(saved["version"] == 6 && io::ReadSurfaceLayouts(saved, restored, error) && io::WriteSurfaceLayouts(restored) == saved,
               "境界画像・寸法・参照が保存往復する");
         auto connected = graph::CompileMeshGraph(sceneGraph);
         Check(graph::ConnectSurfaceBandMaterials(connected, sceneGraph, boundaryDoc, roadId,
               boundaryDoc.layouts[0].bands[1].id, error, true), "境界マテリアルを両面の描画へ渡せる");
         const auto& control = connected.scene.meshes[0].boundaryControl;
         Check(control.IsValid() && control.rgba == connected.scene.meshes.back().boundaryControl.rgba &&
-              control.rgba.front() == 255 && control.rgba[control.rgba.size() - 4] == 0 &&
+              control.rgba.front() == 255 && control.rgba[(size_t(control.height) - 1) * 8 * 4] == 0 &&
               connected.scene.meshes[0].boundaries[0].material.mask == boundary.mask &&
               connected.scene.meshes[0].boundaries[0].center == connected.scene.meshes.back().boundaries[0].center,
               "路肩は境界画像を共有し、段差保持の歩道区間では無効にする");
         Check(graph::CreateRoadsideExample(boundaryDoc, sceneGraph, roadId, graph::SurfaceSide::Right, error), "境界の左右検証用に右沿道を追加する");
-        boundaryDoc.layouts[0].bands.back().boundaryMaterial = boundary.id;
+        for (auto& span : boundaryDoc.layouts[0].bands.back().spans) span.boundaryMaterial = boundary.id;
         auto both = graph::CompileMeshGraph(sceneGraph);
         Check(graph::ConnectBothSurfaceBands(both, sceneGraph, boundaryDoc, roadId,
               boundaryDoc.layouts[0].bands[1].id, boundaryDoc.layouts[0].bands.back().id, error, true) &&
@@ -649,7 +661,7 @@ void RunSurfaceLayoutTests() {
             auto bad = saved;
             if (failure == 0) bad["boundaryMaterials"][0]["width"] = 0;
             if (failure == 1) bad["boundaryMaterials"][0].erase("mask");
-            if (failure == 2) bad["layouts"][0]["bands"][1]["boundaryMaterial"] = 999999;
+            if (failure == 2) bad["layouts"][0]["bands"][1]["spans"][0]["boundaryMaterial"] = 999999;
             if (failure == 3) bad["boundaryMaterials"][0]["id"] = bad["presets"][0]["id"];
             Check(!io::ReadSurfaceLayouts(bad, restored, error) && io::WriteSurfaceLayouts(restored) == saved,
                   "不正な境界寸法・欠落・参照・ID重複を非破壊で拒否する");
@@ -657,11 +669,56 @@ void RunSurfaceLayoutTests() {
         DocumentSnapshot beforeBoundary, afterBoundary;
         beforeBoundary.surfaceLayouts = restored; afterBoundary = beforeBoundary;
         afterBoundary.surfaceLayouts.boundaryMaterials[0].depthMeters = 0.08f;
+        afterBoundary.surfaceLayouts.layouts[0].bands[1].spans[0].boundaryMaterial = 0;
         history.Clear(); history.Push(beforeBoundary, 0);
         const auto undo = history.Undo(afterBoundary);
         Check(io::WriteSurfaceLayouts(undo.surfaceLayouts) == saved &&
               io::WriteSurfaceLayouts(history.Redo(undo).surfaceLayouts) == io::WriteSurfaceLayouts(afterBoundary.surfaceLayouts),
               "共有する境界の深さ変更をUndo・Redoする");
+        auto spanDoc = boundaryDoc;
+        auto& boundaryBand = spanDoc.layouts[0].bands[1];
+        boundaryBand.spans.resize(1);
+        boundaryBand.spans[0].endMeters = 50;
+        Check(graph::SplitSurfaceSpan(spanDoc, boundaryBand, 0), "境界付き区間を分割する");
+        Check(boundaryBand.spans[1].boundaryMaterial == boundary.id, "分割先に境界を引き継ぐ");
+        auto alternate = boundary;
+        alternate.id = spanDoc.AllocateId(); alternate.name = "別の境界"; alternate.depthMeters = 0.09f;
+        spanDoc.boundaryMaterials.push_back(alternate);
+        boundaryBand.spans[1].boundaryMaterial = alternate.id;
+        graph::EnsureRoadsideTransitions(boundaryBand);
+        Check(boundaryBand.spans[0].blendOutMeters > 0 && boundaryBand.spans[1].blendInMeters > 0,
+              "同じ路肩素材でも境界変更には移行距離を用意する");
+        for (bool none : {false, true}) {
+            boundaryBand.spans[1].boundaryMaterial = none ? 0 : alternate.id;
+            auto mixed = graph::CompileMeshGraph(sceneGraph);
+            Check(graph::ConnectSurfaceBandMaterials(mixed, sceneGraph, spanDoc, roadId, boundaryBand.id, error, true),
+                  "区間ごとの境界またはなしを接続する");
+            const auto& mask = mixed.scene.meshes[0].boundaryControl;
+            if (!mask.IsValid()) { Check(false, "区間の境界制御画像が有効"); continue; }
+            const size_t middle = (mask.height / 2) * 8 * 4;
+            const auto firstWeight = mask.rgba[middle], secondWeight = mask.rgba[middle + 4];
+            Check(firstWeight > 100 && firstWeight < 155 && (none ? secondWeight == 0 : firstWeight + secondWeight >= 254),
+                  "切替位置で境界を半分ずつ混ぜ、なしでは溝の重みを減らす");
+            Check(mask.rgba == mixed.scene.meshes.back().boundaryControl.rgba,
+                  "区間切替中も道路と沿道の制御を一致させる");
+            const size_t lastRow = (size_t(mask.height) - 1) * 8 * 4;
+            Check(mask.rgba.front() == 255 && mask.rgba[lastRow] == 0 &&
+                  mask.rgba[lastRow + 4] == (none ? 0 : 255), "境界の始終端は指定した区間だけに適用する");
+        }
+        auto capacityDoc = spanDoc;
+        auto& capacityBand = capacityDoc.layouts[0].bands[1];
+        const auto seedSpan = capacityBand.spans.front();
+        capacityBand.spans.clear();
+        for (int i = 0; i < 9; ++i) {
+            auto asset = boundary; asset.id = capacityDoc.AllocateId();
+            capacityDoc.boundaryMaterials.push_back(asset);
+            auto part = seedSpan; part.id = capacityDoc.AllocateId(); part.boundaryMaterial = asset.id;
+            part.startMeters = float(i * 5); part.endMeters = part.startMeters + 5;
+            part.blendInMeters = part.blendOutMeters = 0;
+            capacityBand.spans.push_back(part);
+            if (i == 7) Check(graph::ValidateSurfaceLayouts(capacityDoc, error), "片側8種類の境界を受け付ける");
+        }
+        Check(!graph::ValidateSurfaceLayouts(capacityDoc, error), "描画上限を超える9種類目は拒否する");
     }
     auto lateralScene = graph::CompileMeshGraph(sceneGraph);
     const size_t originalMeshes = lateralScene.scene.meshes.size();
@@ -856,7 +913,7 @@ void RunSurfaceLayoutTests() {
               "旧材質・マスク・ハイト合成条件を変えずにグラフから復元する");
         const auto graphJson = io::WriteSurfaceLayouts(graphDocument);
         graph::SurfaceLayoutDocument restored;
-        Check(graphJson["version"] == 5 && io::ReadSurfaceLayouts(graphJson, restored, error) &&
+        Check(graphJson["version"] == 6 && io::ReadSurfaceLayouts(graphJson, restored, error) &&
               io::WriteSurfaceLayouts(restored) == graphJson, "ノードID・結線・配置・設定が保存往復する");
         const auto graphPreview = graph::CompileSurfaceLayoutPreview(sceneGraph, graphDocument, linked.layouts[0].roadNode);
         Check(graphPreview.error.empty() && graphPreview.scene.meshes.size() == layeredPreview.scene.meshes.size() &&

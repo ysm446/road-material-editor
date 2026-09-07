@@ -45,7 +45,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 15: merge ノード（入力数が可変）。旧ビルドが Merge を読み飛ばして Mesh Output との接続を失うことを防ぐ。
 // 16: crack ノード。
 // 17: 埋込プリセットと道路・沿道の配置記述。旧ビルドによる消失を防ぐ。
-constexpr int kProjectFormatVersion = 22;
+constexpr int kProjectFormatVersion = 23;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 

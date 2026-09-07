@@ -9,7 +9,7 @@ namespace tg::renderer {
 bool ValidateMeshScene(const MeshScene& scene) {
     for (const auto& mesh : scene.meshes) {
         const auto& data = mesh.geometry;
-        if (!mesh.boundaryControl.rgba.empty() && (!mesh.boundaryControl.IsValid() || mesh.boundaryControl.width != 1)) return false;
+        if (!mesh.boundaryControl.rgba.empty() && (!mesh.boundaryControl.IsValid() || mesh.boundaryControl.width != 8)) return false;
         for (const auto& boundary : mesh.boundaries) {
             const auto& m = boundary.material;
             if (!std::isfinite(boundary.center) || (boundary.acrossSign != 1 && boundary.acrossSign != -1) ||

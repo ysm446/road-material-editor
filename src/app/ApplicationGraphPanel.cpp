@@ -530,8 +530,7 @@ void Application::PasteGraphNodes(const ImVec2& viewCenter) {
 }
 
 bool Application::IsGraphPinVisible(const graph::Pin& pin) const {
-    if (m_showLegacyRoadInputs || (pin.valueType != graph::ValueType::Material &&
-        pin.valueType != graph::ValueType::RoadMask)) return true;
+    if (pin.valueType != graph::ValueType::Material && pin.valueType != graph::ValueType::RoadMask) return true;
     for (const auto& layout : m_surfaceLayouts.layouts) {
         if (layout.roadNode != pin.nodeId) continue;
         for (const auto& band : layout.bands)

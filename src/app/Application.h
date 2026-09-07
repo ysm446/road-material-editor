@@ -336,7 +336,6 @@ private:
     int m_surfaceLayoutLayer = 0;
     graph::SurfaceId m_editSurfacePreset = 0;
     std::string m_surfacePresetError;
-    bool m_showLegacyRoadInputs = false;
     bool m_previewSurfaceBands = false;
     bool m_connectSurfaceBands = false;
     bool m_displaceConnectedBands = false;

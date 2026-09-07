@@ -204,13 +204,7 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
             else TG_LOG_ERROR("路面区間: %s", error.c_str());
         }
     } else {
-        ui::HintText("材質とマスクは区間プリセットで編集します");
-        if (ui::BeginPropertyTable("legacyRoadInputs")) {
-            ui::PropertyBool("旧入力を表示", &m_showLegacyRoadInputs, false,
-                "Roadの取込元のピンと接続線を表示する。区間編集中の路面には反映されず、区間編集を解除すると使用する");
-            ui::EndPropertyTable();
-        }
-        if (m_showLegacyRoadInputs) ui::HintText("旧入力は区間編集を解除したときに使用します");
+        ui::HintText("材質とマスクはレイヤーマテリアルで編集します");
         graph::RoadGeometry road;
         std::string error;
         if (!graph::EvaluateRoad(m_graph, roadId, road, error)) { ui::HintText("先に道路の形状を修正してください"); return false; }

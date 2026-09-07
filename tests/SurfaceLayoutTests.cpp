@@ -446,6 +446,49 @@ void RunSurfaceLayoutTests() {
         Check(axisScene.meshSources.size() == axisScene.scene.meshes.size(), "追加後も描画メッシュと由来の配列が対応する");
     }
 
+    tests::Section("左右同時接続 — 独立した区間と共通座標");
+    auto bothDocument = roadside;
+    Check(graph::CreateRoadsideExample(bothDocument, sceneGraph, roadId, graph::SurfaceSide::Right, error),
+          "既存の左沿道を保って右沿道を追加する");
+    auto& rightBand = bothDocument.layouts[0].bands.back();
+    rightBand.spans[0].endMeters = rightBand.spans[1].startMeters = 18;
+    auto bothScene = graph::CompileMeshGraph(sceneGraph);
+    Check(graph::ConnectBothSurfaceBands(bothScene, sceneGraph, bothDocument, roadId, lateralBandId, rightBand.id, error, true),
+          "左右の異なる区切りを持つ沿道を同時に接続する");
+    if (bothScene.scene.meshes.size() == originalMeshes + 7) {
+        const auto& bothRoad = bothScene.scene.meshes[0];
+        const auto& leftSurface = bothScene.scene.meshes[originalMeshes + 3];
+        const auto& rightSurface = bothScene.scene.meshes.back();
+        Check(renderer::ValidateMeshScene(bothScene.scene) && bothRoad.connectionExtraSources[0] >= 0,
+              "左右同時接続の5材質参照が有効");
+        Check(bothRoad.connectionSources == rightSurface.connectionSources &&
+              bothRoad.connectionExtraSources == leftSurface.connectionExtraSources &&
+              bothRoad.roadWidthMeters == rightSurface.roadWidthMeters,
+              "道路と両沿道が同じ材質参照とマスク縮尺を共有する");
+        Check(std::abs(leftSurface.geometry.vertices.front().roadUv.x - bothRoad.connectionHeightFade.x) < 1e-5f &&
+              std::abs(rightSurface.geometry.vertices.front().roadUv.x - bothRoad.connectionSecondHeightFade.x) < 1e-5f,
+              "左右の境界がそれぞれ共通の変位減衰位置に一致する");
+        bool sharedGround = true;
+        for (size_t i = 0; i < size_t(bothRoad.roadMask.width) * 4; ++i)
+            sharedGround &= bothRoad.roadMask.rgba[i] == leftSurface.roadMask.rgba[i] &&
+                            bothRoad.roadMask.rgba[i] == rightSurface.roadMask.rgba[i];
+        Check(sharedGround, "両側が路肩の区間は3面の混合率が一致する");
+        const auto original = graph::CompileMeshGraph(sceneGraph);
+        bool whiteUv = true;
+        for (size_t i = 0; i < original.scene.meshes[1].geometry.vertices.size(); ++i)
+            whiteUv &= std::abs(bothScene.scene.meshes[1].geometry.vertices[i].roadUv.x - bothRoad.connectionOrigins[0].x -
+                original.scene.meshes[1].geometry.vertices[i].roadUv.x * original.scene.meshes[0].roadMetersPerUv) < 1e-5f;
+        Check(whiteUv, "左右同時接続後も白線が元の道路位置を参照する");
+        auto invalidBoth = bothScene.scene;
+        invalidBoth.meshes[0].connectionExtraSources[1] = -1;
+        Check(!renderer::ValidateMeshScene(invalidBoth), "片方だけ欠けた追加材質参照を拒否する");
+    }
+    auto failedBoth = graph::CompileMeshGraph(sceneGraph);
+    const auto beforeBoth = failedBoth.scene.meshes.size();
+    Check(!graph::ConnectBothSurfaceBands(failedBoth, sceneGraph, bothDocument, roadId, lateralBandId, lateralBandId, error, true) &&
+          failedBoth.scene.meshes.size() == beforeBoth && failedBoth.scene.meshes[0].connectionSources[0] == -1,
+          "左右の指定が不正なら途中の接続を残さない");
+
     tests::Section("横接続の変位 — 共通の高さ基準と白線UV");
     auto displacedScene = graph::CompileMeshGraph(axisGraph);
     const auto oldRoad = displacedScene.scene.meshes[0];

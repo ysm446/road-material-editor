@@ -309,6 +309,21 @@ void Application::SyncMeshGraph() {
     if (m_previewSurfaceBands) {
         for (const auto& layout : m_surfaceLayouts.layouts) {
             if (std::find(compiled.meshSources.begin(), compiled.meshSources.end(), layout.roadNode) == compiled.meshSources.end()) continue;
+            graph::SurfaceId leftBand = 0, rightBand = 0;
+            size_t leftCount = 0, rightCount = 0;
+            for (const auto& band : layout.bands) {
+                if (band.spans.empty()) continue;
+                if (band.side == graph::SurfaceSide::Left) { leftBand = band.id; ++leftCount; }
+                if (band.side == graph::SurfaceSide::Right) { rightBand = band.id; ++rightCount; }
+            }
+            const bool connectBoth = m_connectSurfaceBands && leftCount == 1 && rightCount == 1;
+            if (connectBoth) {
+                std::string error;
+                if (graph::ConnectBothSurfaceBands(compiled, m_graph, m_surfaceLayouts, layout.roadNode,
+                                                  leftBand, rightBand, error, m_displaceConnectedBands)) continue;
+                if (!compiled.error.empty()) compiled.error += " / ";
+                compiled.error += error;
+            }
             for (const auto& band : layout.bands) {
                 if (band.side == graph::SurfaceSide::Road || band.spans.empty()) continue;
                 if (std::count_if(layout.bands.begin(), layout.bands.end(), [&](const auto& other) {
@@ -323,7 +338,7 @@ void Application::SyncMeshGraph() {
                 const bool hasSelectedSide = std::any_of(layout.bands.begin(), layout.bands.end(), [&](const auto& other) {
                     return other.side == selectedSide && !other.spans.empty();
                 });
-                if (m_connectSurfaceBands && (band.side == selectedSide || !hasSelectedSide) && preview.error.empty()) {
+                if (m_connectSurfaceBands && !connectBoth && (band.side == selectedSide || !hasSelectedSide) && preview.error.empty()) {
                     std::string error;
                     if (graph::ConnectSurfaceBandMaterials(compiled, m_graph, m_surfaceLayouts, layout.roadNode, band.id, error, m_displaceConnectedBands)) continue;
                     if (!compiled.error.empty()) compiled.error += " / ";

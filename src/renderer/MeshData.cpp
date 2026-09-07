@@ -22,6 +22,14 @@ bool ValidateMeshScene(const MeshScene& scene) {
                 !scene.meshes[static_cast<size_t>(source)].materialOnly)) return false;
         }
         const bool hasContexts = mesh.connectionSources[0] >= 0;
+        const bool hasExtra = mesh.connectionExtraSources[0] >= 0;
+        if (!std::isfinite(mesh.connectionSecondHeightFade.x) || !std::isfinite(mesh.connectionSecondHeightFade.y) || mesh.connectionSecondHeightFade.y < 0) return false;
+        for (size_t i = 0; i < 2; ++i) {
+            const int source = mesh.connectionExtraSources[i];
+            if ((source >= 0) != hasExtra || source < -1 || (hasExtra && (!hasContexts || static_cast<size_t>(source) >= scene.meshes.size() || !scene.meshes[source].materialOnly)) ||
+                !std::isfinite(mesh.connectionExtraOrigins[i].x) || !std::isfinite(mesh.connectionExtraOrigins[i].y) ||
+                (mesh.connectionExtraSigns[i] != 1 && mesh.connectionExtraSigns[i] != -1)) return false;
+        }
         for (size_t i = 0; i < mesh.connectionSources.size(); ++i) {
             if ((mesh.connectionSources[i] >= 0) != hasContexts ||
                 !std::isfinite(mesh.connectionOrigins[i].x) || !std::isfinite(mesh.connectionOrigins[i].y)) return false;

@@ -2,6 +2,11 @@
 #include "graph/SurfaceLayoutEvaluation.h"
 
 namespace tg::graph {
+// 左右各1帯を一括接続する。片側でも失敗した場合は元のシーンを保持する。
+bool ConnectBothSurfaceBands(CompiledMeshGraph& scene, const NodeGraph& graph,
+                             const SurfaceLayoutDocument& document, GraphId roadId,
+                             SurfaceId leftBand, SurfaceId rightBand, std::string& error,
+                             bool enableDisplacement = false);
 bool CreateRoadsideExample(SurfaceLayoutDocument& document, const NodeGraph& graph, GraphId roadId,
                           SurfaceSide side, std::string& error);
 // 道路に隣接する沿道1帯の形状。左・右、全長を覆う区間列に対応。

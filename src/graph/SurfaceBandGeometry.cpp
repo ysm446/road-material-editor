@@ -400,4 +400,75 @@ bool ConnectSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& grap
     scene = std::move(next);
     return true;
 }
+bool ConnectBothSurfaceBands(CompiledMeshGraph& scene, const NodeGraph& graph,
+                             const SurfaceLayoutDocument& document, GraphId roadId,
+                             SurfaceId leftBand, SurfaceId rightBand, std::string& error,
+                             bool enableDisplacement) {
+    auto left = scene, right = scene;
+    if (!ConnectSurfaceBandMaterials(left, graph, document, roadId, leftBand, error, enableDisplacement) ||
+        !ConnectSurfaceBandMaterials(right, graph, document, roadId, rightBand, error, enableDisplacement)) return false;
+    const size_t roadIndex = std::find(scene.meshSources.begin(), scene.meshSources.end(), roadId) - scene.meshSources.begin();
+    const auto& leftRoad = left.scene.meshes[roadIndex];
+    const auto& rightRoad = right.scene.meshes[roadIndex];
+    // 引数の左右取り違えを黙って反転しない。
+    if (leftRoad.connectionAcrossSigns[0] != 1 || rightRoad.connectionAcrossSigns[0] != -1) {
+        error = "左右の沿道指定が一致しません"; return false;
+    }
+    const float width = scene.scene.meshes[roadIndex].roadWidthMeters;
+    const float rightWidth = rightRoad.roadWidthMeters - width;
+    const float totalWidth = leftRoad.roadWidthMeters + rightWidth;
+    auto next = left;
+    const size_t leftIndex = next.scene.meshes.size() - 1;
+    const int rightStart = static_cast<int>(next.scene.meshes.size());
+    // 素材は既存の評価・GPU寿命管理へ載せ、左右で道路の下地を共有する。
+    for (size_t i = 1; i < 3; ++i) {
+        next.scene.meshes.push_back(right.scene.meshes[rightRoad.connectionSources[i]]);
+        next.meshSources.push_back(0);
+    }
+    next.scene.meshes.push_back(right.scene.meshes.back()); next.meshSources.push_back(0);
+    // push_back後に参照を取得し直す。元の道路と白線のインデックスは維持する。
+    for (size_t i = 0; i < scene.scene.meshes.size(); ++i) {
+        if (i != roadIndex && next.scene.meshes[i].displacementSource != static_cast<int>(roadIndex)) continue;
+        for (auto& v : next.scene.meshes[i].geometry.vertices) v.roadUv.x += rightWidth;
+    }
+    for (auto& v : next.scene.meshes[leftIndex].geometry.vertices) v.roadUv.x += rightWidth;
+    for (auto& v : next.scene.meshes.back().geometry.vertices) v.roadUv.x = width - v.roadUv.x + rightWidth;
+    const auto sample = [](const renderer::SceneMesh& mesh, float across, uint32_t row, size_t channel) {
+        const auto& mask = mesh.roadMask;
+        const float x = std::clamp(across / mesh.roadWidthMeters * float(mask.width) - 0.5f, 0.0f, float(mask.width - 1));
+        const auto lo = static_cast<uint32_t>(x), hi = std::min(lo + 1, mask.width - 1);
+        return std::lerp(float(mask.rgba[(size_t(row) * mask.width + lo) * 4 + channel]),
+                         float(mask.rgba[(size_t(row) * mask.width + hi) * 4 + channel]), x - float(lo));
+    };
+    for (const size_t index : {roadIndex, leftIndex, next.scene.meshes.size() - 1}) {
+        auto& mesh = next.scene.meshes[index];
+        mesh.connectionSources = leftRoad.connectionSources;
+        mesh.connectionExtraSources = {rightStart, rightStart + 1};
+        mesh.connectionOrigins = {DirectX::XMFLOAT2{rightWidth, 0}, DirectX::XMFLOAT2{rightWidth + width, 0}, DirectX::XMFLOAT2{rightWidth + width, 0}};
+        mesh.connectionExtraOrigins = {DirectX::XMFLOAT2{rightWidth, 0}, DirectX::XMFLOAT2{rightWidth, 0}};
+        mesh.connectionAcrossSigns = {1, 1, 1}; mesh.connectionExtraSigns = {-1, -1};
+        mesh.connectionFrameSign = index == next.scene.meshes.size() - 1 ? -1.0f : 1.0f;
+        mesh.connectionHeightFade = leftRoad.connectionHeightFade;
+        mesh.connectionHeightFade.x += rightWidth;
+        mesh.connectionSecondHeightFade = rightRoad.connectionHeightFade;
+        mesh.connectionSecondHeightFade.x = rightWidth;
+        mesh.roadWidthMeters = totalWidth;
+        const auto& leftInput = index == leftIndex ? left.scene.meshes.back() : leftRoad;
+        const auto& rightInput = index == next.scene.meshes.size() - 1 ? right.scene.meshes.back() : rightRoad;
+        for (uint32_t y = 0; y < mesh.roadMask.height; ++y) for (uint32_t x = 0; x < mesh.roadMask.width; ++x) {
+            const float across = (float(x) + 0.5f) * totalWidth / float(mesh.roadMask.width) - rightWidth;
+            float values[4] = {sample(leftInput, across, y, 0), sample(leftInput, across, y, 1),
+                               sample(rightInput, width - across, y, 0), sample(rightInput, width - across, y, 1)};
+            const float sum = values[0] + values[1] + values[2] + values[3];
+            int remaining = 255;
+            for (size_t c = 0; c < 4; ++c) {
+                const int value = std::min(remaining, static_cast<int>(std::lround(values[c] * std::min(1.0f, 255.0f / std::max(sum, 1.0f)))));
+                mesh.roadMask.rgba[(size_t(y) * mesh.roadMask.width + x) * 4 + c] = static_cast<uint8_t>(value);
+                remaining -= value;
+            }
+        }
+    }
+    if (!renderer::ValidateMeshScene(next.scene)) { error = "左右接続の描画データが不正です"; return false; }
+    scene = std::move(next); error.clear(); return true;
+}
 }  // namespace tg::graph

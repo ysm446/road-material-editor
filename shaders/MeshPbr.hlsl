@@ -120,7 +120,9 @@ struct MeshConstants
     uint connectionPrototype;
     uint connectionContextCount;
     float2 connectionHeightFade;
-    LayerContext connectionContexts[3];
+    LayerContext connectionContexts[5];
+    float2 connectionSecondHeightFade;
+    float2 connectionEndPad;
 };
 
 
@@ -273,12 +275,18 @@ float LayerHeightLevel(LayerContext c, uint slot, float2 uv)
 }
 
 // プリセット内の合成と、プリセット間の被覆を別々に評価する。
-float3 ConnectionWeights(float2 meters)
+struct ConnectionMix { float values[5]; };
+ConnectionMix ConnectionWeights(float2 meters)
 {
     Texture2D<float4> mask = ResourceDescriptorHeap[g_mesh.roadMaskIndex];
-    const float2 coverage = saturate(mask.SampleLevel(g_samplerLinearClamp, meters * g_mesh.roadMaskScale, 0).rg);
-    float3 weights = float3(saturate(1 - coverage.x - coverage.y), coverage);
-    return weights / max(dot(weights, 1.0f), 1e-6f);
+    float4 coverage = saturate(mask.SampleLevel(g_samplerLinearClamp, meters * g_mesh.roadMaskScale, 0));
+    if (g_mesh.connectionContextCount < 5) coverage.ba = 0;
+    const float base = saturate(1 - dot(coverage, 1.0f));
+    const float total = max(base + dot(coverage, 1.0f), 1e-6f);
+    ConnectionMix result;
+    result.values[0] = base / total;
+    [unroll] for (uint i = 0; i < 4; ++i) result.values[i + 1] = coverage[i] / total;
+    return result;
 }
 
 float4 ContextWeights(LayerContext c, float2 meters, float3 worldPosition, out float4 heights)
@@ -305,20 +313,25 @@ float2 ConnectionLocal(LayerContext c, float2 meters)
 
 float ConnectionHeight(float2 meters, float3 worldPosition)
 {
-    const float3 weights = ConnectionWeights(meters);
+    const ConnectionMix weights = ConnectionWeights(meters);
     float height = 0;
     [loop]
-    for (uint context = 0; context < 3; ++context)
+    for (uint context = 0; context < g_mesh.connectionContextCount; ++context)
     {
-        if (weights[context] <= 0) continue;
+        if (weights.values[context] <= 0) continue;
         const LayerContext c = g_mesh.connectionContexts[context];
         float4 heights;
         const float4 blend = ContextWeights(c, ConnectionLocal(c, meters), worldPosition, heights);
-        height += weights[context] * dot(blend, heights - 0.5f) * c.displacementMeters;
+        height += weights.values[context] * dot(blend, heights - 0.5f) * c.displacementMeters;
     }
     if (g_mesh.connectionHeightFade.y > 0.0f)
     {
         const float t = saturate(abs(meters.x - g_mesh.connectionHeightFade.x) / g_mesh.connectionHeightFade.y);
+        height *= t * t * (3.0f - 2.0f * t);
+    }
+    if (g_mesh.connectionSecondHeightFade.y > 0.0f)
+    {
+        const float t = saturate(abs(meters.x - g_mesh.connectionSecondHeightFade.x) / g_mesh.connectionSecondHeightFade.y);
         height *= t * t * (3.0f - 2.0f * t);
     }
     return 0.5f + height;
@@ -332,12 +345,12 @@ float3 WeightedDetailNormal(float3 detail, float weight)
 void ConnectionShading(float2 meters, float3 worldPosition,
                        out float3 color, out float4 surface, out float3 normal)
 {
-    const float3 weights = ConnectionWeights(meters);
+    const ConnectionMix weights = ConnectionWeights(meters);
     color = 0;
     surface = 0;
     normal = float3(0, 0, 1);
     [loop]
-    for (uint context = 0; context < 3; ++context)
+    for (uint context = 0; context < g_mesh.connectionContextCount; ++context)
     {
         // 微分は分岐前に計算し、被覆境界でも同じLODを読む。
         const LayerContext c = g_mesh.connectionContexts[context];
@@ -350,7 +363,7 @@ void ConnectionShading(float2 meters, float3 worldPosition,
             dx[slot] = ddx(uvs[slot]);
             dy[slot] = ddy(uvs[slot]);
         }
-        if (weights[context] <= 0) continue;
+        if (weights.values[context] <= 0) continue;
         float4 heights;
         const float4 blend = ContextWeights(c, local, worldPosition, heights);
         float3 contextNormal = float3(0, 0, 1);
@@ -361,7 +374,7 @@ void ConnectionShading(float2 meters, float3 worldPosition,
             Texture2D<float4> colorMap = ResourceDescriptorHeap[c.layerBaseColorIndex[layer]];
             Texture2D<float4> surfaceMap = ResourceDescriptorHeap[c.layerSurfaceIndex[layer]];
             Texture2D<float2> normalMap = ResourceDescriptorHeap[c.layerNormalIndex[layer]];
-            const float weight = weights[context] * blend[layer];
+            const float weight = weights.values[context] * blend[layer];
             color += colorMap.SampleGrad(g_samplerAnisoWrap, uvs[layer], dx[layer], dy[layer]).rgb * weight;
             surface += surfaceMap.SampleGrad(g_samplerAnisoWrap, uvs[layer], dx[layer], dy[layer]) * weight;
             float3 detail = DecodeTangentNormal(normalMap.SampleGrad(g_samplerAnisoWrap, uvs[layer], dx[layer], dy[layer]));
@@ -370,7 +383,7 @@ void ConnectionShading(float2 meters, float3 worldPosition,
             if (c.layerWorldUv[layer] == 0 && (c.roadUvAlongU & 4) != 0) detail.x = -detail.x;
             contextNormal = ReorientNormal(contextNormal, WeightedDetailNormal(detail, blend[layer]));
         }
-        normal = ReorientNormal(normal, WeightedDetailNormal(contextNormal, weights[context]));
+        normal = ReorientNormal(normal, WeightedDetailNormal(contextNormal, weights.values[context]));
     }
 }
 

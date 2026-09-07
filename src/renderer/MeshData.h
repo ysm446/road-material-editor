@@ -43,6 +43,11 @@ struct SceneMesh {
     // 共通幅座標から各素材座標と描画面の接線へ戻す向き。
     std::array<float, 3> connectionAcrossSigns{1, 1, 1};
     float connectionFrameSign = 1;
+    // 左右同時接続で追加する右沿道の2構成。通常は未使用。
+    std::array<int, 2> connectionExtraSources{-1, -1};
+    std::array<DirectX::XMFLOAT2, 2> connectionExtraOrigins{};
+    std::array<float, 2> connectionExtraSigns{1, 1};
+    DirectX::XMFLOAT2 connectionSecondHeightFade{};
     // 接続すべき二辺の頂点。位置の一致から逆算せず、生成時の隣接関係を記録する。
     std::vector<std::array<uint32_t, 4>> connectionSeams;
     MaterialSettings material;

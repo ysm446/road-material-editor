@@ -1198,8 +1198,8 @@ void Application::DrawGraphPanel() {
                                                  "混合のときに横向きになる割合", "%.2f");
                 }
             }
-            changed |= ui::PropertyFloat("向きのばらつき", &crack->angleJitterDegrees, 0.0f, 90.0f, defaults.angleJitterDegrees,
-                                         "幹の向きと曲がり方のばらつき", "%.0f°");
+            changed |= ui::PropertyFloat("折れの強さ", &crack->angleJitterDegrees, 0.0f, 90.0f, defaults.angleJitterDegrees,
+                                         "幹の左右への折れの強さ。0で直線。折れの間隔は自動で決まり、枝は折れ点の外側から伸びる", "%.0f°");
             {
                 static const char* const kPlacementLabels[] = {"一様", "轍寄り", "端寄り"};
                 int placement = static_cast<int>(crack->placement);

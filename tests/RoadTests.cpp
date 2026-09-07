@@ -522,6 +522,38 @@ void RunRoadTests() {
             Check(maxX - minX < 3.3f && maxX - minX > 1.0f, "transverse trunk is capped at the lane width");
         }
         // グラフ: Road → Crack → Mesh Output。
+        {
+            auto zigzag = cracks;
+            zigzag.orientation = graph::CrackOrientation::Longitudinal;
+            zigzag.lengthMinMeters = zigzag.lengthMaxMeters = 12;
+            zigzag.angleJitterDegrees = 35;
+            renderer::MeshData trunkMesh;
+            Check(graph::BuildCracks(crackRoad, crackLanes, zigzag, trunkMesh, error), "zigzag trunk builds");
+            int reversals = 0;
+            float previousDx = 0, alongSign = 0;
+            bool forward = true;
+            for (size_t i = 2; i + 1 < trunkMesh.vertices.size(); i += 2) {
+                const auto centerAt = [&](size_t j) {
+                    return DirectX::XMFLOAT2{(trunkMesh.vertices[j].position.x + trunkMesh.vertices[j + 1].position.x) * 0.5f,
+                        (trunkMesh.vertices[j].position.z + trunkMesh.vertices[j + 1].position.z) * 0.5f};
+                };
+                const auto beforePoint = centerAt(i - 2), afterPoint = centerAt(i);
+                const float dx = afterPoint.x - beforePoint.x, dz = afterPoint.y - beforePoint.y;
+                if (dx * previousDx < -1e-5f) ++reversals;
+                if (alongSign == 0) alongSign = dz;
+                forward &= dz * alongSign > 0;
+                previousDx = dx;
+            }
+            Check(reversals >= 3 && forward, "trunk bends several times while keeping its longitudinal direction");
+            zigzag.angleJitterDegrees = 0;
+            Check(graph::BuildCracks(crackRoad, crackLanes, zigzag, trunkMesh, error), "zero bend strength builds");
+            float minCenter = 1e9f, maxCenter = -1e9f;
+            for (size_t i = 0; i + 1 < trunkMesh.vertices.size(); i += 2) {
+                const float x = (trunkMesh.vertices[i].position.x + trunkMesh.vertices[i + 1].position.x) * 0.5f;
+                minCenter = std::min(minCenter, x); maxCenter = std::max(maxCenter, x);
+            }
+            Check(maxCenter - minCenter < 1e-4f, "zero bend strength keeps the trunk straight");
+        }
         graph::NodeGraph cg;
         const auto cPath = cg.CreateNode(graph::NodeKind::Path);
         const auto cRoad = cg.CreateNode(graph::NodeKind::Road);

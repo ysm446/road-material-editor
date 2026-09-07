@@ -1109,7 +1109,7 @@ struct SurfaceStripPoint {
 // 折れ線を約 0.25 m で刻み直し、点ごとの幅を補間して帯にする。幅方向の U は 0〜1、V は折れ線に沿った実距離÷反復長。
 // 道路面と同じ位置の道路 UV を持ち、押し出しに追従する。2 点未満なら何もしない。
 bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStripPoint>& input, float lift,
-                        float uvRepeat, bool uvAlongU, renderer::MeshData& result, std::string& error) {
+                        float uvRepeat, bool uvAlongU, renderer::MeshData& result, std::string& error, bool preserveCorners = false) {
     std::vector<SurfaceStripPoint> points;
     for (const auto& p : input) {
         if (points.empty() || std::hypot(p.lateral - points.back().lateral, p.distance - points.back().distance) > 1e-5f)
@@ -1125,9 +1125,21 @@ bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStrip
     constexpr uint32_t stride = 2;
     if (result.vertices.size() + (steps + 1) * stride > 400000) { error = "帯の頂点数が多すぎます"; return false; }
     std::vector<SurfaceStripPoint> uniform;
+    std::vector<float> sampleDistances;
+    for (size_t i = 0; i <= steps; ++i) sampleDistances.push_back(total * static_cast<float>(i) / static_cast<float>(steps));
+    if (preserveCorners) {
+        sampleDistances.assign(1, 0.0f);
+        for (size_t i = 1; i < lengths.size(); ++i) {
+            const int subdivisions = std::max(1, static_cast<int>(std::ceil((lengths[i] - lengths[i - 1]) / 0.25f)));
+            for (int j = 1; j <= subdivisions; ++j)
+                sampleDistances.push_back(std::lerp(lengths[i - 1], lengths[i], float(j) / float(subdivisions)));
+        }
+        if (result.vertices.size() + sampleDistances.size() * stride > 400000) {
+            error = "帯の頂点数が多すぎます"; return false;
+        }
+    }
     size_t segment = 1;
-    for (size_t i = 0; i <= steps; ++i) {
-        const float along = total * static_cast<float>(i) / static_cast<float>(steps);
+    for (const float along : sampleDistances) {
         while (segment + 1 < lengths.size() && lengths[segment] < along) ++segment;
         const float span = lengths[segment] - lengths[segment - 1];
         const float t = span > 1e-6f ? (along - lengths[segment - 1]) / span : 0.0f;
@@ -1147,7 +1159,7 @@ bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStrip
         const float tl = std::hypot(tx, tz);
         if (tl < 1e-6f) { tx = 0.0f; tz = 1.0f; } else { tx /= tl; tz /= tl; }
         const float nx = -tz, nz = tx;
-        const float along = total * static_cast<float>(i) / static_cast<float>(steps);
+        const float along = sampleDistances[i];
         for (int side = 0; side < 2; ++side) {
             const float offset = (side == 0 ? -0.5f : 0.5f) * p.width;
             const float lateral = p.lateral + nx * offset;
@@ -1276,7 +1288,7 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
         return std::atan2(b.lateral - a.lateral, b.distance - a.distance);
     };
     const auto emit = [&](const std::vector<SurfaceStripPoint>& points) {
-        return AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU, result, error);
+        return AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU, result, error, true);
     };
     for (int cluster = 0; cluster < count; ++cluster) {
         // 中心。横位置は分布に従う。
@@ -1294,7 +1306,7 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
         if (transverse && lanes.laneWidthMeters > 0.5f) length = std::min(length, lanes.laneWidthMeters);
         float theta = transverse ? DirectX::XM_PIDIV2 : 0.0f;
         if (rng.Chance(0.5f)) theta += DirectX::XM_PI;
-        theta += rng.Range(-jitter, jitter);
+        theta += rng.Range(-jitter * 0.15f, jitter * 0.15f);
         // 幹。中心から半分戻った所から歩く。両端を 30% まで細くする。
         const float trunkWidth = settings.trunkWidthMeters;
         const auto trunkWidthAt = [&](float t) {
@@ -1303,14 +1315,48 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
         };
         const float startLateral = std::clamp(lateral - std::sin(theta) * length * 0.5f, -halfInside, halfInside);
         const float startDistance = std::clamp(center - std::cos(theta) * length * 0.5f, 0.05f, total - 0.05f);
-        const std::vector<SurfaceStripPoint> trunk = walk(startLateral, startDistance, theta, length, trunkWidthAt);
+        // 幹は方向を累積して曲げず、基準方向の左右へ交互に折る。
+        // 大きな折れと路面への追従用の細分を分離し、細分数で形が変わらないようにする。
+        std::vector<SurfaceStripPoint> trunk{{startLateral, startDistance, 0, trunkWidthAt(0)}};
+        std::vector<size_t> bends;
+        float traveled = 0;
+        float turnSide = rng.Chance(0.5f) ? 1.0f : -1.0f;
+        while (traveled < length) {
+            const float heading = theta + turnSide * jitter * 0.8f * rng.Range(0.55f, 1.0f);
+            const float segment = std::min(rng.Range(0.9f, 1.7f), length - traveled);
+            const auto origin = trunk.back();
+            const float dx = std::sin(heading), dz = std::cos(heading);
+            float available = segment;
+            if (std::abs(dx) > 1e-6f) available = std::min(available, ((dx > 0 ? halfInside : -halfInside) - origin.lateral) / dx);
+            if (std::abs(dz) > 1e-6f) available = std::min(available, ((dz > 0 ? total - 0.05f : 0.05f) - origin.distance) / dz);
+            if (available < 1e-4f) break;
+            if (trunk.size() > 1) bends.push_back(trunk.size() - 1);
+            const int steps = static_cast<int>(std::ceil(available / stepMeters));
+            for (int step = 1; step <= steps; ++step) {
+                const float at = available * float(step) / float(steps);
+                trunk.push_back({origin.lateral + dx * at, origin.distance + dz * at, 0,
+                                 trunkWidthAt((traveled + at) / length)});
+            }
+            traveled += available;
+            if (available < segment) break; // 道路端に沿って潰れた線を作らない。
+            turnSide = -turnSide;
+        }
         if (trunk.size() < 3) continue;
         if (!emit(trunk)) return false;
         // 枝。幹の途中から 30〜70° で分かれ、先端で幅 0 へ絞る。半分の確率で 1 段だけ子枝を出す。
         const int branches = rng.Int(static_cast<int>(settings.branchesMin), static_cast<int>(settings.branchesMax));
+        for (size_t i = bends.size(); i > 1; --i)
+            std::swap(bends[i - 1], bends[static_cast<size_t>(rng.Int(0, static_cast<int>(i) - 1))]);
         for (int b = 0; b < branches; ++b) {
-            const size_t at = static_cast<size_t>(rng.Int(1, static_cast<int>(trunk.size()) - 2));
-            const float side = rng.Chance(0.5f) ? 1.0f : -1.0f;
+            // 折れ点を優先し、その山側（旋回の外側）へ分岐する。
+            const size_t at = bends.empty() ? static_cast<size_t>(rng.Int(1, static_cast<int>(trunk.size()) - 2)) :
+                bends[static_cast<size_t>(b) % bends.size()];
+            const auto& previous = trunk[at - 1];
+            const auto& current = trunk[at];
+            const auto& following = trunk[at + 1];
+            const float turn = (current.distance - previous.distance) * (following.lateral - current.lateral) -
+                               (current.lateral - previous.lateral) * (following.distance - current.distance);
+            const float side = std::abs(turn) > 1e-6f ? (turn > 0 ? -1.0f : 1.0f) : (rng.Chance(0.5f) ? 1.0f : -1.0f);
             const float branchTheta = headingAt(trunk, at) + side * DirectX::XMConvertToRadians(rng.Range(30.0f, 70.0f));
             const float branchLength = length * std::clamp(settings.branchLengthRatio, 0.05f, 2.0f) * rng.Range(0.6f, 1.2f);
             const float branchWidth = trunkWidth * std::clamp(settings.branchWidthRatio, 0.05f, 1.0f);

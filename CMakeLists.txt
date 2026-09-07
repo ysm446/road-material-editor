@@ -99,6 +99,8 @@ set(tg_sources
     src/core/Log.cpp
     src/core/Log.h
     src/graph/Road.cpp
+    src/graph/ConnectionPrototype.cpp
+    src/graph/ConnectionPrototype.h
     src/graph/RoadProfile.cpp
     src/graph/RoadMask.cpp
     src/graph/Road.h
@@ -266,6 +268,8 @@ enable_testing()
 add_executable(road_editor_tests
     tests/TestMain.cpp
     tests/RoadTests.cpp
+    tests/ConnectionPrototypeTests.cpp
+    src/graph/ConnectionPrototype.cpp
     src/graph/Road.cpp
     src/graph/RoadProfile.cpp
     src/graph/RoadMask.cpp

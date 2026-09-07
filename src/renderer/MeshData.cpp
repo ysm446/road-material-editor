@@ -9,6 +9,19 @@ namespace tg::renderer {
 bool ValidateMeshScene(const MeshScene& scene) {
     for (const auto& mesh : scene.meshes) {
         const auto& data = mesh.geometry;
+        if (mesh.materialOnly) {
+            if (!data.vertices.empty() || !data.indices.empty() || !mesh.materialStack) return false;
+            continue;
+        }
+        for (int source : mesh.connectionSources) {
+            if (source != -1 && (source < 0 || static_cast<size_t>(source) >= scene.meshes.size() ||
+                !scene.meshes[static_cast<size_t>(source)].materialOnly)) return false;
+        }
+        const bool hasContexts = mesh.connectionSources[0] >= 0;
+        for (size_t i = 0; i < mesh.connectionSources.size(); ++i) {
+            if ((mesh.connectionSources[i] >= 0) != hasContexts ||
+                !std::isfinite(mesh.connectionOrigins[i].x) || !std::isfinite(mesh.connectionOrigins[i].y)) return false;
+        }
         if (data.vertices.empty() || data.indices.empty() || data.indices.size() % 3 != 0 ||
             data.vertices.size() > std::numeric_limits<uint32_t>::max() / sizeof(MeshVertex) ||
             data.indices.size() > std::numeric_limits<uint32_t>::max() / sizeof(uint32_t)) {

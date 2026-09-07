@@ -57,6 +57,26 @@ constexpr float kShadowBias = 0.0018f;
 constexpr uint32_t kNoShadowIndex = 0xFFFFFFFFu;
 
 // GPU 側の MeshConstants と一致させること。
+struct LayerContextConstants {
+    uint32_t layerBaseColorIndex[4];
+    uint32_t layerNormalIndex[4];
+    uint32_t layerSurfaceIndex[4];
+    uint32_t layerHeightIndex[4];
+    uint32_t layerWorldUv[4];
+    float layerUvRepeat[4];
+    uint32_t layerHeightGate[4];
+    float layerHeightGateThreshold[4];
+    float layerHeightGateSoftness[4];
+    uint32_t layerBlendMode[4];
+    uint32_t roadMaskIndex;
+    float layerBlendRange;
+    uint32_t roadUvAlongU;
+    float displacementMeters;
+    float roadMaskScale[2];
+    float origin[2];
+};
+static_assert(sizeof(LayerContextConstants) == 192);
+
 struct MeshConstants {
     XMFLOAT4X4 viewProjection;
     // 法線をカメラ空間で見るためのビュー行列。**HLSL 側と同じ並びにすること。**
@@ -134,6 +154,11 @@ struct MeshConstants {
     float layerHeightGateThreshold[4];
     float layerHeightGateSoftness[4];
     uint32_t layerBlendMode[4];  // 0 = マスクどおり、1 = ハイトで競合
+    float layerDisplacementMeters[4];
+    uint32_t connectionPrototype;
+    uint32_t connectionContextCount;
+    float connectionPad[2];
+    LayerContextConstants connectionContexts[3];
 };
 
 // 道路空間マスク（RGBA8）を GPU へ上げる。ミップは持たない（低解像度でぼかして読む）。
@@ -359,6 +384,7 @@ bool PreviewRenderer::UploadMeshScene(rhi::Device& device, const MeshScene& scen
     if (!ValidateMeshScene(scene)) return false;
     std::vector<Mesh> uploaded(scene.meshes.size());
     for (size_t i = 0; i < uploaded.size(); ++i) {
+        if (scene.meshes[i].materialOnly) continue;
         if (!uploaded[i].Create(device, scene.meshes[i].geometry, L"SceneMesh")) {
             for (auto& mesh : uploaded) mesh.Release(device);
             return false;
@@ -838,6 +864,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     // シーンが無ければ何も描かない（m_sceneMeshes が空）。背景とグリッドだけが出る。
     const auto drawMeshes = [&](const MeshConstants& passConstants, uint32_t passMask) {
         for (size_t i = 0; i < m_sceneMeshes.size(); ++i) {
+            if (m_meshScene.meshes[i].materialOnly) continue;
             MeshConstants drawConstants = passConstants;
             const Mesh& drawMesh = m_sceneMeshes[i];
             const compositor::BlendMode blendMode = blendModeOf(i);
@@ -855,6 +882,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                                            ? static_cast<size_t>(source) : i;
             {
                 const auto& lm = m_meshScene.meshes[layerSource];
+                drawConstants.connectionPrototype = lm.connectionPrototype ? 1u : 0u;
                 const auto& lsm = m_sceneMaterials[layerSource];
                 for (int slot = 0; slot < 4; ++slot) {
                     drawConstants.layerBaseColorIndex[slot] = kNoShadowIndex;
@@ -867,6 +895,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                     drawConstants.layerHeightGateThreshold[slot] = lm.layerHeightGateThreshold[static_cast<size_t>(slot)];
                     drawConstants.layerHeightGateSoftness[slot] = lm.layerHeightGateSoftness[static_cast<size_t>(slot)];
                     drawConstants.layerBlendMode[slot] = lm.layerBlendMode[static_cast<size_t>(slot)];
+                    drawConstants.layerDisplacementMeters[slot] = lm.layerDisplacementMeters[static_cast<size_t>(slot)];
                     const compositor::MaterialEvaluator* evaluator =
                         slot == 0 ? lsm.evaluator.get() : lsm.layerEvaluators[static_cast<size_t>(slot - 1)].get();
                     if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {
@@ -888,6 +917,51 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 // 道路面自身はレイヤーで陰影を付ける。白線は自分の材質で描き、押し出しだけ道路に合わせる。
                 drawConstants.shadeLayers = (layerSource == i && baseReady && drawConstants.roadMaskIndex != kNoShadowIndex) ? 1u : 0u;
                 if (!baseReady) drawConstants.displacementScale = 0.0f;
+            }
+            const auto& connection = m_meshScene.meshes[i];
+            if (connection.connectionSources[0] >= 0) {
+                drawConstants.connectionContextCount = 3;
+                bool ready = true;
+                for (size_t context = 0; context < 3; ++context) {
+                    const size_t index = static_cast<size_t>(connection.connectionSources[context]);
+                    const auto& cpu = m_meshScene.meshes[index];
+                    const auto& gpu = m_sceneMaterials[index];
+                    auto& c = drawConstants.connectionContexts[context];
+                    for (size_t slot = 0; slot < 4; ++slot) {
+                        c.layerBaseColorIndex[slot] = c.layerNormalIndex[slot] =
+                            c.layerSurfaceIndex[slot] = c.layerHeightIndex[slot] = kNoShadowIndex;
+                        const auto* evaluation = slot == 0 ? gpu.evaluator.get() : gpu.layerEvaluators[slot - 1].get();
+                        if (evaluation && evaluation->EvaluatedRevision() != 0 && evaluation->Textures().IsValid()) {
+                            const auto& maps = evaluation->Textures();
+                            c.layerBaseColorIndex[slot] = maps.baseColor.SrvIndex();
+                            c.layerNormalIndex[slot] = maps.normal.SrvIndex();
+                            c.layerSurfaceIndex[slot] = maps.surface.SrvIndex();
+                            c.layerHeightIndex[slot] = maps.height.SrvIndex();
+                        } else if (slot == 0 || cpu.layerStacks[slot - 1]) {
+                            ready = false;
+                        }
+                        c.layerWorldUv[slot] = cpu.layerWorldUv[slot] ? 1u : 0u;
+                        c.layerUvRepeat[slot] = cpu.layerUvRepeat[slot];
+                        c.layerHeightGate[slot] = slot == 0 ? 0u : cpu.layerHeightGate[slot];
+                        c.layerHeightGateThreshold[slot] = cpu.layerHeightGateThreshold[slot];
+                        c.layerHeightGateSoftness[slot] = cpu.layerHeightGateSoftness[slot];
+                        c.layerBlendMode[slot] = cpu.layerBlendMode[slot];
+                    }
+                    c.roadMaskIndex = gpu.roadMask.IsValid() ? gpu.roadMask.SrvIndex() : kNoShadowIndex;
+                    c.layerBlendRange = cpu.layerBlendRange;
+                    c.roadUvAlongU = cpu.roadUvAlongU ? 1u : 0u;
+                    c.displacementMeters = cpu.displacementMeters;
+                    c.roadMaskScale[0] = cpu.roadWidthMeters > 0 ? 1.0f / cpu.roadWidthMeters : 0;
+                    c.roadMaskScale[1] = cpu.roadLengthMeters > 0 ? 1.0f / cpu.roadLengthMeters : 0;
+                    c.origin[0] = connection.connectionOrigins[context].x;
+                    c.origin[1] = connection.connectionOrigins[context].y;
+                }
+                // 評価途中の欠落した材質を混ぜず、全入力が揃ったフレームから描く。
+                if (!ready) continue;
+                drawConstants.layerCount = 4;
+                drawConstants.shadeLayers = 1;
+                drawConstants.useMaterialTextures = 1;
+                drawConstants.displacementScale = connection.displacementMeters;
             }
             if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;
             const auto& material = m_meshScene.meshes[i].material;

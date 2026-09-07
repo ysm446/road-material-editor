@@ -36,6 +36,10 @@ struct MaterialSettings {
 
 struct SceneMesh {
     MeshData geometry;
+    // P0 の材質評価専用エントリ。形状を持たず、既存の評価器とGPU寿命管理を共有する。
+    bool materialOnly = false;
+    std::array<int, 3> connectionSources{-1, -1, -1};
+    std::array<DirectX::XMFLOAT2, 3> connectionOrigins{};
     MaterialSettings material;
     // 道路の表示用メタデータ。0は道路以外。生成時に再構築する。
     float roadMetersPerUv = 0.0f;
@@ -43,6 +47,9 @@ struct SceneMesh {
     bool roadGridOverlay = true;
     // 材質のハイトで法線方向へ押し出す量（m）。0 なら形は変えない。材質が無ければ効かない。
     float displacementMeters = 0.0f;
+    // P0: 直線の共通面を世界 Y 方向へ変位する。法線が分かれる縁石でも位置を揃える。
+    bool connectionPrototype = false;
+    std::array<float, 4> layerDisplacementMeters{0.0f, 0.0f, 0.0f, 0.0f};
     // 押し出しに使うハイトを別のメッシュ（道路面）の材質から読む。-1 なら自分の材質。
     // 白線はこれで道路面と同じ量だけ押し出され、変位後の路面に貼り付く。
     int displacementSource = -1;

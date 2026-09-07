@@ -1,0 +1,99 @@
+"""既存プロジェクトの素材から P0 検証用コピーを作る。元データと素材は変更しない。"""
+
+import argparse
+import copy
+import json
+from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--asphalt", type=int, required=True, help="既存の材質 ID")
+    parser.add_argument("--gravel", type=int, required=True, help="既存の材質 ID")
+    parser.add_argument("--layered", action="store_true", help="道路4層＋接続先4層＋歩道の検証構成を作る")
+    args = parser.parse_args()
+    if args.source.resolve() == args.output.resolve():
+        parser.error("出力には元ファイルと異なるパスを指定してください")
+    doc = json.loads(args.source.read_text(encoding="utf-8-sig"))
+    materials = {m["id"]: m for m in doc.get("materials", [])}
+    if args.asphalt not in materials or args.gravel not in materials:
+        parser.error("指定した材質 ID がありません")
+    doc["materials"] = [copy.deepcopy(materials[i]) for i in dict.fromkeys([args.asphalt, args.gravel])]
+    used = set()
+    for material in doc["materials"]:
+        for slot in material.get("maps", {}).values():
+            texture = slot.get("texture") if isinstance(slot, dict) else slot
+            if isinstance(texture, int):
+                used.add(texture)
+    doc["textures"] = [t for t in doc.get("textures", []) if t["id"] in used]
+    for texture in doc["textures"]:
+        texture["path"] = str((args.source.parent / texture["path"]).resolve())
+        if not Path(texture["path"]).is_file():
+            parser.error(f"素材が見つかりません: {texture['path']}")
+    # 検証画像は環境の差を避けて手続き空を使う。
+    doc["skies"] = [{"name": "試作用の空", "source": "procedural", "skyLuminance": 12000,
+                     "iblIntensity": 1, "procedural": {"intensity": 12000,
+                     "zenithColor": [0.2, 0.36, 0.78], "horizonColor": [0.7, 0.8, 0.95],
+                     "groundColor": [0.45, 0.42, 0.38]}}]
+    doc["activeSky"] = 0
+    doc["version"] = 16
+    def surface(node_id, pin, material, position):
+        return {"id": node_id, "kind": "surface", "inputs": [], "outputs": [pin], "position": position,
+                "layer": {"enabled": True, "material": material, "baseColor": [0.42, 0.4, 0.36],
+                          "roughness": 0.8, "height": {"source": "constant", "base": 0.5, "gain": 1.0}}}
+    doc["graph"] = {"nodes": [
+        surface(1, 2, args.asphalt, [0, 0]), surface(3, 4, args.gravel, [0, 180]),
+        surface(5, 6, None, [0, 360]),
+        {"id": 7, "kind": "path", "inputs": [8], "outputs": [9], "position": [240, 0],
+         "path": {"worldSpace": True, "points": [{"id": 1, "position": [0, 0, -12]},
+                   {"id": 2, "position": [0, 0, 12]}],
+                  "edges": [{"id": 3, "from": 1, "to": 2, "curve": "line"}], "nextId": 4}},
+        {"id": 10, "kind": "road", "inputs": list(range(11, 19)), "outputs": [19, 20, 21],
+         "position": [480, 0], "road": {"width": 6, "uvRepeat": 2, "displacement": 0.015}},
+        {"id": 22, "kind": "meshOutput", "inputs": [23], "outputs": [], "position": [720, 0]}],
+        "links": [{"id": 24, "start": 9, "end": 11}, {"id": 25, "start": 2, "end": 12},
+                  {"id": 26, "start": 19, "end": 23}]}
+    gravel_node = 3
+    if args.layered:
+        nodes = doc["graph"]["nodes"]
+        links = doc["graph"]["links"]
+        gravel_node = 30
+        nodes.append({"id": 30, "kind": "road", "inputs": list(range(31, 39)),
+                      "outputs": [39, 40, 41], "position": [480, 420],
+                      "road": {"width": 10, "uvRepeat": 2.8, "displacement": 0.08}})
+        links.extend([{"id": 42, "start": 9, "end": 31}, {"id": 43, "start": 4, "end": 32}])
+        next_id = 50
+        for group, road_id in enumerate((10, 30)):
+            road_node = next(n for n in nodes if n["id"] == road_id)
+            road_node["road"].update({"layerUvRepeat": [2, 1.3, 3.1, 0.8],
+                                      "layerBlendMode": [0, 0, 1, 0], "layerBlendRange": 0.12,
+                                      "layerHeightGate": [0, 0, 0, 2],
+                                      "layerHeightGateThreshold": [0.5, 0.5, 0.5, 0.6]})
+            for slot, shape in enumerate(("wheelTracks", "lengthNoise", "edgeFalloff"), 1):
+                material_id = args.asphalt if group == 0 else args.gravel
+                layer = surface(next_id, next_id + 1, material_id, [0, 600 + next_id * 3])
+                nodes.append(layer)
+                nodes.append({"id": next_id + 2, "kind": "roadMask", "inputs": [],
+                              "outputs": [next_id + 3], "position": [220, 600 + next_id * 3],
+                              "roadMask": {"shape": shape, "strength": 0.65, "seed": 13 + group * 3 + slot,
+                                           "noiseScale": 2.5, "edgeWidth": 0.7}})
+                links.extend([{"id": next_id + 4, "start": next_id + 1, "end": road_node["inputs"][slot + 1]},
+                              {"id": next_id + 5, "start": next_id + 3, "end": road_node["inputs"][slot + 4]}])
+                next_id += 6
+    preview = doc.setdefault("preview", {})
+    preview["camera"] = {"target": [0, 0, 0], "distance": 26, "yaw": -0.55, "pitch": 0.9, "fovY": 0.785398}
+    preview["depthOfField"] = {"enabled": False}
+    preview["exposure"] = {"useManualEv": True, "manualEv100": 14}
+    preview["materialResolution"] = 1024
+    preview["tessellation"] = True
+    preview["tessellationFactor"] = 16
+    preview["tessellationTargetPixels"] = 8
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"作成: {args.output}\n起動オプション: --project {args.output} --connection-prototype 10 {gravel_node} 5")
+
+
+if __name__ == "__main__":
+    main()

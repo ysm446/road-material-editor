@@ -9,6 +9,26 @@
 #include "CompositeCommon.hlsli"
 #include "EnvCommon.hlsli"
 
+struct LayerContext
+{
+    uint4 layerBaseColorIndex;
+    uint4 layerNormalIndex;
+    uint4 layerSurfaceIndex;
+    uint4 layerHeightIndex;
+    uint4 layerWorldUv;
+    float4 layerUvRepeat;
+    uint4 layerHeightGate;
+    float4 layerHeightGateThreshold;
+    float4 layerHeightGateSoftness;
+    uint4 layerBlendMode;
+    uint roadMaskIndex;
+    float layerBlendRange;
+    uint roadUvAlongU;
+    float displacementMeters;
+    float2 roadMaskScale;
+    float2 origin;
+};
+
 struct MeshConstants
 {
     float4x4 viewProjection;
@@ -96,6 +116,11 @@ struct MeshConstants
     float4 layerHeightGateSoftness;
     // 混ぜ方。0 = マスクどおり、1 = ハイトで競合。
     uint4 layerBlendMode;
+    float4 layerDisplacementMeters;
+    uint connectionPrototype;
+    uint connectionContextCount;
+    float2 connectionPad;
+    LayerContext connectionContexts[3];
 };
 
 
@@ -132,74 +157,94 @@ float2 RoadMetersFromUv(float2 roadUv)
     return (g_mesh.roadUvAlongU != 0u) ? meters.yx : meters;
 }
 
-float2 LayerUv(uint slot, float2 meters, float3 worldPosition)
+LayerContext LegacyContext()
 {
-    const float repeat = max(g_mesh.layerUvRepeat[slot], 1e-3f);
-    if (g_mesh.layerWorldUv[slot] != 0u)
+    LayerContext c = (LayerContext)0;
+    c.layerBaseColorIndex = g_mesh.layerBaseColorIndex;
+    c.layerNormalIndex = g_mesh.layerNormalIndex;
+    c.layerSurfaceIndex = g_mesh.layerSurfaceIndex;
+    c.layerHeightIndex = g_mesh.layerHeightIndex;
+    c.layerWorldUv = g_mesh.layerWorldUv;
+    c.layerUvRepeat = g_mesh.layerUvRepeat;
+    c.layerHeightGate = g_mesh.layerHeightGate;
+    c.layerHeightGateThreshold = g_mesh.layerHeightGateThreshold;
+    c.layerHeightGateSoftness = g_mesh.layerHeightGateSoftness;
+    c.layerBlendMode = g_mesh.layerBlendMode;
+    c.roadMaskIndex = g_mesh.roadMaskIndex;
+    c.layerBlendRange = g_mesh.layerBlendRange;
+    c.roadUvAlongU = g_mesh.roadUvAlongU;
+    c.roadMaskScale = g_mesh.roadMaskScale;
+    return c;
+}
+
+float2 LayerUv(LayerContext c, uint slot, float2 meters, float3 worldPosition)
+{
+    const float repeat = max(c.layerUvRepeat[slot], 1e-3f);
+    if (c.layerWorldUv[slot] != 0u)
     {
         return worldPosition.xz / repeat;
     }
     const float2 uv = meters / repeat;
-    return (g_mesh.roadUvAlongU != 0u) ? uv.yx : uv;
+    return (c.roadUvAlongU != 0u) ? uv.yx : uv;
 }
 
 // スロット 1〜4 の被覆率。マスクが無ければスロット 1 だけ。
-float4 LayerCoverage(float2 meters)
+float4 LayerCoverage(LayerContext c, float2 meters)
 {
     float4 weights = float4(1.0f, 0.0f, 0.0f, 0.0f);
-    if (g_mesh.roadMaskIndex == kNoTextureIndex)
+    if (c.roadMaskIndex == kNoTextureIndex)
     {
         return weights;
     }
-    Texture2D<float4> mask = ResourceDescriptorHeap[g_mesh.roadMaskIndex];
-    const float3 coverage = mask.SampleLevel(g_samplerLinearClamp, meters * g_mesh.roadMaskScale, 0.0f).rgb;
-    weights.y = (g_mesh.layerHeightIndex.y != kNoTextureIndex) ? coverage.x : 0.0f;
-    weights.z = (g_mesh.layerHeightIndex.z != kNoTextureIndex) ? coverage.y : 0.0f;
-    weights.w = (g_mesh.layerHeightIndex.w != kNoTextureIndex) ? coverage.z : 0.0f;
+    Texture2D<float4> mask = ResourceDescriptorHeap[c.roadMaskIndex];
+    const float3 coverage = mask.SampleLevel(g_samplerLinearClamp, meters * c.roadMaskScale, 0.0f).rgb;
+    weights.y = (c.layerHeightIndex.y != kNoTextureIndex) ? coverage.x : 0.0f;
+    weights.z = (c.layerHeightIndex.z != kNoTextureIndex) ? coverage.y : 0.0f;
+    weights.w = (c.layerHeightIndex.w != kNoTextureIndex) ? coverage.z : 0.0f;
     weights.x = saturate(1.0f - (weights.y + weights.z + weights.w));
     return weights;
 }
 
 // 下地のハイトで被覆率を絞る。Road Mask が「だいたいこの辺」、下地の凹凸が「その中のどこ」。
 // 下地（スロット 1）の重みは残りで埋め直す。
-float4 ApplyHeightGate(float4 coverage, float baseHeight)
+float4 ApplyHeightGate(LayerContext c, float4 coverage, float baseHeight)
 {
     [unroll]
     for (uint slot = 1; slot < 4; ++slot)
     {
-        const uint mode = g_mesh.layerHeightGate[slot];
+        const uint mode = c.layerHeightGate[slot];
         if (mode == 0u || coverage[slot] <= 0.0f)
         {
             continue;
         }
-        const float softness = max(g_mesh.layerHeightGateSoftness[slot], 1e-3f);
-        const float signedDelta = (mode == 1u) ? (baseHeight - g_mesh.layerHeightGateThreshold[slot])
-                                               : (g_mesh.layerHeightGateThreshold[slot] - baseHeight);
+        const float softness = max(c.layerHeightGateSoftness[slot], 1e-3f);
+        const float signedDelta = (mode == 1u) ? (baseHeight - c.layerHeightGateThreshold[slot])
+                                               : (c.layerHeightGateThreshold[slot] - baseHeight);
         coverage[slot] *= saturate(signedDelta / softness + 0.5f);
     }
     coverage.x = saturate(1.0f - (coverage.y + coverage.z + coverage.w));
     return coverage;
 }
 
-bool AnyHeightGate()
+bool AnyHeightGate(LayerContext c)
 {
-    return (g_mesh.layerHeightGate.y | g_mesh.layerHeightGate.z | g_mesh.layerHeightGate.w) != 0u;
+    return (c.layerHeightGate.y | c.layerHeightGate.z | c.layerHeightGate.w) != 0u;
 }
 
 // スロットの重み。
 //   マスクどおり（layerBlendMode = 0）: 被覆率がそのまま重み。境界は下地とのハイト差 × ブレンド幅だけ崩す。
 //   ハイトで競合（layerBlendMode = 1）: 被覆率をハイトに足して、最大からブレンド幅の範囲を混ぜる。
 // マスクどおりのスロットが先に取り、残りを下地とハイト競合のスロットで分ける。
-float4 LayerHeightBlend(float4 coverage, float4 heights)
+float4 LayerHeightBlend(LayerContext c, float4 coverage, float4 heights)
 {
     float4 maskWeights = 0.0f;
     float4 heightCoverage = coverage;
     [unroll]
     for (uint slot = 1; slot < 4; ++slot)
     {
-        if (g_mesh.layerBlendMode[slot] == 0u)
+        if (c.layerBlendMode[slot] == 0u)
         {
-            const float w = saturate(coverage[slot] + (heights[slot] - heights[0]) * g_mesh.layerBlendRange);
+            const float w = saturate(coverage[slot] + (heights[slot] - heights[0]) * c.layerBlendRange);
             maskWeights[slot] = w * step(1e-6f, coverage[slot]);
             heightCoverage[slot] = 0.0f;
         }
@@ -214,32 +259,123 @@ float4 LayerHeightBlend(float4 coverage, float4 heights)
     heightCoverage.x = saturate(1.0f - (heightCoverage.y + heightCoverage.z + heightCoverage.w));
     const float4 score = heights + heightCoverage;
     const float peak = max(max(score.x, score.y), max(score.z, score.w));
-    float4 blend = max(score - peak + max(g_mesh.layerBlendRange, 1e-3f), 0.0f);
+    float4 blend = max(score - peak + max(c.layerBlendRange, 1e-3f), 0.0f);
     blend *= step(1e-6f, heightCoverage);
     const float total = blend.x + blend.y + blend.z + blend.w;
     const float4 heightBlend = (total > 1e-5f) ? blend / total : float4(1.0f, 0.0f, 0.0f, 0.0f);
     return maskWeights + heightBlend * remaining;
 }
 
-float LayerHeightLevel(uint slot, float2 uv)
+float LayerHeightLevel(LayerContext c, uint slot, float2 uv)
 {
-    Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.layerHeightIndex[slot]];
+    Texture2D<float> heightMap = ResourceDescriptorHeap[c.layerHeightIndex[slot]];
     return heightMap.SampleLevel(g_samplerAnisoWrap, uv, 0.0f);
+}
+
+// プリセット内の合成と、プリセット間の被覆を別々に評価する。
+float3 ConnectionWeights(float2 meters)
+{
+    Texture2D<float4> mask = ResourceDescriptorHeap[g_mesh.roadMaskIndex];
+    const float2 coverage = saturate(mask.SampleLevel(g_samplerLinearClamp, meters * g_mesh.roadMaskScale, 0).rg);
+    float3 weights = float3(saturate(1 - coverage.x - coverage.y), coverage);
+    return weights / max(dot(weights, 1.0f), 1e-6f);
+}
+
+float4 ContextWeights(LayerContext c, float2 meters, float3 worldPosition, out float4 heights)
+{
+    float4 coverage = LayerCoverage(c, meters);
+    heights = 0.5f;
+    heights[0] = LayerHeightLevel(c, 0, LayerUv(c, 0, meters, worldPosition));
+    coverage = ApplyHeightGate(c, coverage, heights[0]);
+    [unroll]
+    for (uint slot = 1; slot < 4; ++slot)
+    {
+        if (coverage[slot] > 0 && c.layerHeightIndex[slot] != kNoTextureIndex)
+            heights[slot] = LayerHeightLevel(c, slot, LayerUv(c, slot, meters, worldPosition));
+    }
+    return LayerHeightBlend(c, coverage, heights);
+}
+
+float ConnectionHeight(float2 meters, float3 worldPosition)
+{
+    const float3 weights = ConnectionWeights(meters);
+    float height = 0;
+    [loop]
+    for (uint context = 0; context < 3; ++context)
+    {
+        if (weights[context] <= 0) continue;
+        const LayerContext c = g_mesh.connectionContexts[context];
+        float4 heights;
+        const float4 blend = ContextWeights(c, meters - c.origin, worldPosition, heights);
+        height += weights[context] * dot(blend, heights - 0.5f) * c.displacementMeters;
+    }
+    return 0.5f + height;
+}
+
+float3 WeightedDetailNormal(float3 detail, float weight)
+{
+    return normalize(float3(detail.xy * weight, 1 + (detail.z - 1) * weight));
+}
+
+void ConnectionShading(float2 meters, float3 worldPosition,
+                       out float3 color, out float4 surface, out float3 normal)
+{
+    const float3 weights = ConnectionWeights(meters);
+    color = 0;
+    surface = 0;
+    normal = float3(0, 0, 1);
+    [loop]
+    for (uint context = 0; context < 3; ++context)
+    {
+        // 微分は分岐前に計算し、被覆境界でも同じLODを読む。
+        const LayerContext c = g_mesh.connectionContexts[context];
+        const float2 local = meters - c.origin;
+        float2 uvs[4], dx[4], dy[4];
+        [unroll]
+        for (uint slot = 0; slot < 4; ++slot)
+        {
+            uvs[slot] = LayerUv(c, slot, local, worldPosition);
+            dx[slot] = ddx(uvs[slot]);
+            dy[slot] = ddy(uvs[slot]);
+        }
+        if (weights[context] <= 0) continue;
+        float4 heights;
+        const float4 blend = ContextWeights(c, local, worldPosition, heights);
+        float3 contextNormal = float3(0, 0, 1);
+        [unroll]
+        for (uint layer = 0; layer < 4; ++layer)
+        {
+            if (blend[layer] <= 0 || c.layerBaseColorIndex[layer] == kNoTextureIndex) continue;
+            Texture2D<float4> colorMap = ResourceDescriptorHeap[c.layerBaseColorIndex[layer]];
+            Texture2D<float4> surfaceMap = ResourceDescriptorHeap[c.layerSurfaceIndex[layer]];
+            Texture2D<float2> normalMap = ResourceDescriptorHeap[c.layerNormalIndex[layer]];
+            const float weight = weights[context] * blend[layer];
+            color += colorMap.SampleGrad(g_samplerAnisoWrap, uvs[layer], dx[layer], dy[layer]).rgb * weight;
+            surface += surfaceMap.SampleGrad(g_samplerAnisoWrap, uvs[layer], dx[layer], dy[layer]) * weight;
+            float3 detail = DecodeTangentNormal(normalMap.SampleGrad(g_samplerAnisoWrap, uvs[layer], dx[layer], dy[layer]));
+            // UV軸を入れ替えたプリセットの法線を、共通断面の接空間へ揃える。
+            if (c.layerWorldUv[layer] == 0 && c.roadUvAlongU != 0) detail.xy = detail.yx;
+            contextNormal = ReorientNormal(contextNormal, WeightedDetailNormal(detail, blend[layer]));
+        }
+        normal = ReorientNormal(normal, WeightedDetailNormal(contextNormal, weights[context]));
+    }
 }
 
 // 頂点 / ドメインシェーダ用。ブレンド後のハイト。
 float BlendedHeightLevel(float2 roadUv, float3 worldPosition)
 {
+    const LayerContext c = LegacyContext();
     const float2 meters = RoadMetersFromUv(roadUv);
-    float4 coverage = LayerCoverage(meters);
+    if (g_mesh.connectionContextCount != 0) return ConnectionHeight(meters, worldPosition);
+    float4 coverage = LayerCoverage(c, meters);
     float4 heights = 0.5f;
     // 下地のハイトは絞りに使うので、被覆率に関わらず先に読む。
     if (g_mesh.layerHeightIndex[0] != kNoTextureIndex)
     {
-        heights[0] = LayerHeightLevel(0, LayerUv(0, meters, worldPosition));
-        if (AnyHeightGate())
+        heights[0] = LayerHeightLevel(c, 0, LayerUv(c, 0, meters, worldPosition));
+        if (AnyHeightGate(c))
         {
-            coverage = ApplyHeightGate(coverage, heights[0]);
+            coverage = ApplyHeightGate(c, coverage, heights[0]);
         }
     }
     [unroll]
@@ -247,10 +383,14 @@ float BlendedHeightLevel(float2 roadUv, float3 worldPosition)
     {
         if (coverage[slot] > 0.0f && g_mesh.layerHeightIndex[slot] != kNoTextureIndex)
         {
-            heights[slot] = LayerHeightLevel(slot, LayerUv(slot, meters, worldPosition));
+            heights[slot] = LayerHeightLevel(c, slot, LayerUv(c, slot, meters, worldPosition));
         }
     }
-    const float4 blend = LayerHeightBlend(coverage, heights);
+    const float4 blend = LayerHeightBlend(c, coverage, heights);
+    if (g_mesh.connectionPrototype != 0u)
+    {
+        return 0.5f + dot(blend, (heights - 0.5f) * g_mesh.layerDisplacementMeters);
+    }
     return dot(blend, heights);
 }
 
@@ -360,7 +500,8 @@ float3 ApplyDisplacement(float3 worldPosition, float3 worldNormal, float2 uv, fl
     // 道路面と、その上の帯（白線）。同じ道路座標からブレンド後のハイトを読む。
     const float height = BlendedHeightLevel(roadUv, worldPosition);
     // 高さの中央（0.5）を基準にする。全体が膨らまないようにするため。
-    return worldPosition + worldNormal * ((height - 0.5f) * g_mesh.displacementScale);
+    const float3 direction = (g_mesh.connectionPrototype != 0u) ? float3(0, 1, 0) : worldNormal;
+    return worldPosition + direction * ((height - 0.5f) * g_mesh.displacementScale);
 }
 
 VsOutput VsMain(VsInput input)
@@ -557,26 +698,39 @@ float4 PsMain(VsOutput input) : SV_Target0
         normal = (dot(faceNormal, viewDirection) < 0.0f) ? -faceNormal : faceNormal;
     }
 
-    if (useMaterialShading && g_mesh.shadeLayers != 0u)
+    if (useMaterialShading && g_mesh.connectionContextCount != 0u)
     {
+        float4 surface;
+        float3 tangentNormal;
+        ConnectionShading(RoadMetersFromUv(input.roadUv), input.worldPosition, baseColor, surface, tangentNormal);
+        roughnessValue = surface.r;
+        metallicValue = surface.g;
+        ambientOcclusion = surface.b;
+        const float3 tangent = normalize(input.worldTangent - geometricNormal * dot(geometricNormal, input.worldTangent));
+        const float3 bitangent = cross(geometricNormal, tangent) * input.tangentSign;
+        normal = normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y + geometricNormal * tangentNormal.z);
+    }
+    else if (useMaterialShading && g_mesh.shadeLayers != 0u)
+    {
+        const LayerContext c = LegacyContext();
         // 道路面。スロット 1〜4 を道路空間マスクの被覆率とハイトで競合させて混ぜる。
         const float2 meters = RoadMetersFromUv(input.roadUv);
-        float4 coverage = LayerCoverage(meters);
+        float4 coverage = LayerCoverage(c, meters);
         float2 uvs[4];
         float4 heights = 0.5f;
         [unroll]
         for (uint slot = 0; slot < 4; ++slot)
         {
-            uvs[slot] = LayerUv(slot, meters, input.worldPosition);
+            uvs[slot] = LayerUv(c, slot, meters, input.worldPosition);
         }
         // 下地のハイトは絞りに使うので、被覆率に関わらず先に読む。
         if (g_mesh.layerHeightIndex[0] != kNoTextureIndex)
         {
             Texture2D<float> baseHeightMap = ResourceDescriptorHeap[g_mesh.layerHeightIndex[0]];
             heights[0] = baseHeightMap.Sample(g_samplerAnisoWrap, uvs[0]);
-            if (AnyHeightGate())
+            if (AnyHeightGate(c))
             {
-                coverage = ApplyHeightGate(coverage, heights[0]);
+                coverage = ApplyHeightGate(c, coverage, heights[0]);
             }
         }
         [unroll]
@@ -588,9 +742,10 @@ float4 PsMain(VsOutput input) : SV_Target0
                 heights[slot] = heightMap.Sample(g_samplerAnisoWrap, uvs[slot]);
             }
         }
-        const float4 blend = LayerHeightBlend(coverage, heights);
+        const float4 blend = LayerHeightBlend(c, coverage, heights);
         float3 blendedColor = 0.0f;
         float2 blendedNormal = 0.0f;
+        float3 connectionNormal = float3(0, 0, 1);
         float4 blendedSurface = 0.0f;
         [unroll]
         for (uint slot2 = 0; slot2 < 4; ++slot2)
@@ -604,6 +759,14 @@ float4 PsMain(VsOutput input) : SV_Target0
             Texture2D<float4> surfaceMap   = ResourceDescriptorHeap[g_mesh.layerSurfaceIndex[slot2]];
             blendedColor += baseColorMap.Sample(g_samplerAnisoWrap, uvs[slot2]).rgb * blend[slot2];
             blendedNormal += normalMap.Sample(g_samplerAnisoWrap, uvs[slot2]) * blend[slot2];
+            if (g_mesh.connectionPrototype != 0u)
+            {
+                const float3 detail = DecodeTangentNormal(normalMap.Sample(g_samplerAnisoWrap, uvs[slot2]));
+                // 共通の断面 UV にある法線を、重みに応じた傾きで RNM 合成する。
+                const float3 weighted = normalize(float3(detail.xy * blend[slot2],
+                    1.0f + (detail.z - 1.0f) * blend[slot2]));
+                connectionNormal = ReorientNormal(connectionNormal, weighted);
+            }
             blendedSurface += surfaceMap.Sample(g_samplerAnisoWrap, uvs[slot2]) * blend[slot2];
         }
         baseColor = blendedColor;
@@ -611,7 +774,7 @@ float4 PsMain(VsOutput input) : SV_Target0
         metallicValue = blendedSurface.g;
         ambientOcclusion = blendedSurface.b;
         opacity = 1.0f;
-        const float3 tangentNormal = DecodeTangentNormal(blendedNormal);
+        const float3 tangentNormal = (g_mesh.connectionPrototype != 0u) ? connectionNormal : DecodeTangentNormal(blendedNormal);
         const float3 tangent =
             normalize(input.worldTangent - geometricNormal * dot(geometricNormal, input.worldTangent));
         const float3 bitangent = cross(geometricNormal, tangent) * input.tangentSign;
@@ -694,7 +857,11 @@ float4 PsMain(VsOutput input) : SV_Target0
         else if (g_mesh.debugView == TG_VIEW_HEIGHT)
         {
             float height = 0.0f;
-            if (g_mesh.useMaterialTextures != 0u)
+            if (g_mesh.connectionContextCount != 0u)
+            {
+                height = ConnectionHeight(RoadMetersFromUv(input.roadUv), input.worldPosition);
+            }
+            else if (g_mesh.useMaterialTextures != 0u)
             {
                 Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.materialHeightIndex];
                 height = SampleMaterialScalar(heightMap, input.uv);
@@ -707,7 +874,21 @@ float4 PsMain(VsOutput input) : SV_Target0
             // 周りの平均として引き、残りを 0.5 中心へ伸ばす。
             // 素材のハイトマップをそのまま貼ったような見た目になる。
             float local = 0.5f;
-            if (g_mesh.useMaterialTextures != 0u)
+            if (g_mesh.connectionContextCount != 0u)
+            {
+                const float2 meters = RoadMetersFromUv(input.roadUv);
+                const float center = ConnectionHeight(meters, input.worldPosition);
+                float sum = 0;
+                [unroll]
+                for (int sampleIndex = 0; sampleIndex < 8; ++sampleIndex)
+                {
+                    const float angle = sampleIndex * 0.785398163f;
+                    const float2 offset = float2(cos(angle), sin(angle)) * 0.02f;
+                    sum += ConnectionHeight(meters + offset, input.worldPosition);
+                }
+                local = 0.5f + (center - sum / 8) * kLocalHeightGain;
+            }
+            else if (g_mesh.useMaterialTextures != 0u)
             {
                 Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.materialHeightIndex];
                 const float center = SampleMaterialScalar(heightMap, input.uv);

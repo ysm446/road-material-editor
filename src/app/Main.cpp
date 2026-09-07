@@ -36,6 +36,12 @@ tg::StartupOptions ParseCommandLine() {
         if (argument == L"--project" && (i + 1) < argc) {
             options.projectPath = argv[i + 1];
             ++i;
+        } else if (argument == L"--connection-prototype" && (i + 3) < argc) {
+            options.prototypeRoad = ::_wtoi(argv[++i]);
+            options.prototypeGravel = ::_wtoi(argv[++i]);
+            options.prototypeSidewalk = ::_wtoi(argv[++i]);
+        } else if (argument == L"--connection-prototype-flat") {
+            options.prototypeDisplacement = false;
         } else if (argument == L"--test-drag" && (i + 4) < argc) {
             options.testDrag = true;
             options.testDragStart.x = static_cast<float>(::_wtof(argv[++i]));

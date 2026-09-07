@@ -1,4 +1,7 @@
 #include "graph/Road.h"
+#include "graph/ConnectionPrototype.h"
+#include "core/Log.h"
+#include <chrono>
 // ノードグラフパネル。imgui-node-editor によるエディタと、
 // 選択中ノードのプロパティ（レイヤーパネルと共有）を持つ。
 //
@@ -292,7 +295,22 @@ void Application::SyncMeshGraph() {
         previewMeshNode = node->id;
     }
     if (m_meshGraphRevision == m_graph.Revision() && m_meshGraphPreviewNode == previewMeshNode) return;
-    auto compiled = graph::CompileMeshGraph(m_graph, previewMeshNode);
+    const auto compileStart = std::chrono::steady_clock::now();
+    auto compiled = m_options.prototypeRoad != 0
+        ? graph::CompileConnectionPrototype(m_graph, m_options.prototypeRoad, m_options.prototypeGravel,
+                                            m_options.prototypeSidewalk, m_options.prototypeDisplacement)
+        : graph::CompileMeshGraph(m_graph, previewMeshNode);
+    if (m_options.prototypeRoad != 0) {
+        const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - compileStart).count();
+        size_t vertices = 0, triangles = 0, maskBytes = 0;
+        for (const auto& mesh : compiled.scene.meshes) {
+            vertices += mesh.geometry.vertices.size();
+            triangles += mesh.geometry.indices.size() / 3;
+            maskBytes += mesh.roadMask.rgba.size();
+        }
+        TG_LOG_INFO("接続試作: %.2f ms, %zu 頂点, %zu 三角形, マスク %zu bytes", elapsed, vertices, triangles, maskBytes);
+        if (!compiled.error.empty()) TG_LOG_ERROR("接続試作: %s", compiled.error.c_str());
+    }
     // 鎖が無くなったらシーンを空にする（グリッドと背景だけになる）。
     bool uploaded = true;
     if (compiled.active) {

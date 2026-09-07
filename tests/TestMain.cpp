@@ -7,6 +7,7 @@
 #include "TestSupport.h"
 
 void RunRoadTests();
+void RunConnectionPrototypeTests();
 void RunMeshSceneTests();
 void RunFrameLimiterTests();
 void RunNodeGraphTests();
@@ -15,6 +16,7 @@ void RunUndoHistoryTests();
 
 int main() {
     RunRoadTests();
+    RunConnectionPrototypeTests();
     RunMeshSceneTests();
     RunUiInteractionTests();
     RunUndoHistoryTests();

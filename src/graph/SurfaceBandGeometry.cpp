@@ -121,7 +121,15 @@ bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocum
         std::sort(values.begin(), values.end());
         values.erase(std::unique(values.begin(), values.end()), values.end());
     };
-    sortUnique(distances); sortUnique(knots);
+    // 道路格子・等間隔点・区間端は同じ距離でも丸め誤差を持つ。
+    // 10 μm以内の重複をまとめ、ほぼ幅ゼロの面を作らない。
+    for (auto& distance : distances) distance = std::clamp(distance, 0.0f, length);
+    std::sort(distances.begin(), distances.end());
+    distances.erase(std::unique(distances.begin(), distances.end(), [](float a, float b) {
+        return b - a <= 1e-5f;
+    }), distances.end());
+    distances.back() = length;
+    sortUnique(knots);
     if (knots.size() > 256 || distances.size() > 8192 || knots.size() * distances.size() > 262144)
         return fail("沿道断面または区間の分割数が多すぎます");
     std::vector<XMFLOAT3> positions;

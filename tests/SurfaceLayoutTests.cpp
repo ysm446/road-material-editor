@@ -319,6 +319,10 @@ void RunSurfaceLayoutTests() {
           "曲がりと縦断高さを持つ道路格子に沿道が追従する");
     if (!rightMesh.vertices.empty()) Check(std::abs(rightMesh.vertices.back().position.y - 1.15f) < 1e-5f,
           "沿道の高さは道路の縦断高さを基準にする");
+    auto roundedRoad = bentRoad;
+    roundedRoad.rowDistances[1] = 0.25000003f;
+    Check(graph::BuildSurfaceBandGeometry(roundedRoad, roadside, roadside.layouts[0].bands[1], rightMesh, error),
+          "等間隔点と道路格子の距離が丸め誤差で重なっても沿道を生成できる");
     auto brokenSide = roadside;
     brokenSide.layouts[0].bands[1].spans[0].blendOutMeters = 0;
     brokenSide.layouts[0].bands[1].spans[1].blendInMeters = 0;

@@ -127,7 +127,7 @@ private:
     bool DrawSurfaceLayoutSettings(graph::GraphId roadId);
     void DrawSurfacePresetEditor();
     void DrawSurfacePresetGraphEditor();
-    bool DrawSurfacePresetGraph(graph::SurfacePreset& preset);
+    bool DrawSurfacePresetGraph(graph::LayerMaterial& preset);
     void DrawGraphBackground(const ImVec2& min, const ImVec2& max);
     bool DrawLayerSettings(compositor::MaterialLayer& layer);
     // グラフの変更をメッシュシーンへ反映する。フレームの頭（フレームの外）で呼ぶ。

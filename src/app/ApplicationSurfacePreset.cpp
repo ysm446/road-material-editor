@@ -18,7 +18,8 @@
 namespace tg {
 namespace ed = ax::NodeEditor;
 namespace {
-graph::CompiledMeshGraph BuildLayerPreviewScene(const graph::SurfacePreset& source, float meters, bool displacement) {
+graph::CompiledMeshGraph BuildLayerPreviewScene(const graph::LayerMaterial& material, float meters, bool displacement) {
+    const auto source = graph::MaterialPreviewPreset(material);
     graph::NodeGraph graph;
     const auto pathId = graph.CreateNode(graph::NodeKind::Path);
     const auto roadId = graph.CreateNode(graph::NodeKind::Road);
@@ -34,7 +35,7 @@ graph::CompiledMeshGraph BuildLayerPreviewScene(const graph::SurfacePreset& sour
         const auto section = document.presets[0].section;
         document.presets[0] = source;
         auto& preset = document.presets[0];
-        preset.id = id; preset.section = section; preset.parameters.clear(); preset.role = graph::SurfaceRole::Road;
+        preset.id = id; preset.section = section; preset.parameters.clear();
         if (!displacement) preset.displacementMeters = 0;
         return graph::CompileSurfaceLayoutPreview(graph, document, roadId);
     }
@@ -61,7 +62,7 @@ void PresetPin(uint32_t id, const char* label, bool output, bool mask) {
     ed::EndPin();
 }
 }
-bool Application::DrawSurfacePresetGraph(graph::SurfacePreset& preset) {
+bool Application::DrawSurfacePresetGraph(graph::LayerMaterial& preset) {
     auto& graph = *preset.materialGraph;
     bool changed = false;
     bool frameAll = false;
@@ -197,12 +198,9 @@ bool Application::DrawSurfacePresetGraph(graph::SurfacePreset& preset) {
 void Application::DrawSurfacePresetGraphEditor() {
     if (ui::Button("配置へ戻る", ui::kWideButtonWidth)) { m_editSurfacePreset = 0; return; }
     auto edited = m_surfaceLayouts;
-    auto found = std::find_if(edited.presets.begin(), edited.presets.end(), [&](const auto& p) { return p.id == m_editSurfacePreset; });
-    if (found == edited.presets.end()) { ui::HintText("プリセットが削除されました。配置へ戻って選び直してください"); return; }
+    auto found = std::find_if(edited.layerMaterials.begin(), edited.layerMaterials.end(), [&](const auto& p) { return p.id == m_editSurfacePreset; });
+    if (found == edited.layerMaterials.end()) { ui::HintText("プリセットが削除されました。配置へ戻って選び直してください"); return; }
     auto& preset = *found;
-    if (preset.role != graph::SurfaceRole::Road && !m_previewSurfaceBands) {
-        m_previewSurfaceBands = true; m_graph.MarkDirty();
-    }
     ui::SectionHeader("プリセット編集");
     ui::HintText("ここでの変更は、このプリセットを使うすべての区間へ反映します");
     if (!m_surfacePresetError.empty()) ui::HintText(m_surfacePresetError.c_str());
@@ -212,7 +210,7 @@ void Application::DrawSurfacePresetGraphEditor() {
     if (ui::BeginPropertyTable("presetEditorRows")) {
         char name[128]; std::snprintf(name, sizeof(name), "%s", preset.name.c_str());
         if (ui::PropertyTextInput("名前", name, sizeof(name), "プリセット一覧に表示する名前") && name[0]) { preset.name = name; changed = true; }
-        const graph::SurfacePreset defaults;
+        const graph::LayerMaterial defaults;
         changed |= ui::PropertyFloat("凹凸の高さ", &preset.displacementMeters, 0, 10, defaults.displacementMeters,
             "素材のハイトで押し出す量。0なら形状を変えない", "%.3f m");
         auto selected = std::find_if(preset.materialGraph->nodes.begin(), preset.materialGraph->nodes.end(),
@@ -267,17 +265,6 @@ void Application::DrawSurfacePresetGraphEditor() {
         }
         changed |= ui::PropertyFloat("ブレンド幅", &preset.layerBlendRange, 0, 1, defaults.layerBlendRange,
             "プリセット内の全層に共通する、ハイトによる境界の柔らかさ");
-        float width, height;
-        if (graph::GetSimpleRoadsideDimensions(preset, width, height)) {
-            const graph::SimpleRoadsideDefaults shapeDefaults;
-            const bool step = preset.section.size() == 3;
-            bool dimensionsChanged = ui::PropertyFloat("幅", &width, 0.1f, 10, shapeDefaults.width,
-                "共有断面の幅。使用中の全区間へ反映", "%.2f m");
-            dimensionsChanged |= ui::PropertyFloat(step ? "段差の高さ" : "外端の高さ", &height,
-                step ? 0.01f : -2.0f, 2, step ? shapeDefaults.sidewalkHeight : shapeDefaults.groundHeight,
-                "道路端を固定した断面の高さ。使用中の全区間へ反映", "%.2f m");
-            if (dimensionsChanged) changed |= graph::SetSimpleRoadsideDimensions(preset, width, height);
-        }
         ui::EndPropertyTable();
     }
     ImGui::EndChild();
@@ -285,7 +272,7 @@ void Application::DrawSurfacePresetGraphEditor() {
     std::string error;
     if (graph::ValidateSurfaceLayouts(edited, error)) {
         for (const auto& layout : edited.layouts) for (const auto& band : layout.bands) {
-            if (!error.empty() || std::none_of(band.spans.begin(), band.spans.end(), [&](const auto& span) { return span.preset == preset.id; })) continue;
+            if (!error.empty() || std::none_of(band.spans.begin(), band.spans.end(), [&](const auto& span) { return graph::PresetLayerMaterial(edited, span.preset) == preset.id; })) continue;
             error = band.side == graph::SurfaceSide::Road
                 ? graph::CompileSurfaceLayoutPreview(m_graph, edited, layout.roadNode).error
                 : graph::CompileSurfaceBandPreview(m_graph, edited, layout.roadNode, band.id).error;
@@ -300,9 +287,9 @@ void Application::DrawSurfacePresetGraphEditor() {
 
 void Application::ProcessLayerPreview() {
     if (!m_editSurfacePreset) { m_layerPreviewPreset = 0; return; }
-    const auto found = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(),
+    const auto found = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(),
         [&](const auto& p) { return p.id == m_editSurfacePreset; });
-    if (found == m_surfaceLayouts.presets.end()) return;
+    if (found == m_surfaceLayouts.layerMaterials.end()) return;
     if (!m_layerPreviewInitialized) {
         m_layerPreview.RequestShadowCascadeCount(1);
         m_layerPreview.RequestShadowResolution(1024);
@@ -350,14 +337,14 @@ void Application::ProcessLayerThumbnails() {
                 asset.roughnessValue, asset.metallicValue, asset.ambientOcclusionValue});
         }
         for (auto& entry : m_layerThumbnails) {
-            const auto preset = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(),
+            const auto preset = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(),
                 [&](const auto& p) { return p.id == entry.id; });
-            if (preset == m_surfaceLayouts.presets.end()) {
+            if (preset == m_surfaceLayouts.layerMaterials.end()) {
                 if (m_layerThumbnailActive == entry.id) m_layerThumbnailActive = 0;
                 continue;
             }
             graph::SurfaceLayoutDocument document;
-            document.presets.push_back(*preset);
+            document.layerMaterials.push_back(*preset);
             const auto key = nlohmann::json{io::WriteSurfaceLayouts(document), materials, m_layerThumbnailTextureRevision}.dump();
             if (entry.contentKey != key) {
                 entry.contentKey = key; entry.dirty = true;
@@ -367,12 +354,12 @@ void Application::ProcessLayerThumbnails() {
         m_layerThumbnailsDirty = false;
     }
     for (auto it = m_layerThumbnails.begin(); it != m_layerThumbnails.end();) {
-        if (std::none_of(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == it->id; })) {
+        if (std::none_of(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(), [&](const auto& p) { return p.id == it->id; })) {
             m_device.DeferRelease(it->texture); it = m_layerThumbnails.erase(it);
         } else ++it;
     }
-    if (m_surfaceLayouts.presets.empty()) return;
-    for (const auto& preset : m_surfaceLayouts.presets)
+    if (m_surfaceLayouts.layerMaterials.empty()) return;
+    for (const auto& preset : m_surfaceLayouts.layerMaterials)
         if (std::none_of(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == preset.id; })) {
             LayerThumbnail entry; entry.id = preset.id; m_layerThumbnails.push_back(std::move(entry));
             m_layerThumbnailsDirty = true;
@@ -396,7 +383,7 @@ void Application::ProcessLayerThumbnails() {
     if (!m_layerThumbnailActive) {
         auto entry = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [](const auto& t) { return t.dirty; });
         if (entry == m_layerThumbnails.end()) return;
-        const auto preset = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == entry->id; });
+        const auto preset = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(), [&](const auto& p) { return p.id == entry->id; });
         if (!entry->texture.IsValid()) {
             rhi::TextureDesc desc; desc.width = desc.height = 256; desc.debugName = L"LayerMaterialThumbnail";
             if (!m_device.Allocator().CreateTexture2D(desc, entry->texture)) { entry->dirty = false; return; }
@@ -457,7 +444,7 @@ void Application::DrawLayerMaterialLibrary() {
     if (ImGui::BeginChild("layerMaterialGrid", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
         const int columns = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / (size + ImGui::GetStyle().ItemSpacing.x)));
         int index = 0;
-        for (const auto& preset : m_surfaceLayouts.presets) {
+        for (const auto& preset : m_surfaceLayouts.layerMaterials) {
             ImGui::PushID(static_cast<int>(preset.id)); ImGui::BeginGroup();
             const auto cached = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == preset.id; });
             const ImTextureID texture = cached != m_layerThumbnails.end() && cached->ready ? static_cast<ImTextureID>(cached->texture.srv.gpu.ptr) : 0;
@@ -475,7 +462,7 @@ void Application::DrawLayerMaterialLibrary() {
             }
             ui::GridCaption(preset.name.c_str(), size);
             ImGui::EndGroup(); ImGui::PopID();
-            if (++index % columns && index < static_cast<int>(m_surfaceLayouts.presets.size())) ImGui::SameLine();
+            if (++index % columns && index < static_cast<int>(m_surfaceLayouts.layerMaterials.size())) ImGui::SameLine();
         }
         if (ImGui::BeginPopupContextWindow("##layerMaterialGridMenu",
                 ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
@@ -491,25 +478,30 @@ void Application::DrawLayerMaterialLibrary() {
             ImGui::IsKeyPressed(ImGuiKey_Delete, false))) && m_selectedLayerMaterial) {
             bool used = false;
             for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands)
-                for (const auto& span : band.spans) used |= span.preset == m_selectedLayerMaterial;
+                for (const auto& span : band.spans) used |= graph::PresetLayerMaterial(m_surfaceLayouts, span.preset) == m_selectedLayerMaterial;
             if (used) m_layerLibraryError = "配置で使用中です。割り当てを変更してから削除してください。";
             else {
-                const auto found = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == m_selectedLayerMaterial; });
-                if (found != m_surfaceLayouts.presets.end()) {
+                const auto found = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(), [&](const auto& p) { return p.id == m_selectedLayerMaterial; });
+                if (found != m_surfaceLayouts.layerMaterials.end()) {
                     if (m_editSurfacePreset == found->id) m_editSurfacePreset = 0;
-                    m_surfaceLayouts.presets.erase(found); m_graph.MarkDirty(); MarkDocumentChanged();
+                    const auto removed = found->id;
+                    std::erase_if(m_surfaceLayouts.presets, [&](const auto& p) { return p.layerMaterial == removed; });
+                    m_surfaceLayouts.layerMaterials.erase(found); m_graph.MarkDirty(); MarkDocumentChanged();
                 }
                 m_selectedLayerMaterial = 0; m_layerLibraryError.clear();
             }
         }
     }
     if (create) {
-        graph::SurfacePreset preset;
-        preset.id = m_surfaceLayouts.AllocateId(); preset.name = "新しい道路材質"; preset.role = graph::SurfaceRole::Road;
-        preset.section = {{m_surfaceLayouts.AllocateId(), 0, 0}, {m_surfaceLayouts.AllocateId(), 4, 0}};
+        graph::LayerMaterial preset;
+        preset.id = m_surfaceLayouts.AllocateId(); preset.name = "新しいレイヤーマテリアル";
+        if (!preset.id) {
+            m_layerLibraryError = "レイヤーマテリアルのIDを確保できません";
+            ImGui::EndChild(); ImGui::End(); return;
+        }
         preset.materials.emplace_back();
         m_selectedLayerMaterial = m_editSurfacePreset = preset.id;
-        m_surfaceLayouts.presets.push_back(std::move(preset)); MarkDocumentChanged();
+        m_surfaceLayouts.layerMaterials.push_back(std::move(preset)); MarkDocumentChanged();
         m_selectedPresetLayer = 0; m_surfacePresetError.clear(); m_layerLibraryError.clear();
     }
     ImGui::EndChild(); ImGui::End();
@@ -523,8 +515,8 @@ void Application::DrawSurfacePresetEditor() {
         ImGui::End(); if (!open) m_editSurfacePreset = 0; return;
     }
     auto edited = m_surfaceLayouts;
-    auto found = std::find_if(edited.presets.begin(), edited.presets.end(), [&](const auto& p) { return p.id == m_editSurfacePreset; });
-    if (found == edited.presets.end()) { ImGui::End(); m_editSurfacePreset = 0; return; }
+    auto found = std::find_if(edited.layerMaterials.begin(), edited.layerMaterials.end(), [&](const auto& p) { return p.id == m_editSurfacePreset; });
+    if (found == edited.layerMaterials.end()) { ImGui::End(); m_editSurfacePreset = 0; return; }
     auto& preset = *found;
     bool changed = false;
     const float previewWidth = std::max(ui::Scaled(220), ImGui::GetContentRegionAvail().x * 0.52f);
@@ -631,7 +623,7 @@ void Application::DrawSurfacePresetEditor() {
         if (ui::BeginPropertyTable("layerProperties")) {
             char name[128]; std::snprintf(name, sizeof(name), "%s", preset.name.c_str());
             if (ui::PropertyTextInput("名前", name, sizeof(name), "アセットの名前") && name[0]) { preset.name = name; changed = true; }
-            const graph::SurfacePreset defaults;
+            const graph::LayerMaterial defaults;
             changed |= ui::PropertyFloat("凹凸の高さ", &preset.displacementMeters, 0, 10, defaults.displacementMeters, "合成ハイトで押し出す実寸", "%.3f m");
             changed |= ui::PropertyFloat("ブレンド幅", &preset.layerBlendRange, 0, 1, defaults.layerBlendRange, "ハイト境界の柔らかさ");
             auto& material = layers[m_selectedPresetLayer];
@@ -690,19 +682,6 @@ void Application::DrawSurfacePresetEditor() {
             layers[m_selectedPresetLayer].mask->breakupAmount = 0;
             changed = true;
         }
-        float width, height;
-        if (graph::GetSimpleRoadsideDimensions(preset, width, height)) {
-            ui::SectionHeader("沿道の断面");
-            if (ui::BeginPropertyTable("layerSideShape")) {
-                const graph::SimpleRoadsideDefaults defaults;
-                const bool step = preset.section.size() == 3;
-                bool shapeChanged = ui::PropertyFloat("幅", &width, 0.1f, 10, defaults.width, "この沿道プリセットを使う全区間の幅", "%.2f m");
-                shapeChanged |= ui::PropertyFloat(step ? "段差の高さ" : "外端の高さ", &height, step ? 0.01f : -2, 2,
-                    step ? defaults.sidewalkHeight : defaults.groundHeight, "道路端を固定した断面の高さ", "%.2f m");
-                if (shapeChanged) changed |= graph::SetSimpleRoadsideDimensions(preset, width, height);
-                ui::EndPropertyTable();
-            }
-        }
     }
     if (!m_surfacePresetError.empty()) ui::HintText("%s", m_surfacePresetError.c_str());
     ImGui::EndChild(); ImGui::End();
@@ -711,7 +690,7 @@ void Application::DrawSurfacePresetEditor() {
         std::string error;
         if (graph::ValidateSurfaceLayouts(edited, error)) {
             for (const auto& layout : edited.layouts) for (const auto& band : layout.bands) {
-                if (!error.empty() || std::none_of(band.spans.begin(), band.spans.end(), [&](const auto& span) { return span.preset == preset.id; })) continue;
+                if (!error.empty() || std::none_of(band.spans.begin(), band.spans.end(), [&](const auto& span) { return graph::PresetLayerMaterial(edited, span.preset) == preset.id; })) continue;
                 error = band.side == graph::SurfaceSide::Road
                     ? graph::CompileSurfaceLayoutPreview(m_graph, edited, layout.roadNode).error
                     : graph::CompileSurfaceBandPreview(m_graph, edited, layout.roadNode, band.id).error;

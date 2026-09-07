@@ -118,15 +118,16 @@ bool CreateRoadsideExample(SurfaceLayoutDocument& document, const NodeGraph& gra
     return true;
 }
 
-bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocument& document,
+bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocument& sourceDocument,
                               const SurfaceBand& band, renderer::MeshData& result, std::string& error) {
+    const auto document = ResolveLayerMaterials(sourceDocument);
     using namespace DirectX;
     error.clear();
     const auto fail = [&](const char* message) { error = message; return false; };
     if (!ValidateSurfaceLayouts(document, error)) return false;
     // 検証対象と生成対象の食い違いを防ぐ。文書内の帯を渡す。
     bool belongs = false;
-    for (const auto& layout : document.layouts) for (const auto& candidate : layout.bands)
+    for (const auto& layout : sourceDocument.layouts) for (const auto& candidate : layout.bands)
         if (&candidate == &band) belongs = true;
     if (!belongs || band.side == SurfaceSide::Road || band.spans.empty())
         return fail("沿道生成には文書内の左または右の帯が必要です");
@@ -290,8 +291,9 @@ bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocum
     result = std::move(mesh);
     return true;
 }
-CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const SurfaceLayoutDocument& document,
+CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const SurfaceLayoutDocument& sourceDocument,
                                           GraphId roadId, SurfaceId bandId) {
+    const auto document = ResolveLayerMaterials(sourceDocument);
     CompiledMeshGraph result; result.active = true;
     if (!ValidateSurfaceLayouts(document, result.error) || !ValidateSurfaceLayoutRoads(document, graph, result.error)) return result;
     const SurfaceBand* band = nullptr;
@@ -397,8 +399,9 @@ CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const Surfac
     return result;
 }
 bool ConnectSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
-                                    const SurfaceLayoutDocument& document, GraphId roadId,
+                                    const SurfaceLayoutDocument& sourceDocument, GraphId roadId,
                                     SurfaceId bandId, std::string& error, bool enableDisplacement) {
+    const auto document = ResolveLayerMaterials(sourceDocument);
     error.clear();
     const auto fail = [&](const char* message) { error = message; return false; };
     if (!ValidateSurfaceLayouts(document, error)) return false;
@@ -525,9 +528,10 @@ bool ConnectSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& grap
     return true;
 }
 bool ConnectBothSurfaceBands(CompiledMeshGraph& scene, const NodeGraph& graph,
-                             const SurfaceLayoutDocument& document, GraphId roadId,
+                             const SurfaceLayoutDocument& sourceDocument, GraphId roadId,
                              SurfaceId leftBand, SurfaceId rightBand, std::string& error,
                              bool enableDisplacement) {
+    const auto document = ResolveLayerMaterials(sourceDocument);
     auto left = scene, right = scene;
     if (!ConnectSurfaceBandMaterials(left, graph, document, roadId, leftBand, error, enableDisplacement) ||
         !ConnectSurfaceBandMaterials(right, graph, document, roadId, rightBand, error, enableDisplacement)) return false;
@@ -596,9 +600,10 @@ bool ConnectBothSurfaceBands(CompiledMeshGraph& scene, const NodeGraph& graph,
     scene = std::move(next); error.clear(); return true;
 }
 bool ConnectSurfaceLayoutBands(CompiledMeshGraph& scene, const NodeGraph& graph,
-                               const SurfaceLayoutDocument& document, GraphId roadId,
+                               const SurfaceLayoutDocument& sourceDocument, GraphId roadId,
                                SurfaceId leftBand, SurfaceId rightBand, std::string& error,
                                bool enableDisplacement) {
+    const auto document = ResolveLayerMaterials(sourceDocument);
     const auto source = std::find(scene.meshSources.begin(), scene.meshSources.end(), roadId);
     if (source == scene.meshSources.end() || !renderer::ValidateMeshScene(scene.scene)) {
         error = "接続先の道路が不正です"; return false;

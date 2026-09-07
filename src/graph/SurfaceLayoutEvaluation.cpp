@@ -5,8 +5,9 @@
 #include <cmath>
 
 namespace tg::graph {
-CompiledMeshGraph CompileMeshGraphWithLayouts(const NodeGraph& graph, const SurfaceLayoutDocument& document,
+CompiledMeshGraph CompileMeshGraphWithLayouts(const NodeGraph& graph, const SurfaceLayoutDocument& sourceDocument,
                                             GraphId previewNodeId) {
+    const auto document = ResolveLayerMaterials(sourceDocument);
     auto compiled = CompileMeshGraph(graph, previewNodeId);
     const size_t originalCount = compiled.scene.meshes.size();
     for (size_t i = 0; i < originalCount; ++i) {
@@ -83,8 +84,9 @@ std::vector<SurfaceSpanSample> SampleSurfaceBand(const SurfaceLayoutDocument& do
     return result;
 }
 
-CompiledMeshGraph CompileSurfaceLayoutPreview(const NodeGraph& graph, const SurfaceLayoutDocument& document,
+CompiledMeshGraph CompileSurfaceLayoutPreview(const NodeGraph& graph, const SurfaceLayoutDocument& sourceDocument,
                                              GraphId roadId) {
+    const auto document = ResolveLayerMaterials(sourceDocument);
     CompiledMeshGraph result;
     result.active = true;
     if (!ValidateSurfaceLayouts(document, result.error) || !ValidateSurfaceLayoutRoads(document, graph, result.error)) return result;

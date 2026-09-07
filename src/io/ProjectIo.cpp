@@ -45,7 +45,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 15: merge ノード（入力数が可変）。旧ビルドが Merge を読み飛ばして Mesh Output との接続を失うことを防ぐ。
 // 16: crack ノード。
 // 17: 埋込プリセットと道路・沿道の配置記述。旧ビルドによる消失を防ぐ。
-constexpr int kProjectFormatVersion = 20;
+constexpr int kProjectFormatVersion = 21;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -1436,7 +1436,8 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs) {
         };
     document["graph"] = WriteGraph(refs.graph, writeMaterial);
     auto layouts = WriteSurfaceLayouts(refs.surfaceLayouts);
-    for (auto& preset : layouts["presets"]) {
+    if (layouts.is_null()) { TG_LOG_ERROR("レイヤーマテリアルの移行に必要なIDを確保できません"); return false; }
+    for (auto& preset : layouts["layerMaterials"]) {
         if (preset.contains("materialGraph")) for (auto& node : preset["materialGraph"]["nodes"]) {
             auto& material = node["settings"]["material"];
             const auto reference = writeMaterial(material.get<uint32_t>());
@@ -1487,7 +1488,7 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
     }
     if (const json* layouts = FindMember(document, "surfaceLayouts")) {
         std::string error;
-        if (!ReadSurfaceLayouts(*layouts, pendingLayouts, error)) {
+        if (!ReadSurfaceLayouts(*layouts, pendingLayouts, error) || !graph::ExtractLayerMaterials(pendingLayouts, error)) {
             TG_LOG_ERROR("配置データを読み込めません（現在の文書は保持）: %s", error.c_str());
             return false;
         }
@@ -1589,7 +1590,7 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
             const auto it = materialIds.find(value.get<int>());
             return (it != materialIds.end()) ? it->second : compositor::kNoMaterialAsset;
         };
-    for (auto& preset : pendingLayouts.presets) {
+    for (auto& preset : pendingLayouts.layerMaterials) {
         for (auto& material : preset.materials) material.material = readMaterial(json(material.material));
         if (preset.materialGraph) for (auto& node : preset.materialGraph->nodes)
             node.settings.material = readMaterial(json(node.settings.material));

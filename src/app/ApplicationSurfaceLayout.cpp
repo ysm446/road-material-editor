@@ -69,9 +69,9 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 }
                 std::vector<std::string> labels;
                 for (const auto& span : candidate.spans) {
-                    const auto labelPreset = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+                    const auto labelPreset = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(), [&](const auto& p) { return p.id == graph::PresetLayerMaterial(m_surfaceLayouts, span.preset); });
                     char label[192]; std::snprintf(label, sizeof(label), "%.2f～%.2f m / %s", span.startMeters, span.endMeters,
-                        labelPreset == m_surfaceLayouts.presets.end() ? "未設定" : labelPreset->name.c_str());
+                        labelPreset == m_surfaceLayouts.layerMaterials.end() ? "未設定" : labelPreset->name.c_str());
                     labels.emplace_back(label);
                 }
                 std::vector<const char*> items;
@@ -118,34 +118,55 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
             for (auto& candidate : layout.bands) if (candidate.side == side && !candidate.spans.empty()) {
                 m_surfaceBandSpan = std::clamp(m_surfaceBandSpan, 0, static_cast<int>(candidate.spans.size()) - 1);
                 bool changed = false;
-                ui::SectionHeader("沿道プリセット");
+                ui::SectionHeader("沿道の材質と形状");
                 if (ui::BeginPropertyTable("roadsideMaterialRows")) {
                     auto& span = candidate.spans[m_surfaceBandSpan];
                     std::vector<graph::SurfaceId> presetIds;
                     std::vector<const char*> presetNames;
                     std::vector<ImTextureID> presetThumbnails;
                     int presetIndex = 0;
-                    for (const auto& p : roadsideEdit.presets) if (p.role != graph::SurfaceRole::Road) {
-                        if (p.id == span.preset) presetIndex = static_cast<int>(presetIds.size());
+                    for (const auto& p : roadsideEdit.layerMaterials) {
+                        if (p.id == graph::PresetLayerMaterial(roadsideEdit, span.preset)) presetIndex = static_cast<int>(presetIds.size());
                         presetIds.push_back(p.id); presetNames.push_back(p.name.c_str());
                         const auto thumbnail = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(),
                             [&](const auto& entry) { return entry.id == p.id; });
                         presetThumbnails.push_back(thumbnail != m_layerThumbnails.end() && thumbnail->ready
                             ? static_cast<ImTextureID>(thumbnail->texture.srv.gpu.ptr) : 0);
                     }
-                    if (!presetIds.empty() && ui::PropertyCombo("プリセット", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
-                        "この区間に割り当てる沿道プリセット。切替時は公開値の上書きを解除する", presetThumbnails.data())) {
-                        span.preset = presetIds[presetIndex]; span.parameters.clear(); changed = true;
+                    if (!presetIds.empty() && ui::PropertyCombo("材質", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
+                        "この区間のレイヤーマテリアル。幅と高さは維持する", presetThumbnails.data())) {
+                        changed |= graph::AssignLayerMaterial(roadsideEdit, span, presetIds[presetIndex]);
+                    }
+                    auto shape = std::find_if(roadsideEdit.presets.begin(), roadsideEdit.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+                    float width = 0, height = 0;
+                    if (shape != roadsideEdit.presets.end() && graph::GetSimpleRoadsideDimensions(*shape, width, height)) {
+                        ui::PropertyValue("形状", "%s", shape->role == graph::SurfaceRole::Sidewalk ? "歩道" : "路肩");
+                        const graph::SimpleRoadsideDefaults defaults;
+                        bool dimensionsChanged = ui::PropertyFloat("幅", &width, 0.1f, 10, defaults.width,
+                            "選択した区間だけの幅", "%.2f m");
+                        dimensionsChanged |= ui::PropertyFloat(shape->section.size() == 3 ? "段差の高さ" : "外端の高さ", &height,
+                            shape->section.size() == 3 ? 0.01f : -2.0f, 2,
+                            shape->role == graph::SurfaceRole::Sidewalk ? defaults.sidewalkHeight : defaults.groundHeight,
+                            "路面からの高さ。材質を共有する他の区間には影響しない", "%.2f m");
+                        if (dimensionsChanged) {
+                            size_t uses = 0;
+                            for (const auto& l : roadsideEdit.layouts) for (const auto& b : l.bands)
+                                for (const auto& s : b.spans) uses += s.preset == span.preset;
+                            if (uses <= 1 || graph::DuplicateSurfacePreset(roadsideEdit, candidate, static_cast<size_t>(m_surfaceBandSpan))) {
+                                shape = std::find_if(roadsideEdit.presets.begin(), roadsideEdit.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+                                changed |= graph::SetSimpleRoadsideDimensions(*shape, width, height);
+                            }
+                        }
                     }
                     ui::EndPropertyTable();
                 }
-                if (ui::Button("プリセットを編集", ui::kWideButtonWidth)) {
-                    m_editSurfacePreset = candidate.spans[m_surfaceBandSpan].preset; m_surfacePresetError.clear();
+                if (ui::Button("材質を編集", ui::kWideButtonWidth)) {
+                    m_editSurfacePreset = graph::PresetLayerMaterial(roadsideEdit, candidate.spans[m_surfaceBandSpan].preset); m_surfacePresetError.clear();
                 }
                 ImGui::SameLine();
                 if (ui::Button("複製して編集", ui::kWideButtonWidth)) {
-                    changed |= graph::DuplicateSurfacePreset(roadsideEdit, candidate, static_cast<size_t>(m_surfaceBandSpan));
-                    if (changed) { m_editSurfacePreset = candidate.spans[m_surfaceBandSpan].preset; m_surfacePresetError.clear(); }
+                    changed |= graph::DuplicateLayerMaterial(roadsideEdit, candidate.spans[m_surfaceBandSpan]);
+                    if (changed) { m_editSurfacePreset = graph::PresetLayerMaterial(roadsideEdit, candidate.spans[m_surfaceBandSpan].preset); m_surfacePresetError.clear(); }
                 }
                 if (changed) {
                     graph::EnsureRoadsideTransitions(candidate);
@@ -164,12 +185,12 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                     }
                     if (error.empty()) { m_surfaceLayouts = std::move(roadsideEdit); m_previewSurfaceBands = true; return true; }
                     m_editSurfacePreset = 0; m_surfacePresetError = error;
-                    TG_LOG_ERROR("沿道プリセット: %s", error.c_str());
+                    TG_LOG_ERROR("沿道の材質と形状: %s", error.c_str());
                 }
                 break;
             }
         }
-        ui::HintText("材質のレイヤー合成は「プリセットを編集」で設定します");
+        ui::HintText("材質のレイヤー合成は「材質を編集」で設定します");
     }
     ui::SectionHeader("路面区間");
     auto edited = m_surfaceLayouts;
@@ -203,9 +224,9 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
             int selected = found == band->spans.end() ? 0 : static_cast<int>(found - band->spans.begin());
             std::vector<std::string> labels;
             for (const auto& span : band->spans) {
-                const auto labelPreset = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+                const auto labelPreset = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(), [&](const auto& p) { return p.id == graph::PresetLayerMaterial(m_surfaceLayouts, span.preset); });
                     char label[192]; std::snprintf(label, sizeof(label), "%.2f～%.2f m / %s", span.startMeters, span.endMeters,
-                        labelPreset == m_surfaceLayouts.presets.end() ? "未設定" : labelPreset->name.c_str());
+                        labelPreset == m_surfaceLayouts.layerMaterials.end() ? "未設定" : labelPreset->name.c_str());
                 labels.emplace_back(label);
             }
             std::vector<const char*> items;
@@ -218,17 +239,17 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 std::vector<const char*> presetNames;
                 std::vector<ImTextureID> presetThumbnails;
                 int presetIndex = 0;
-                for (const auto& preset : edited.presets) if (preset.role == graph::SurfaceRole::Road) {
-                    if (preset.id == span.preset) presetIndex = static_cast<int>(presetIds.size());
+                for (const auto& preset : edited.layerMaterials) {
+                    if (preset.id == graph::PresetLayerMaterial(edited, span.preset)) presetIndex = static_cast<int>(presetIds.size());
                     presetIds.push_back(preset.id); presetNames.push_back(preset.name.c_str());
                     const auto thumbnail = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(),
                         [&](const auto& entry) { return entry.id == preset.id; });
                     presetThumbnails.push_back(thumbnail != m_layerThumbnails.end() && thumbnail->ready
                         ? static_cast<ImTextureID>(thumbnail->texture.srv.gpu.ptr) : 0);
                 }
-                if (ui::PropertyCombo("プリセット", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
+                if (ui::PropertyCombo("材質", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
                                       "この区間へ割り当てる材質。1本の道路で同時に3種類まで使用できる", presetThumbnails.data())) {
-                    span.preset = presetIds[presetIndex]; span.parameters.clear(); changed = true;
+                    changed |= graph::AssignLayerMaterial(edited, span, presetIds[presetIndex]);
                 }
                 ui::PropertyValue("始点", "%.2f m", span.startMeters);
                 if (selected + 1 < static_cast<int>(band->spans.size()) && band->spans[selected + 1].endMeters - span.startMeters > 0.02f) {
@@ -255,13 +276,13 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 auto& span = band->spans[selected];
                 auto preset = std::find_if(edited.presets.begin(), edited.presets.end(), [&](const auto& p) { return p.id == span.preset; });
                 if (preset != edited.presets.end()) {
-                    if (ui::Button("プリセットを編集##road", ui::kWideButtonWidth)) {
-                        m_editSurfacePreset = preset->id; m_surfacePresetError.clear();
+                    if (ui::Button("材質を編集##road", ui::kWideButtonWidth)) {
+                        m_editSurfacePreset = preset->layerMaterial; m_surfacePresetError.clear();
                     }
                     ImGui::SameLine();
                     if (ui::Button("複製して編集##road", ui::kWideButtonWidth)) {
-                        changed |= graph::DuplicateSurfacePreset(edited, *band, selected);
-                        if (changed) { m_editSurfacePreset = band->spans[selected].preset; m_surfacePresetError.clear(); }
+                        changed |= graph::DuplicateLayerMaterial(edited, band->spans[selected]);
+                        if (changed) { m_editSurfacePreset = graph::PresetLayerMaterial(edited, band->spans[selected].preset); m_surfacePresetError.clear(); }
                     }
                 }
             }

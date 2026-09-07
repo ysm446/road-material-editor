@@ -146,6 +146,21 @@ bool FitSurfaceLayoutsToRoads(SurfaceLayoutDocument& document, const NodeGraph& 
     }
     return changed;
 }
+bool DuplicateLayerMaterial(SurfaceLayoutDocument& document, SurfaceSpan& span) {
+    const auto id = PresetLayerMaterial(document, span.preset);
+    const auto found = std::find_if(document.layerMaterials.begin(), document.layerMaterials.end(), [&](const auto& m) { return m.id == id; });
+    if (found == document.layerMaterials.end()) return false;
+    auto material = *found;
+    const auto previousNextId = document.nextId;
+    material.id = document.AllocateId();
+    if (!material.id) return false;
+    material.name += " コピー";
+    document.layerMaterials.push_back(material);
+    if (AssignLayerMaterial(document, span, material.id)) return true;
+    document.layerMaterials.pop_back();
+    document.nextId = previousNextId;
+    return false;
+}
 bool DuplicateSurfacePreset(SurfaceLayoutDocument& document, SurfaceBand& band, size_t index) {
     if (index >= band.spans.size()) return false;
     auto& span = band.spans[index];

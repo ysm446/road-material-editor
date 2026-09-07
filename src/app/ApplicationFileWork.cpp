@@ -273,7 +273,8 @@ void Application::ProcessPendingFileWork() {
             m_projectPath = path;
             m_selectedGraphNode = m_graph.FindNode(m_options.selectNode) ? m_options.selectNode : 0;
             m_options.selectNode = 0;
-            m_editSurfacePreset = m_options.editPreset;
+            m_editSurfacePreset = graph::PresetLayerMaterial(m_surfaceLayouts, m_options.editPreset);
+            if (!m_editSurfacePreset) m_editSurfacePreset = m_options.editPreset;
             m_options.editPreset = 0;
             m_surfacePresetError.clear();
             m_pathEdit = PathEditState{};

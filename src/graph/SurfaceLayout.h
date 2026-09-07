@@ -69,6 +69,16 @@ struct SurfacePreset {
     std::vector<PresetParameter> parameters;
     float layerBlendRange = 0.2f;
     std::optional<PresetGraph> materialGraph;
+    // 0は旧形式の埋込材質。保存・アプリ編集時に独立アセットへ移行する。
+    SurfaceId layerMaterial = 0;
+};
+struct LayerMaterial {
+    SurfaceId id = 0;
+    std::string name;
+    float displacementMeters = 0;
+    float layerBlendRange = 0.2f;
+    std::vector<PresetMaterial> materials;
+    std::optional<PresetGraph> materialGraph;
 };
 struct SpanParameter {
     SurfaceId parameter = 0;
@@ -96,8 +106,15 @@ struct SurfaceLayoutDocument {
     SurfaceId nextId = 1;
     std::vector<SurfacePreset> presets;
     std::vector<RoadLayout> layouts;
+    std::vector<LayerMaterial> layerMaterials;
     SurfaceId AllocateId();
 };
+// 旧埋込材質は移行時に空にする。評価用の写しだけに参照先の材質を展開する。
+bool ExtractLayerMaterials(SurfaceLayoutDocument& document, std::string& error);
+SurfaceLayoutDocument ResolveLayerMaterials(const SurfaceLayoutDocument& document);
+SurfacePreset MaterialPreviewPreset(const LayerMaterial& material);
+SurfaceId PresetLayerMaterial(const SurfaceLayoutDocument& document, SurfaceId preset);
+bool AssignLayerMaterial(SurfaceLayoutDocument& document, SurfaceSpan& span, SurfaceId material);
 
 // 参照・区間・寸法を検査する。シーングラフやGPUには依存しない。
 bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& document, std::string& error);

@@ -361,8 +361,8 @@ int Application::Run() {
                     if (!band.spans.empty()) band.spans.front().blendInMeters += 0.1f;
                 MarkDocumentChanged();
             }
-            if (m_frameCounter == 62 && !m_surfaceLayouts.presets.empty()) {
-                m_surfaceLayouts.presets.front().displacementMeters += 0.01f;
+            if (m_frameCounter == 62 && !m_surfaceLayouts.layerMaterials.empty()) {
+                m_surfaceLayouts.layerMaterials.front().displacementMeters += 0.01f;
                 MarkDocumentChanged();
             }
         }

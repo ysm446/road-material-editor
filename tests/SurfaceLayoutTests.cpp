@@ -76,7 +76,7 @@ void RunSurfaceLayoutTests() {
     broken = encoded; broken["version"] = 99; assertRejected(broken);
     broken = encoded; broken["presets"][0]["section"] = "invalid"; assertRejected(broken);
     broken = encoded; broken["presets"][0]["boundaries"][0]["mode"] = 99; assertRejected(broken);
-    broken = encoded; broken["presets"][0].erase("materials"); assertRejected(broken);
+    broken = encoded; broken["layerMaterials"][0].erase("materials"); assertRejected(broken);
     auto invalid = document;
     invalid.layouts[0].bands[0].spans[0].endMeters = std::numeric_limits<float>::quiet_NaN();
     Check(!graph::ValidateSurfaceLayouts(invalid, error), "非有限の区間を保存前に拒否する");
@@ -187,6 +187,14 @@ void RunSurfaceLayoutTests() {
     }
     auto legacyJson = encoded;
     legacyJson["version"] = 1;
+    legacyJson["nextId"] = document.nextId;
+    for (size_t i = 0; i < document.presets.size(); ++i) {
+        auto& shape = legacyJson["presets"][i];
+        const auto& material = encoded["layerMaterials"][i];
+        for (const auto* key : {"materials", "displacement", "layerBlendRange"}) shape[key] = material[key];
+        shape.erase("layerMaterial");
+    }
+    legacyJson.erase("layerMaterials");
     for (auto& p : legacyJson["presets"]) {
         p.erase("layerBlendRange");
         for (auto& m : p["materials"])
@@ -196,12 +204,12 @@ void RunSurfaceLayoutTests() {
           "旧版の単層記述を既定値で移行する");
     for (const auto* field : {"mask", "heightGate", "metallic"}) {
         auto missing = layeredJson;
-        missing["presets"][0]["materials"][1].erase(field);
+        missing["layerMaterials"][0]["materials"][1].erase(field);
         Check(!io::ReadSurfaceLayouts(missing, layeredDecoded, error) && io::WriteSurfaceLayouts(layeredDecoded) == layeredJson,
               "新版の必須項目欠落を既存文書を変更せず拒否する");
     }
     auto invalidMask = layeredJson;
-    invalidMask["presets"][0]["materials"][1]["mask"]["shape"] = 99;
+    invalidMask["layerMaterials"][0]["materials"][1]["mask"]["shape"] = 99;
     Check(!io::ReadSurfaceLayouts(invalidMask, layeredDecoded, error), "不正な道路マスクを拒否する");
     auto invalidLayer = layered;
     invalidLayer.presets[0].materials[1].heightGateSoftness = std::numeric_limits<float>::quiet_NaN();
@@ -536,6 +544,76 @@ void RunSurfaceLayoutTests() {
     Check(reloadedBand.error.empty() && reloadedBand.scene.meshes[0].roadMask.rgba == bandPreview.scene.meshes[0].roadMask.rgba,
           "再読込後も沿道の材質の移行が一致する");
 
+    tests::Section("独立したレイヤーマテリアル — 共有・形状保持・移行");
+    {
+        auto shared = roadside;
+        Check(graph::ExtractLayerMaterials(shared, error) && graph::ValidateSurfaceLayouts(shared, error),
+              "旧プリセットの材質を独立アセットへ移行する");
+        const auto migrated = io::WriteSurfaceLayouts(shared);
+        Check(graph::ExtractLayerMaterials(shared, error) && io::WriteSurfaceLayouts(shared) == migrated,
+              "移行を繰り返してもIDと材質数が変わらない");
+        const auto resolved = graph::ResolveLayerMaterials(shared);
+        Check(resolved.presets[0].materials[0].material == roadside.presets[0].materials[0].material &&
+              resolved.presets[1].section.back().height == roadside.presets[1].section.back().height &&
+              migrated["presets"][0].contains("layerMaterial") && !migrated["presets"][0].contains("materials"),
+              "材質参照を形状と分け、旧材質・段差を保つ");
+        auto& spans = shared.layouts[0].bands[1].spans;
+        const auto groundMaterial = graph::PresetLayerMaterial(shared, spans[0].preset);
+        const auto sidewalkHeight = shared.presets[1].section.back().height;
+        const auto sidewalkPreset = spans[1].preset;
+        Check(graph::AssignLayerMaterial(shared, spans[1], groundMaterial) &&
+              spans[1].preset == sidewalkPreset && shared.presets[1].role == graph::SurfaceRole::Sidewalk &&
+              shared.presets[1].section.back().height == sidewalkHeight &&
+              graph::PresetLayerMaterial(shared, spans[0].preset) == graph::PresetLayerMaterial(shared, spans[1].preset),
+              "路肩の材質を歩道へ割り当てても垂直段差は変わらない");
+        Check(graph::CreateRoadLayout(shared, sceneGraph, roadId, error) && graph::ExtractLayerMaterials(shared, error),
+              "独立材質の文書へ路面区間を追加できる");
+        auto* sharedRoad = graph::FindRoadBand(shared, roadId);
+        Check(graph::AssignLayerMaterial(shared, sharedRoad->spans[0], groundMaterial) &&
+              graph::ValidateSurfaceLayouts(shared, error), "路面と左右沿道で同じ材質IDを使用できる");
+        auto& asset = *std::find_if(shared.layerMaterials.begin(), shared.layerMaterials.end(), [&](const auto& m) { return m.id == groundMaterial; });
+        asset.materials[0].roughness = 0.23f;
+        const auto sharedResolved = graph::ResolveLayerMaterials(shared);
+        bool propagated = true;
+        for (const auto& p : sharedResolved.presets) if (p.layerMaterial == groundMaterial)
+            propagated &= p.materials[0].roughness == 0.23f;
+        Check(propagated, "共有材質の編集が路面・路肩・歩道へ反映する");
+        auto& sideBand = shared.layouts[0].bands[1];
+        Check(graph::SetSimpleRoadsideDimensions(shared.presets[1], 3, 0.2f) && asset.materials[0].roughness == 0.23f,
+              "形状の寸法変更は材質アセットを書き換えない");
+        Check(graph::DuplicateLayerMaterial(shared, sideBand.spans[0]) &&
+              graph::PresetLayerMaterial(shared, sideBand.spans[0].preset) != groundMaterial &&
+              graph::PresetLayerMaterial(shared, sideBand.spans[1].preset) == groundMaterial &&
+              graph::ValidateSurfaceLayouts(shared, error), "複製して編集は選択区間だけの材質を作る");
+        const auto savedShared = io::WriteSurfaceLayouts(shared);
+        graph::SurfaceLayoutDocument restored;
+        Check(io::ReadSurfaceLayouts(savedShared, restored, error) && io::WriteSurfaceLayouts(restored) == savedShared &&
+              graph::CompileMeshGraphWithLayouts(sceneGraph, restored).error.empty(),
+              "共有材質の保存往復後も道路と沿道を評価できる");
+        for (int failure = 0; failure < 3; ++failure) {
+            auto bad = savedShared;
+            if (failure == 0) bad["presets"][0]["layerMaterial"] = 999999;
+            if (failure == 1) bad["layerMaterials"][0]["id"] = bad["presets"][0]["id"];
+            if (failure == 2) bad["presets"][0]["materials"] = nlohmann::json::array();
+            Check(!io::ReadSurfaceLayouts(bad, restored, error) && io::WriteSurfaceLayouts(restored) == savedShared,
+                  "不正参照・重複ID・二重の材質記述を文書を変えずに拒否する");
+        }
+        auto exhausted = shared;
+        graph::SplitSurfaceSpan(exhausted, exhausted.layouts[0].bands[1], 0);
+        exhausted.nextId = std::numeric_limits<graph::SurfaceId>::max() - 1;
+        const auto unchanged = io::WriteSurfaceLayouts(exhausted);
+        Check(!graph::DuplicateLayerMaterial(exhausted, exhausted.layouts[0].bands[1].spans[0]) &&
+              io::WriteSurfaceLayouts(exhausted) == unchanged, "ID枯渇時の材質複製は文書全体を保持する");
+        DocumentSnapshot materialBefore, materialAfter;
+        materialBefore.surfaceLayouts = shared;
+        materialAfter = materialBefore;
+        materialAfter.surfaceLayouts.layerMaterials[0].materials[0].roughness = 0.6f;
+        history.Clear(); history.Push(materialBefore, 0);
+        const auto materialUndo = history.Undo(materialAfter);
+        Check(io::WriteSurfaceLayouts(materialUndo.surfaceLayouts) == savedShared &&
+              io::WriteSurfaceLayouts(history.Redo(materialUndo).surfaceLayouts) == io::WriteSurfaceLayouts(materialAfter.surfaceLayouts),
+              "共有材質の編集を参照関係とともにUndo・Redoする");
+    }
     tests::Section("横接続 — 共通境界と段差の保持");
     auto lateralScene = graph::CompileMeshGraph(sceneGraph);
     const size_t originalMeshes = lateralScene.scene.meshes.size();
@@ -730,7 +808,7 @@ void RunSurfaceLayoutTests() {
               "旧材質・マスク・ハイト合成条件を変えずにグラフから復元する");
         const auto graphJson = io::WriteSurfaceLayouts(graphDocument);
         graph::SurfaceLayoutDocument restored;
-        Check(graphJson["version"] == 3 && io::ReadSurfaceLayouts(graphJson, restored, error) &&
+        Check(graphJson["version"] == 4 && io::ReadSurfaceLayouts(graphJson, restored, error) &&
               io::WriteSurfaceLayouts(restored) == graphJson, "ノードID・結線・配置・設定が保存往復する");
         const auto graphPreview = graph::CompileSurfaceLayoutPreview(sceneGraph, graphDocument, linked.layouts[0].roadNode);
         Check(graphPreview.error.empty() && graphPreview.scene.meshes.size() == layeredPreview.scene.meshes.size() &&
@@ -752,7 +830,7 @@ void RunSurfaceLayoutTests() {
         Check(graph::ConnectPresetNodes(nodes, nodes.nodes.front().id, output, 0, error) &&
               graph::CompilePresetMaterials(graphPreset, flattened, error) && flattened.size() == 1,
               "出力を下地素材へ結び替えると合成を迂回する");
-        auto brokenGraph = graphJson; brokenGraph["presets"][0]["materialGraph"]["nodes"][0]["id"] = 0;
+        auto brokenGraph = graphJson; brokenGraph["layerMaterials"][0]["materialGraph"]["nodes"][0]["id"] = 0;
         Check(!io::ReadSurfaceLayouts(brokenGraph, restored, error) && io::WriteSurfaceLayouts(restored) == graphJson,
               "破損グラフの読込は文書を変更しない");
         DocumentSnapshot graphBefore, graphAfter;
@@ -799,10 +877,10 @@ void RunSurfaceLayoutTests() {
         const auto saved = io::WriteSurfaceLayouts(visibility);
         graph::SurfaceLayoutDocument restored;
         Check(io::ReadSurfaceLayouts(saved, restored, error) && io::WriteSurfaceLayouts(restored) == saved &&
-              !restored.presets[0].materials[1].enabled && restored.presets[0].materials[1].mask->strength == 0.7f,
+              !restored.layerMaterials[0].materials[1].enabled && restored.layerMaterials[0].materials[1].mask->strength == 0.7f,
               "非表示の素材とマスクを失わず保存往復する");
-        restored.presets[0].materials[1].enabled = true;
-        Check(graph::CompilePresetMaterials(restored.presets[0], evaluated, error) && evaluated[1].mask && evaluated[1].material == 42,
+        restored.layerMaterials[0].materials[1].enabled = true;
+        Check(graph::CompilePresetMaterials(restored.layerMaterials[0], evaluated, error) && evaluated[1].mask && evaluated[1].material == 42,
               "再表示すると元の素材とマスクへ戻る");
         visibilityPreset.materials[0].enabled = false;
         Check(graph::CompilePresetMaterials(visibilityPreset, evaluated, error) && evaluated[0].material == 0,
@@ -811,7 +889,7 @@ void RunSurfaceLayoutTests() {
         Check(graph::CompilePresetMaterials(visibilityPreset, evaluated, error) && evaluated[0].material == 0 && !evaluated[1].mask,
               "グラフ形式でもレイヤーの非表示が一致する");
         auto malformed = saved;
-        malformed["presets"][0]["materials"][1]["enabled"] = "false";
+        malformed["layerMaterials"][0]["materials"][1]["enabled"] = "false";
         const auto unchanged = io::WriteSurfaceLayouts(restored);
         Check(!io::ReadSurfaceLayouts(malformed, restored, error) && io::WriteSurfaceLayouts(restored) == unchanged,
               "表示フラグの型が壊れた保存データは非破壊で拒否する");

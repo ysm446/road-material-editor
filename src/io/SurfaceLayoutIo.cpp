@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "io/SurfaceLayoutIo.h"
 #include <nlohmann/json.hpp>
 #include <limits>
@@ -95,7 +96,7 @@ graph::PresetMaterial ReadPresetMaterial(Reader& r, const json& m, uint32_t vers
 
 }
 
-json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& document) {
+json WriteSurfaceLayoutsLegacy(const graph::SurfaceLayoutDocument& document) {
     json result = {{"version", 2}, {"nextId", document.nextId}, {"presets", json::array()}, {"layouts", json::array()}};
     for (const auto& preset : document.presets) {
         if (preset.materialGraph) result["version"] = 3;
@@ -136,7 +137,76 @@ json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& document) {
     return result;
 }
 
+json WriteSurfaceLayouts(const graph::SurfaceLayoutDocument& source) {
+    auto document = source;
+    std::string error;
+    if (!graph::ExtractLayerMaterials(document, error)) return json();
+    auto result = WriteSurfaceLayoutsLegacy(graph::ResolveLayerMaterials(document));
+    result["version"] = 4;
+    result["layerMaterials"] = json::array();
+    for (const auto& material : document.layerMaterials) {
+        graph::SurfaceLayoutDocument single;
+        single.presets.push_back(graph::MaterialPreviewPreset(material));
+        auto value = WriteSurfaceLayoutsLegacy(single)["presets"][0];
+        for (const auto* key : {"version", "role", "section", "boundaries", "parameters"}) value.erase(key);
+        result["layerMaterials"].push_back(std::move(value));
+    }
+    for (size_t i = 0; i < document.presets.size(); ++i) {
+        auto& p = result["presets"][i];
+        p["layerMaterial"] = document.presets[i].layerMaterial;
+        for (const auto* key : {"materials", "materialGraph", "displacement", "layerBlendRange"}) p.erase(key);
+    }
+    return result;
+}
+
 bool ReadSurfaceLayouts(const json& value, graph::SurfaceLayoutDocument& document, std::string& error) {
+    if (value.is_object() && value.contains("version") && value["version"].is_number_integer() && value["version"] == 4) {
+        if (!value.contains("layerMaterials") || !value["layerMaterials"].is_array() ||
+            !value.contains("presets") || !value["presets"].is_array()) {
+            error = "レイヤーマテリアルまたは形状の配列がありません"; return false;
+        }
+        graph::SurfaceLayoutDocument parsed;
+        auto legacy = value;
+        legacy["version"] = 3;
+        for (const auto& material : value["layerMaterials"]) {
+            if (!material.is_object()) { error = "レイヤーマテリアルが不正です"; return false; }
+            auto p = material;
+            p["id"] = 1; p["version"] = 1; p["role"] = 0;
+            p["section"] = {{{"id", 2}, {"across", 0}, {"height", 0}}, {{"id", 3}, {"across", 4}, {"height", 0}}};
+            p["boundaries"] = json::array();
+            for (int i = 0; i < 4; ++i) p["boundaries"].push_back({{"mode", 0}, {"transition", 0.5}, {"maxHeightAdjustment", 0.15}, {"preserveOutline", false}});
+            p["parameters"] = json::array();
+            graph::SurfaceLayoutDocument single;
+            if (!ReadSurfaceLayouts(json{{"version", 3}, {"nextId", 4}, {"presets", json::array({p})}, {"layouts", json::array()}}, single, error)) return false;
+            Reader reader;
+            const auto id = reader.UInt(material, "id");
+            if (!reader.valid) { error = "レイヤーマテリアルIDが不正です"; return false; }
+            const auto& data = single.presets.front();
+            parsed.layerMaterials.push_back({id, data.name, data.displacementMeters, data.layerBlendRange, data.materials, data.materialGraph});
+        }
+        for (auto& p : legacy["presets"]) {
+            for (const auto* key : {"materials", "displacement", "layerBlendRange", "materialGraph"}) {
+                if (p.contains(key)) { error = "形状と材質の設定が重複しています"; return false; }
+            }
+            Reader reader;
+            const auto id = reader.UInt(p, "layerMaterial");
+            const auto found = std::find_if(value["layerMaterials"].begin(), value["layerMaterials"].end(),
+                [&](const auto& m) { return m.contains("id") && m["id"] == id; });
+            if (!reader.valid || found == value["layerMaterials"].end()) { error = "レイヤーマテリアル参照がありません"; return false; }
+            for (const auto* key : {"materials", "displacement", "layerBlendRange", "materialGraph"})
+                if (found->contains(key)) p[key] = (*found)[key];
+        }
+        graph::SurfaceLayoutDocument shapes;
+        if (!ReadSurfaceLayouts(legacy, shapes, error)) return false;
+        shapes.layerMaterials = std::move(parsed.layerMaterials);
+        for (size_t i = 0; i < shapes.presets.size(); ++i) {
+            auto& p = shapes.presets[i];
+            p.layerMaterial = value["presets"][i]["layerMaterial"].get<graph::SurfaceId>();
+            p.materials.clear(); p.materialGraph.reset(); p.displacementMeters = 0; p.layerBlendRange = 0.2f;
+        }
+        if (!graph::ValidateSurfaceLayouts(shapes, error)) return false;
+        document = std::move(shapes); return true;
+    }
     Reader r;
     graph::SurfaceLayoutDocument parsed;
     const auto version = r.UInt(value, "version");

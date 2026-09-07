@@ -131,9 +131,11 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
     m_graph.Replace(std::move(nodes), snapshot.graphLinks);
     m_graph.SetRoadNetwork(snapshot.roadNetwork);
     m_surfaceLayouts = snapshot.surfaceLayouts;
+    std::string materialError;
+    if (!graph::ExtractLayerMaterials(m_surfaceLayouts, materialError)) TG_LOG_ERROR("%s", materialError.c_str());
     m_layerThumbnailsDirty = true;
     m_layerPreviewDirty = true;
-    for (auto& preset : m_surfaceLayouts.presets) {
+    for (auto& preset : m_surfaceLayouts.layerMaterials) {
         for (auto& material : preset.materials)
             if (!m_materialLibrary.Find(material.material)) material.material = compositor::kNoMaterialAsset;
         if (preset.materialGraph) for (auto& node : preset.materialGraph->nodes)
@@ -150,6 +152,8 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
 }
 
 void Application::MarkDocumentChanged() {
+    std::string materialError;
+    if (!graph::ExtractLayerMaterials(m_surfaceLayouts, materialError)) TG_LOG_ERROR("%s", materialError.c_str());
     m_layerThumbnailsDirty = true;
     m_layerPreviewDirty = true;
     m_documentDirty = true;

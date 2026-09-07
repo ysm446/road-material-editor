@@ -8,6 +8,70 @@
 #include <unordered_set>
 
 namespace tg::graph {
+SurfacePreset MaterialPreviewPreset(const LayerMaterial& material) {
+    SurfacePreset preset;
+    preset.id = material.id; preset.name = material.name; preset.role = SurfaceRole::Road;
+    preset.materials = material.materials; preset.materialGraph = material.materialGraph;
+    preset.displacementMeters = material.displacementMeters; preset.layerBlendRange = material.layerBlendRange;
+    return preset;
+}
+bool ExtractLayerMaterials(SurfaceLayoutDocument& document, std::string& error) {
+    auto next = document;
+    for (auto& preset : next.presets) {
+        if (preset.layerMaterial) continue;
+        LayerMaterial material;
+        material.id = next.AllocateId();
+        if (!material.id) { error = "材質IDを確保できません"; return false; }
+        material.name = preset.name;
+        material.materials = std::move(preset.materials); material.materialGraph = std::move(preset.materialGraph);
+        material.displacementMeters = preset.displacementMeters; material.layerBlendRange = preset.layerBlendRange;
+        preset.layerMaterial = material.id;
+        preset.materials.clear(); preset.materialGraph.reset();
+        preset.displacementMeters = 0; preset.layerBlendRange = 0.2f;
+        next.layerMaterials.push_back(std::move(material));
+    }
+    document = std::move(next); error.clear(); return true;
+}
+SurfaceLayoutDocument ResolveLayerMaterials(const SurfaceLayoutDocument& document) {
+    auto result = document;
+    for (auto& preset : result.presets) {
+        const auto found = std::find_if(document.layerMaterials.begin(), document.layerMaterials.end(),
+            [&](const auto& material) { return material.id == preset.layerMaterial; });
+        if (found == document.layerMaterials.end()) continue;
+        preset.materials = found->materials; preset.materialGraph = found->materialGraph;
+        preset.displacementMeters = found->displacementMeters; preset.layerBlendRange = found->layerBlendRange;
+    }
+    return result;
+}
+SurfaceId PresetLayerMaterial(const SurfaceLayoutDocument& document, SurfaceId id) {
+    const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == id; });
+    return found == document.presets.end() ? 0 : found->layerMaterial;
+}
+bool AssignLayerMaterial(SurfaceLayoutDocument& document, SurfaceSpan& span, SurfaceId material) {
+    const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+    if (found == document.presets.end() || found->layerMaterial == material ||
+        std::none_of(document.layerMaterials.begin(), document.layerMaterials.end(), [&](const auto& m) { return m.id == material; })) return false;
+    // 単独で使う形状はIDを維持する。共有中だけ複製して他区間への変更を防ぐ。
+    size_t uses = 0;
+    for (const auto& layout : document.layouts) for (const auto& band : layout.bands)
+        for (const auto& candidate : band.spans) uses += candidate.preset == span.preset;
+    if (uses == 1) { found->layerMaterial = material; return true; }
+    auto preset = *found;
+    const uint64_t needed = 1 + preset.section.size() + preset.parameters.size();
+    if (!document.nextId || uint64_t(document.nextId) + needed > std::numeric_limits<SurfaceId>::max()) return false;
+    preset.id = document.AllocateId();
+    if (!preset.id) return false;
+    for (auto& point : preset.section) { point.id = document.AllocateId(); if (!point.id) return false; }
+    for (auto& parameter : preset.parameters) {
+        const auto old = parameter.id;
+        parameter.id = document.AllocateId();
+        for (auto& value : span.parameters) if (value.parameter == old) value.parameter = parameter.id;
+    }
+    preset.layerMaterial = material;
+    span.preset = preset.id;
+    document.presets.push_back(std::move(preset));
+    return true;
+}
 bool ValidateSurfaceLayoutRoads(const SurfaceLayoutDocument& document, const NodeGraph& graph, std::string& error) {
     for (const auto& layout : document.layouts) {
         const auto* road = graph.FindNode(layout.roadNode);
@@ -43,7 +107,8 @@ bool ValidatePresetMaterial(const PresetMaterial& material, std::string& error) 
     return true;
 }
 
-bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& document, std::string& error) {
+bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& sourceDocument, std::string& error) {
+    const auto document = ResolveLayerMaterials(sourceDocument);
     error.clear();
     const auto fail = [&](const char* message) { error = message; return false; };
     const auto finite = [](float x) { return std::isfinite(x); };
@@ -51,8 +116,17 @@ bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& document, std::string& 
     std::unordered_set<SurfaceId> ids;
     const auto idValid = [&](SurfaceId id) { return id > 0 && id < document.nextId && ids.insert(id).second; };
     if (document.nextId == 0) return fail("配置データの次IDが不正です");
+    for (const auto& material : document.layerMaterials) {
+        if (!idValid(material.id) || material.name.empty() || !range(material.displacementMeters, 0, 10) ||
+            !range(material.layerBlendRange, 0, 1) || material.materials.empty() || material.materials.size() > 4)
+            return fail("レイヤーマテリアルのID・名前・値が不正です");
+        for (const auto& layer : material.materials) if (!ValidatePresetMaterial(layer, error)) return false;
+        if (material.materialGraph && !ValidatePresetGraph(*material.materialGraph, error)) return false;
+    }
     std::unordered_map<SurfaceId, const SurfacePreset*> presets;
     for (const auto& preset : document.presets) {
+        if (preset.layerMaterial && std::none_of(document.layerMaterials.begin(), document.layerMaterials.end(),
+            [&](const auto& material) { return material.id == preset.layerMaterial; })) return fail("レイヤーマテリアル参照が不正です");
         if (!idValid(preset.id) || preset.version != 1 || preset.name.empty() || static_cast<uint32_t>(preset.role) > 2)
             return fail("プリセットのID・版・名前・役割が不正です");
         if (!range(preset.displacementMeters, 0, 10) || preset.section.size() < 2 || preset.materials.empty() || preset.materials.size() > 4)

@@ -46,6 +46,8 @@ tg::StartupOptions ParseCommandLine() {
             options.measurePreview = true;
         } else if (argument == L"--connection-prototype-flat") {
             options.prototypeDisplacement = false;
+        } else if (argument == L"--test-layer-thumbnail-cache") {
+            options.testLayerThumbnailCache = true;
         } else if (argument == L"--test-drag" && (i + 4) < argc) {
             options.testDrag = true;
             options.testDragStart.x = static_cast<float>(::_wtof(argv[++i]));

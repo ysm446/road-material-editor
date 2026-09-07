@@ -336,7 +336,7 @@ int Application::Run() {
                     m_materialLibrary.MarkThumbnailDirty(asset.id);
                 }
                 m_renderer.InvalidateSceneMaterials();
-                m_layerThumbnailsDirty = true;
+                m_layerThumbnailsDirty = true; ++m_layerThumbnailTextureRevision;
             }
         }
 
@@ -355,7 +355,24 @@ int Application::Run() {
         }
 
         ProcessLayerPreview();
+        if (m_options.testLayerThumbnailCache && !m_options.uiScreenshotPath.empty()) {
+            if (m_frameCounter == 60 && !m_surfaceLayouts.layouts.empty()) {
+                for (auto& band : m_surfaceLayouts.layouts.front().bands)
+                    if (!band.spans.empty()) band.spans.front().blendInMeters += 0.1f;
+                MarkDocumentChanged();
+            }
+            if (m_frameCounter == 62 && !m_surfaceLayouts.presets.empty()) {
+                m_surfaceLayouts.presets.front().displacementMeters += 0.01f;
+                MarkDocumentChanged();
+            }
+        }
         ProcessLayerThumbnails();
+        if (m_options.testLayerThumbnailCache && (m_frameCounter == 61 || m_frameCounter == 63)) {
+            const auto dirty = std::count_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [](const auto& t) { return t.dirty; });
+            const auto ready = std::count_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [](const auto& t) { return t.ready; });
+            TG_LOG_INFO("LayerCacheTest: frame=%u dirty=%zu ready=%zu total=%zu", m_frameCounter,
+                        static_cast<size_t>(dirty), static_cast<size_t>(ready), m_layerThumbnails.size());
+        }
         ImGuiLayer::TestInput testInput{};
         const bool testDrag = m_options.testDrag && !m_options.uiScreenshotPath.empty();
         if (testDrag) {

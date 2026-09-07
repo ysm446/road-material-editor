@@ -123,13 +123,18 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                     auto& span = candidate.spans[m_surfaceBandSpan];
                     std::vector<graph::SurfaceId> presetIds;
                     std::vector<const char*> presetNames;
+                    std::vector<ImTextureID> presetThumbnails;
                     int presetIndex = 0;
                     for (const auto& p : roadsideEdit.presets) if (p.role != graph::SurfaceRole::Road) {
                         if (p.id == span.preset) presetIndex = static_cast<int>(presetIds.size());
                         presetIds.push_back(p.id); presetNames.push_back(p.name.c_str());
+                        const auto thumbnail = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(),
+                            [&](const auto& entry) { return entry.id == p.id; });
+                        presetThumbnails.push_back(thumbnail != m_layerThumbnails.end() && thumbnail->ready
+                            ? static_cast<ImTextureID>(thumbnail->texture.srv.gpu.ptr) : 0);
                     }
                     if (!presetIds.empty() && ui::PropertyCombo("プリセット", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
-                        "この区間に割り当てる沿道プリセット。切替時は公開値の上書きを解除する")) {
+                        "この区間に割り当てる沿道プリセット。切替時は公開値の上書きを解除する", presetThumbnails.data())) {
                         span.preset = presetIds[presetIndex]; span.parameters.clear(); changed = true;
                     }
                     ui::EndPropertyTable();
@@ -211,13 +216,18 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 auto& span = band->spans[selected];
                 std::vector<graph::SurfaceId> presetIds;
                 std::vector<const char*> presetNames;
+                std::vector<ImTextureID> presetThumbnails;
                 int presetIndex = 0;
                 for (const auto& preset : edited.presets) if (preset.role == graph::SurfaceRole::Road) {
                     if (preset.id == span.preset) presetIndex = static_cast<int>(presetIds.size());
                     presetIds.push_back(preset.id); presetNames.push_back(preset.name.c_str());
+                    const auto thumbnail = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(),
+                        [&](const auto& entry) { return entry.id == preset.id; });
+                    presetThumbnails.push_back(thumbnail != m_layerThumbnails.end() && thumbnail->ready
+                        ? static_cast<ImTextureID>(thumbnail->texture.srv.gpu.ptr) : 0);
                 }
                 if (ui::PropertyCombo("プリセット", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
-                                      "この区間へ割り当てる材質。1本の道路で同時に3種類まで使用できる")) {
+                                      "この区間へ割り当てる材質。1本の道路で同時に3種類まで使用できる", presetThumbnails.data())) {
                     span.preset = presetIds[presetIndex]; span.parameters.clear(); changed = true;
                 }
                 ui::PropertyValue("始点", "%.2f m", span.startMeters);

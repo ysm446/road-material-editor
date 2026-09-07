@@ -104,7 +104,7 @@ bool PropertyColorLinear(const char* label, float* linearRgb, const float* defau
                          const char* tooltip = nullptr);
 // items は要素数 itemCount の配列。ImGui の "A\0B\0" 形式ではなく配列で受ける。
 bool PropertyCombo(const char* label, int* value, const char* const items[], int itemCount,
-                   int defaultValue, const char* tooltip = nullptr);
+                   int defaultValue, const char* tooltip = nullptr, const ImTextureID* thumbnails = nullptr);
 bool PropertyTextInput(const char* label, char* buffer, size_t bufferSize,
                        const char* tooltip = nullptr);
 // 表示専用の値。

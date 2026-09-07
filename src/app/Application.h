@@ -68,6 +68,7 @@ struct StartupOptions {
     // 線形の編集モード（0 = 制御点、1 = 縦断、2 = バンク）と選択するポイント。スクリーンショット検証用。
     int profileMode = 0;
     bool testDrag = false;
+    bool testLayerThumbnailCache = false;
     bool testDragShift = false;
     int testViewportGesture = 0;
     bool testDragCancel = false;
@@ -310,11 +311,13 @@ private:
         rhi::GpuTexture texture;
         bool dirty = true;
         bool ready = false;
+        std::string contentKey;
     };
     std::vector<LayerThumbnail> m_layerThumbnails;
     renderer::PreviewRenderer m_layerThumbnailRenderer;
     bool m_layerThumbnailInitialized = false;
     bool m_layerThumbnailsDirty = true;
+    uint64_t m_layerThumbnailTextureRevision = 0;
     graph::SurfaceId m_layerThumbnailActive = 0;
     int m_layerThumbnailFrames = 0;
     graph::SurfaceId m_selectedLayerMaterial = 0;

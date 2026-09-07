@@ -803,15 +803,39 @@ bool PropertyColorLinear(const char* label, float* linearRgb, const float* defau
 }
 
 bool PropertyCombo(const char* label, int* value, const char* const items[], int itemCount,
-                   int defaultValue, const char* tooltip) {
+                   int defaultValue, const char* tooltip, const ImTextureID* thumbnails) {
     if (itemCount <= 0) {
         return false;
     }
     *value = std::clamp(*value, 0, itemCount - 1);
 
     PropertyLabel(label, tooltip);
+    const float thumbnailSize = Scaled(40);
+    if (thumbnails) {
+        const float rowY = ImGui::GetCursorPosY();
+        ThumbnailImage(thumbnails[*value], thumbnailSize);
+        ImGui::SameLine();
+        ImGui::SetCursorPosY(rowY + (thumbnailSize - ImGui::GetFrameHeight()) * 0.5f);
+    }
     ImGui::SetNextItemWidth(ValueWidth(kSliderMinWidth, kComboMaxWidth));
-    bool changed = ImGui::Combo("##value", value, items, itemCount);
+    bool changed = false;
+    if (!thumbnails) {
+        changed = ImGui::Combo("##value", value, items, itemCount);
+    } else if (ImGui::BeginCombo("##value", items[*value])) {
+        for (int i = 0; i < itemCount; ++i) {
+            ImGui::PushID(i);
+            const auto thumbnail = ThumbnailButton("##thumbnail", thumbnails[i], thumbnailSize, *value == i);
+            ImGui::SameLine();
+            if (ImGui::Selectable(items[i], *value == i, 0, ImVec2(0, thumbnailSize)) || thumbnail.clicked) {
+                changed = *value != i;
+                *value = i;
+                ImGui::CloseCurrentPopup();
+            }
+            if (*value == i) ImGui::SetItemDefaultFocus();
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
 
     if (ResetDot(*value == defaultValue, items[std::clamp(defaultValue, 0, itemCount - 1)])) {
         *value = std::clamp(defaultValue, 0, itemCount - 1);

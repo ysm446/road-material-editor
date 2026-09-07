@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include "io/SurfaceLayoutIo.h"
+#include <nlohmann/json.hpp>
 
 namespace tg {
 namespace ed = ax::NodeEditor;
@@ -337,8 +339,32 @@ void Application::ProcessLayerPreview() {
 
 void Application::ProcessLayerThumbnails() {
     if (m_layerThumbnailsDirty) {
-        for (auto& entry : m_layerThumbnails) { entry.dirty = true; entry.ready = false; }
-        m_layerThumbnailActive = 0; m_layerThumbnailsDirty = false;
+        nlohmann::json materials = nlohmann::json::array();
+        for (const auto& asset : m_materialLibrary.Entries()) {
+            const auto map = [](const auto& slot) { return nlohmann::json{slot.texture, static_cast<uint32_t>(slot.channel)}; };
+            materials.push_back(nlohmann::json{asset.id, asset.baseColor, asset.normal,
+                map(asset.roughness), map(asset.metallic), map(asset.ambientOcclusion), map(asset.height), map(asset.opacity),
+                asset.opacityValue, static_cast<uint32_t>(asset.blendMode), asset.maskThreshold,
+                asset.baseColorTint.x, asset.baseColorTint.y, asset.baseColorTint.z,
+                asset.hueShiftDegrees, asset.saturation, asset.brightness, asset.flipNormalGreen,
+                asset.roughnessValue, asset.metallicValue, asset.ambientOcclusionValue});
+        }
+        for (auto& entry : m_layerThumbnails) {
+            const auto preset = std::find_if(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(),
+                [&](const auto& p) { return p.id == entry.id; });
+            if (preset == m_surfaceLayouts.presets.end()) {
+                if (m_layerThumbnailActive == entry.id) m_layerThumbnailActive = 0;
+                continue;
+            }
+            graph::SurfaceLayoutDocument document;
+            document.presets.push_back(*preset);
+            const auto key = nlohmann::json{io::WriteSurfaceLayouts(document), materials, m_layerThumbnailTextureRevision}.dump();
+            if (entry.contentKey != key) {
+                entry.contentKey = key; entry.dirty = true;
+                if (m_layerThumbnailActive == entry.id) m_layerThumbnailActive = 0;
+            }
+        }
+        m_layerThumbnailsDirty = false;
     }
     for (auto it = m_layerThumbnails.begin(); it != m_layerThumbnails.end();) {
         if (std::none_of(m_surfaceLayouts.presets.begin(), m_surfaceLayouts.presets.end(), [&](const auto& p) { return p.id == it->id; })) {
@@ -349,6 +375,7 @@ void Application::ProcessLayerThumbnails() {
     for (const auto& preset : m_surfaceLayouts.presets)
         if (std::none_of(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == preset.id; })) {
             LayerThumbnail entry; entry.id = preset.id; m_layerThumbnails.push_back(std::move(entry));
+            m_layerThumbnailsDirty = true;
         }
     if (!m_layerThumbnailInitialized) {
         auto& renderer = m_layerThumbnailRenderer;
@@ -389,7 +416,7 @@ void Application::RenderLayerThumbnails(ID3D12GraphicsCommandList* commandList) 
     if (++m_layerThumbnailFrames < 3 || m_layerThumbnailRenderer.IsEvaluating()) return;
     const auto entry = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == m_layerThumbnailActive; });
     if (entry != m_layerThumbnails.end()) {
-        entry->ready = m_layerThumbnailRenderer.CopyOutputTo(commandList, entry->texture);
+        entry->ready = m_layerThumbnailRenderer.CopyOutputTo(commandList, entry->texture) || entry->ready;
         entry->dirty = false;
     }
     m_layerThumbnailActive = 0;
@@ -419,14 +446,12 @@ void Application::DrawLayerMaterialLibrary() {
     if (const auto* window = ImGui::FindWindowByName("マテリアル"); window && window->DockId)
         ImGui::SetNextWindowDockID(window->DockId, ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("レイヤーマテリアル")) { ImGui::End(); return; }
-    if (ui::Button("新規作成", 100)) {
-        graph::SurfacePreset preset;
-        preset.id = m_surfaceLayouts.AllocateId(); preset.name = "新しい道路材質"; preset.role = graph::SurfaceRole::Road;
-        preset.section = {{m_surfaceLayouts.AllocateId(), 0, 0}, {m_surfaceLayouts.AllocateId(), 4, 0}};
-        preset.materials.emplace_back();
-        m_selectedLayerMaterial = m_editSurfacePreset = preset.id;
-        m_surfaceLayouts.presets.push_back(std::move(preset)); MarkDocumentChanged();
-    }
+    bool create = false, edit = false, remove = false;
+    const auto menu = [&](bool hasTarget) {
+        if (ImGui::MenuItem("新規作成")) create = true;
+        if (ImGui::MenuItem("編集", nullptr, false, hasTarget)) edit = true;
+        if (ImGui::MenuItem("削除", "DEL", false, hasTarget)) remove = true;
+    };
     if (!m_layerLibraryError.empty()) ui::HintText("%s", m_layerLibraryError.c_str());
     const float size = ui::Scaled(84);
     if (ImGui::BeginChild("layerMaterialGrid", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
@@ -443,12 +468,27 @@ void Application::DrawLayerMaterialLibrary() {
                 ImGui::SetWindowFocus("レイヤーマテリアル編集");
             }
             if (thumbnail.hovered) ImGui::SetTooltip("%s\nダブルクリックで編集 / DELで削除", preset.name.c_str());
+            if (ImGui::BeginPopupContextItem("##layerMaterialMenu")) {
+                m_selectedLayerMaterial = preset.id;
+                menu(true);
+                ImGui::EndPopup();
+            }
             ui::GridCaption(preset.name.c_str(), size);
             ImGui::EndGroup(); ImGui::PopID();
             if (++index % columns && index < static_cast<int>(m_surfaceLayouts.presets.size())) ImGui::SameLine();
         }
-        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
-            ImGui::IsKeyPressed(ImGuiKey_Delete, false) && m_selectedLayerMaterial) {
+        if (ImGui::BeginPopupContextWindow("##layerMaterialGridMenu",
+                ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+            menu(false);
+            ImGui::EndPopup();
+        }
+        if (edit && m_selectedLayerMaterial) {
+            m_editSurfacePreset = m_selectedLayerMaterial;
+            m_selectedPresetLayer = 0; m_surfacePresetError.clear();
+            ImGui::SetWindowFocus("レイヤーマテリアル編集");
+        }
+        if ((remove || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
+            ImGui::IsKeyPressed(ImGuiKey_Delete, false))) && m_selectedLayerMaterial) {
             bool used = false;
             for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands)
                 for (const auto& span : band.spans) used |= span.preset == m_selectedLayerMaterial;
@@ -462,6 +502,15 @@ void Application::DrawLayerMaterialLibrary() {
                 m_selectedLayerMaterial = 0; m_layerLibraryError.clear();
             }
         }
+    }
+    if (create) {
+        graph::SurfacePreset preset;
+        preset.id = m_surfaceLayouts.AllocateId(); preset.name = "新しい道路材質"; preset.role = graph::SurfaceRole::Road;
+        preset.section = {{m_surfaceLayouts.AllocateId(), 0, 0}, {m_surfaceLayouts.AllocateId(), 4, 0}};
+        preset.materials.emplace_back();
+        m_selectedLayerMaterial = m_editSurfacePreset = preset.id;
+        m_surfaceLayouts.presets.push_back(std::move(preset)); MarkDocumentChanged();
+        m_selectedPresetLayer = 0; m_surfacePresetError.clear(); m_layerLibraryError.clear();
     }
     ImGui::EndChild(); ImGui::End();
 }

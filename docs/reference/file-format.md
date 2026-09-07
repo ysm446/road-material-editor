@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-07 11:30
+更新日時: 2026-09-07 12:00
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -274,6 +274,7 @@ inputsはRoadSurface（Mesh）、Materialの順、outputsはRoadSurface（Mesh�
 - `roadMask.shape` に `worldNoise` を追加 — ワールド XZ の等方ノイズ。`noiseScale` / `threshold` / `softness` / `seed` は長さ方向ノイズと共通。旧ビルドは既定の形に落ちる。
 - `road` / `shoulder` の `layerHeightGate`（int ×4。0 使わない / 1 下地の高い所 / 2 下地の低い所、既定 0）、`layerHeightGateThreshold`（×4、既定 0.5）、
   `layerHeightGateSoftness`（×4、既定 0.2）— スロット 2〜4 の被覆率を下地（スロット 1）のハイトで絞る。[0] は未使用。
+- `road` / `shoulder` の `layerBlendMode`（int ×4。0 マスクどおり / 1 ハイトで競合）— 新規ノードは 0。**キーが無い旧ファイルは 1**（以前の見た目のまま）。[0] は未使用。
 - `roadMask.tracksFromLanes`（新規ノードは true、**キーが無い旧ファイルは false**）— 轍を Road の車線数から各車線の中央に置く。`bothLanes` は対向車線にも置くか。
 - `shoulder.stepHeight`（既定 0、0〜0.5）/ `shoulder.stepWidth`（既定 0.05、0.005〜1）— 舗装端の段差と面取り列の幅（m）。段差 0 で列は増えない。
 - 実寸 Path の `points[].stopLine`（0 なし / 1 進行方向 / 2 対向 / 3 両方、0 は書かない）— その点の位置の停止線。

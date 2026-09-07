@@ -677,7 +677,11 @@ bool Application::DrawLayerSettings(compositor::MaterialLayer& layer, bool isBas
 
     // マスクは「下地と競合させるための不透明度」なので、
     // 入力を持たないソース（ハイトマップ）では意味を持たない。行ごと出さない。
-    if (!isSource) {
+    // 旧地形の合成用なので、Mask 入力が繋がっているか設定済みのときだけ出す
+    // （Road / Shoulder のスロットへ繋ぐ材質では Road Mask を使う）。
+    const bool legacyMaskInUse = maskFromNode || layer.mask.source != compositor::MaskSource::Constant ||
+                                 layer.mask.constant < 1.0f;
+    if (!isSource && legacyMaskInUse) {
         ui::SectionHeader("マスク");
         if (ui::BeginPropertyTable("layerMaskRows")) {
             // Mask 入力にノードが繋がっているときは、そちらが出どころ。

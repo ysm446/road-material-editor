@@ -1233,6 +1233,8 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                                                      road->layerHeightGateThreshold[2], road->layerHeightGateThreshold[3]})},
                             {"layerHeightGateSoftness", json::array({road->layerHeightGateSoftness[0], road->layerHeightGateSoftness[1],
                                                                     road->layerHeightGateSoftness[2], road->layerHeightGateSoftness[3]})},
+                            {"layerBlendMode", json::array({road->layerBlendMode[0], road->layerBlendMode[1],
+                                                           road->layerBlendMode[2], road->layerBlendMode[3]})},
                             {"layerBlendRange", road->layerBlendRange}};
         } else if (const auto* decal = std::get_if<graph::DecalNodeSettings>(&node.settings)) {
             item["decal"] = {{"width", decal->widthMeters}, {"lift", decal->liftMeters},
@@ -1264,6 +1266,8 @@ json WriteGraph(const graph::NodeGraph& graphData, const TextureWriter& writeTex
                                                                      shoulder->layerHeightGateThreshold[2], shoulder->layerHeightGateThreshold[3]})},
                             {"layerHeightGateSoftness", json::array({shoulder->layerHeightGateSoftness[0], shoulder->layerHeightGateSoftness[1],
                                                                     shoulder->layerHeightGateSoftness[2], shoulder->layerHeightGateSoftness[3]})},
+                                {"layerBlendMode", json::array({shoulder->layerBlendMode[0], shoulder->layerBlendMode[1],
+                                                           shoulder->layerBlendMode[2], shoulder->layerBlendMode[3]})},
                                 {"layerBlendRange", shoulder->layerBlendRange}};
         } else if (const auto* roadMaskSettings = std::get_if<graph::RoadMaskNodeSettings>(&node.settings)) {
             static const char* const kRoadMaskShapeNames[] = {"wheelTracks", "edgeFalloff", "lengthNoise", "constant", "worldNoise"};
@@ -1478,6 +1482,12 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                         for (size_t i = 0; i < gate->size() && i < graph::kRoadMaterialSlots; ++i)
                             if ((*gate)[i].is_number()) settings.layerHeightGateSoftness[i] = std::clamp((*gate)[i].get<float>(), 0.001f, 1.0f);
                     }
+                    // 混ぜ方。キーが無い旧ファイルは「ハイトで競合」（以前の見た目のまま）。
+                    for (auto& mode : settings.layerBlendMode) mode = 1u;
+                    if (const json* modes = FindMember(*road, "layerBlendMode"); modes && modes->is_array()) {
+                        for (size_t i = 0; i < modes->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*modes)[i].is_number_integer()) settings.layerBlendMode[i] = static_cast<uint32_t>(std::clamp((*modes)[i].get<int>(), 0, 1));
+                    }
                     settings.layerBlendRange = std::clamp(ReadFloat(*road, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
                 }
                 created.settings = settings;
@@ -1544,6 +1554,12 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData, const TextureReade
                     if (const json* gate = FindMember(*shoulder, "layerHeightGateSoftness"); gate && gate->is_array()) {
                         for (size_t i = 0; i < gate->size() && i < graph::kRoadMaterialSlots; ++i)
                             if ((*gate)[i].is_number()) settings.layerHeightGateSoftness[i] = std::clamp((*gate)[i].get<float>(), 0.001f, 1.0f);
+                    }
+                    // 混ぜ方。キーが無い旧ファイルは「ハイトで競合」（以前の見た目のまま）。
+                    for (auto& mode : settings.layerBlendMode) mode = 1u;
+                    if (const json* modes = FindMember(*shoulder, "layerBlendMode"); modes && modes->is_array()) {
+                        for (size_t i = 0; i < modes->size() && i < graph::kRoadMaterialSlots; ++i)
+                            if ((*modes)[i].is_number_integer()) settings.layerBlendMode[i] = static_cast<uint32_t>(std::clamp((*modes)[i].get<int>(), 0, 1));
                     }
                     settings.layerBlendRange = std::clamp(ReadFloat(*shoulder, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
                 }

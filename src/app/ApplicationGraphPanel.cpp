@@ -206,7 +206,8 @@ int ToGraphId(uintptr_t id) {
 // 座標と反復長はスロットごと。変更があれば真。
 bool Application::DrawMaterialSlotRows(const graph::Node& node, bool* layerWorldUv, float* layerUvRepeatMeters,
                                        float& layerBlendRange, float defaultBlendRange,
-                                       uint32_t* layerHeightGate, float* layerHeightGateThreshold, float* layerHeightGateSoftness) {
+                                       uint32_t* layerHeightGate, float* layerHeightGateThreshold, float* layerHeightGateSoftness,
+                                       uint32_t* layerBlendMode) {
     bool changed = false;
     ui::SectionHeader("材質スロット");
     if (!ui::BeginPropertyTable("layerRows")) return false;
@@ -239,6 +240,17 @@ bool Application::DrawMaterialSlotRows(const graph::Node& node, bool* layerWorld
             std::snprintf(repeatId, sizeof(repeatId), "  UV反復長##slot%d", slot);
             changed |= ui::PropertyFloat(repeatId, &layerUvRepeatMeters[slot], 0.1f, 100.0f, 1.0f,
                                          "このスロットの材質で UV が 1 増える実距離", "%.2f m");
+            // 混ぜ方。マスクどおりが既定で、マスクを塗った所にそのまま出る。
+            static const char* const kBlendModeLabels[] = {"マスクどおり", "ハイトで競合"};
+            char modeId[32];
+            std::snprintf(modeId, sizeof(modeId), "  混ぜ方##slot%d", slot);
+            int mode = static_cast<int>(std::min(1u, layerBlendMode[slot]));
+            if (ui::PropertyCombo(modeId, &mode, kBlendModeLabels, IM_ARRAYSIZE(kBlendModeLabels), 0,
+                                  "マスクどおり: 被覆率がそのまま重み。境界だけ下地とのハイト差 × ブレンド幅で崩す。"
+                                  "ハイトで競合: 被覆率をハイトに足して勝った方が出る（砂利の粒だけ顔を出す表現）")) {
+                layerBlendMode[slot] = static_cast<uint32_t>(mode);
+                changed = true;
+            }
             // 下地のハイトで絞る。Road Mask が「だいたいこの辺」、下地の凹凸が「その中のどこ」。
             static const char* const kGateLabels[] = {"使わない", "下地の高い所", "下地の低い所"};
             char gateId[32];
@@ -583,10 +595,18 @@ void Application::DrawGraphNode(const graph::Node& node) {
     // 丸ピン 1 つぶん（丸の幅 + ImGui の項目間隔）。
     const float pinWidth = 14.0f + ImGui::GetStyle().ItemSpacing.x;
     float rowWidth = 0.0f;
-    for (size_t row = 0; row < std::max(node.inputs.size(), node.outputs.size()); ++row) {
+    // レイヤーノード（Surface など）の Mask 入力は旧地形の合成用で、Road / Shoulder のスロットへ繋ぐ材質では
+    // 意味を持たない。繋がっていないときは出さない（道路の Road Mask と二重に見えるのを避ける）。
+    std::vector<const graph::Pin*> visibleInputs;
+    for (const graph::Pin& input : node.inputs) {
+        const bool legacyMask = graph::IsLayerNodeKind(node.kind) && input.valueType == graph::ValueType::Mask;
+        if (legacyMask && m_graph.FindUpstreamNodeForPin(input.id) == nullptr) continue;
+        visibleInputs.push_back(&input);
+    }
+    for (size_t row = 0; row < std::max(visibleInputs.size(), node.outputs.size()); ++row) {
         float width = 0.0f;
-        if (row < node.inputs.size()) {
-            width += pinWidth + ImGui::CalcTextSize(node.inputs[row].label.c_str()).x;
+        if (row < visibleInputs.size()) {
+            width += pinWidth + ImGui::CalcTextSize(visibleInputs[row]->label.c_str()).x;
         }
         if (row < node.outputs.size()) {
             width += ImGui::CalcTextSize(node.outputs[row].label.c_str()).x + pinWidth;
@@ -704,8 +724,8 @@ void Application::DrawGraphNode(const graph::Node& node) {
     // 出力ピンのクリック（プレビューの切り替え）も接続も狙いにくい。
     const ImVec4 pinLabelColor(0.62f, 0.64f, 0.62f, 1.0f);
 
-    for (size_t inputIndex = 0; inputIndex < node.inputs.size(); ++inputIndex) {
-        const graph::Pin& input = node.inputs[inputIndex];
+    for (size_t inputIndex = 0; inputIndex < visibleInputs.size(); ++inputIndex) {
+        const graph::Pin& input = *visibleInputs[inputIndex];
         const float inputY = rowY + static_cast<float>(inputIndex) * 24.0f;
         ImGui::SetCursorPos(ImVec2(rowStartX, inputY));
         ed::BeginPin(ed::PinId(input.id), ed::PinKind::Input);
@@ -737,7 +757,7 @@ void Application::DrawGraphNode(const graph::Node& node) {
         ed::PinRect(ImVec2(labelMin.x, geometry.min.y), geometry.max);
         ed::EndPin();
     }
-    const size_t pinRowCount = std::max(node.inputs.size(), node.outputs.size());
+    const size_t pinRowCount = std::max(visibleInputs.size(), node.outputs.size());
     ImGui::Dummy(
         ImVec2(kNodeWidth, std::max(4.0f, static_cast<float>(pinRowCount) * 24.0f - 20.0f)));
 
@@ -1207,7 +1227,8 @@ void Application::DrawGraphPanel() {
         // 材質スロット。1 は下地、2〜4 は Mask 2〜4 で被覆する。座標と反復長はスロットごと。
         changed |= DrawMaterialSlotRows(*selected, road->layerWorldUv, road->layerUvRepeatMeters,
                                         road->layerBlendRange, defaults.layerBlendRange,
-                                        road->layerHeightGate, road->layerHeightGateThreshold, road->layerHeightGateSoftness);
+                                        road->layerHeightGate, road->layerHeightGateThreshold, road->layerHeightGateSoftness,
+                                        road->layerBlendMode);
         ui::HintText("Material にSurfaceなどのResultを接続して材質を適用。Material 2〜4 は Road Mask を Mask 2〜4 へ繋いだ所に出る。"
                      "RoadSurfaceはMesh Outputへ、Left / Rightは進行方向に向かって左右の境界Path。走行側はプレビュー設定の「道路」で切り替える。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
@@ -1267,7 +1288,8 @@ void Application::DrawGraphPanel() {
         }
         changed |= DrawMaterialSlotRows(*selected, shoulder->layerWorldUv, shoulder->layerUvRepeatMeters,
                                         shoulder->layerBlendRange, defaults.layerBlendRange,
-                                        shoulder->layerHeightGate, shoulder->layerHeightGateThreshold, shoulder->layerHeightGateSoftness);
+                                        shoulder->layerHeightGate, shoulder->layerHeightGateThreshold, shoulder->layerHeightGateSoftness,
+                                        shoulder->layerBlendMode);
         ui::HintText("PathにRoadのLeft / Right（または別のShoulderのOuter）を接続する。境界の頂点を共有するので道路と水密。"
                      "材質スロットとMask 2〜4はRoadと同じ。Road Maskの「側」は路肩では 右＝境界側、左＝外側。"
                      "出力のRoadSurfaceをMesh Outputへ、Outerは次の路肩や縁石へ。走行側には依存しない。");

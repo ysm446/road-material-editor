@@ -147,6 +147,7 @@ struct MeshConstants {
     uint32_t layerHeightGate[4];
     float layerHeightGateThreshold[4];
     float layerHeightGateSoftness[4];
+    uint32_t layerBlendMode[4];  // 0 = マスクどおり、1 = ハイトで競合
 };
 
 // 道路空間マスク（RGBA8）を GPU へ上げる。ミップは持たない（低解像度でぼかして読む）。
@@ -1012,6 +1013,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                         drawConstants.layerHeightGate[slot] = slot == 0 ? 0u : lm.layerHeightGate[static_cast<size_t>(slot)];
                         drawConstants.layerHeightGateThreshold[slot] = lm.layerHeightGateThreshold[static_cast<size_t>(slot)];
                         drawConstants.layerHeightGateSoftness[slot] = lm.layerHeightGateSoftness[static_cast<size_t>(slot)];
+                        drawConstants.layerBlendMode[slot] = lm.layerBlendMode[static_cast<size_t>(slot)];
                         const compositor::MaterialEvaluator* evaluator =
                             slot == 0 ? lsm.evaluator.get() : lsm.layerEvaluators[static_cast<size_t>(slot - 1)].get();
                         if (evaluator && evaluator->EvaluatedRevision() != 0 && evaluator->Textures().IsValid()) {

@@ -209,6 +209,9 @@ struct RoadNodeSettings {
     uint32_t layerHeightGate[kRoadMaterialSlots] = {0, 0, 0, 0};
     float layerHeightGateThreshold[kRoadMaterialSlots] = {0.5f, 0.5f, 0.5f, 0.5f};
     float layerHeightGateSoftness[kRoadMaterialSlots] = {0.2f, 0.2f, 0.2f, 0.2f};
+    // 混ぜ方（スロット 2〜4）。0 = マスクどおり（被覆率がそのまま重み。境界だけ下地とのハイト差で崩す）、
+    // 1 = ハイトで競合（被覆率をハイトに足して勝った方が出る）。旧ファイルは 1 で読む。
+    uint32_t layerBlendMode[kRoadMaterialSlots] = {0, 0, 0, 0};
 };
 
 // 道路空間マスクの形。
@@ -252,6 +255,9 @@ struct ShoulderNodeSettings {
     uint32_t layerHeightGate[kRoadMaterialSlots] = {0, 0, 0, 0};
     float layerHeightGateThreshold[kRoadMaterialSlots] = {0.5f, 0.5f, 0.5f, 0.5f};
     float layerHeightGateSoftness[kRoadMaterialSlots] = {0.2f, 0.2f, 0.2f, 0.2f};
+    // 混ぜ方（スロット 2〜4）。0 = マスクどおり（被覆率がそのまま重み。境界だけ下地とのハイト差で崩す）、
+    // 1 = ハイトで競合（被覆率をハイトに足して勝った方が出る）。旧ファイルは 1 で読む。
+    uint32_t layerBlendMode[kRoadMaterialSlots] = {0, 0, 0, 0};
 };
 
 // Merge。設定は持たない。Mesh 1〜4 に繋いだ枝を順に積み、下流の白線・Decal は最初の枝の面に乗る。

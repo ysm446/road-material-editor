@@ -101,6 +101,8 @@ struct MeshConstants
     uint4 layerHeightGate;
     float4 layerHeightGateThreshold;
     float4 layerHeightGateSoftness;
+    // 混ぜ方。0 = マスクどおり、1 = ハイトで競合。
+    uint4 layerBlendMode;
 };
 
 
@@ -191,15 +193,39 @@ bool AnyHeightGate()
     return (g_mesh.layerHeightGate.y | g_mesh.layerHeightGate.z | g_mesh.layerHeightGate.w) != 0u;
 }
 
-// ハイトで競合させた重み。被覆率 0 のスロットは出さない。
+// スロットの重み。
+//   マスクどおり（layerBlendMode = 0）: 被覆率がそのまま重み。境界は下地とのハイト差 × ブレンド幅だけ崩す。
+//   ハイトで競合（layerBlendMode = 1）: 被覆率をハイトに足して、最大からブレンド幅の範囲を混ぜる。
+// マスクどおりのスロットが先に取り、残りを下地とハイト競合のスロットで分ける。
 float4 LayerHeightBlend(float4 coverage, float4 heights)
 {
-    const float4 score = heights + coverage;
+    float4 maskWeights = 0.0f;
+    float4 heightCoverage = coverage;
+    [unroll]
+    for (uint slot = 1; slot < 4; ++slot)
+    {
+        if (g_mesh.layerBlendMode[slot] == 0u)
+        {
+            const float w = saturate(coverage[slot] + (heights[slot] - heights[0]) * g_mesh.layerBlendRange);
+            maskWeights[slot] = w * step(1e-6f, coverage[slot]);
+            heightCoverage[slot] = 0.0f;
+        }
+    }
+    float maskTotal = maskWeights.y + maskWeights.z + maskWeights.w;
+    if (maskTotal > 1.0f)
+    {
+        maskWeights /= maskTotal;
+        maskTotal = 1.0f;
+    }
+    const float remaining = 1.0f - maskTotal;
+    heightCoverage.x = saturate(1.0f - (heightCoverage.y + heightCoverage.z + heightCoverage.w));
+    const float4 score = heights + heightCoverage;
     const float peak = max(max(score.x, score.y), max(score.z, score.w));
     float4 blend = max(score - peak + max(g_mesh.layerBlendRange, 1e-3f), 0.0f);
-    blend *= step(1e-6f, coverage);
+    blend *= step(1e-6f, heightCoverage);
     const float total = blend.x + blend.y + blend.z + blend.w;
-    return (total > 1e-5f) ? blend / total : float4(1.0f, 0.0f, 0.0f, 0.0f);
+    const float4 heightBlend = (total > 1e-5f) ? blend / total : float4(1.0f, 0.0f, 0.0f, 0.0f);
+    return maskWeights + heightBlend * remaining;
 }
 
 float LayerHeightLevel(uint slot, float2 uv)

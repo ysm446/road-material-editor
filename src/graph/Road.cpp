@@ -144,6 +144,7 @@ bool BuildShoulder(const RoadGeometry& source, uint32_t edgeColumn, uint32_t inn
         built.settings.layerHeightGate[slot] = settings.layerHeightGate[slot];
         built.settings.layerHeightGateThreshold[slot] = settings.layerHeightGateThreshold[slot];
         built.settings.layerHeightGateSoftness[slot] = settings.layerHeightGateSoftness[slot];
+        built.settings.layerBlendMode[slot] = settings.layerBlendMode[slot];
     }
     built.rowDistances = source.rowDistances;
     built.left.worldSpace = built.right.worldSpace = true;
@@ -802,6 +803,7 @@ void AttachRoadLayers(const NodeGraph& graph, const Node& node, const RoadNodeSe
         mesh.layerHeightGate[slot] = std::min(2u, settings.layerHeightGate[slot]);
         mesh.layerHeightGateThreshold[slot] = std::clamp(settings.layerHeightGateThreshold[slot], 0.0f, 1.0f);
         mesh.layerHeightGateSoftness[slot] = std::clamp(settings.layerHeightGateSoftness[slot], 0.001f, 1.0f);
+        mesh.layerBlendMode[slot] = std::min(1u, settings.layerBlendMode[slot]);
     }
     if (!materialPins.empty()) {
         compositor::MaterialStack stack;

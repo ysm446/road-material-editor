@@ -902,6 +902,12 @@ void RunRoadTests() {
                   layered.scene.meshes[0].layerHeightGateSoftness[1] == 0.001f,
                   "height gate settings reach the scene mesh with clamped softness");
             shoulderSettings.layerHeightGate[1] = 0;
+            shoulderSettings.layerBlendMode[1] = 7;  // 範囲外は 1 に丸める
+            shoulderSettings.layerBlendMode[2] = 0;
+            layered = graph::CompileMeshGraph(sg);
+            Check(layered.scene.meshes.size() == 1 && layered.scene.meshes[0].layerBlendMode[1] == 1u &&
+                  layered.scene.meshes[0].layerBlendMode[2] == 0u, "blend mode reaches the scene mesh");
+            shoulderSettings.layerBlendMode[1] = 0;
             shoulderSettings.displacementMeters = 0.0f;
         }
         auto shoulderCompiled = graph::CompileMeshGraph(sg);

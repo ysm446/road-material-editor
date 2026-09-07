@@ -12,9 +12,9 @@ bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocum
 // 最大3プリセットの下地PBR材質を沿道の区間比率で混合する。材質変位は未適用。
 CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const SurfaceLayoutDocument& document,
                                           GraphId roadId, SurfaceId bandId);
-// 左1帯の材質境界試作。道路1構成＋沿道最大2構成。失敗時はシーンを保持する。
+// 左右いずれか1帯の材質境界試作。道路1構成＋沿道最大2構成。失敗時はシーンを保持する。
 // 成功時は道路を置換し沿道を追加する。変位有効時は共通境界で押し出しを抑え、世界Yへ変位する。
-bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
+bool ConnectSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
                                     const SurfaceLayoutDocument& document, GraphId roadId,
                                     SurfaceId bandId, std::string& error, bool enableDisplacement = false);
 }  // namespace tg::graph

@@ -18,9 +18,9 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
         if (ui::PropertyBool("形状を表示", &m_previewSurfaceBands, false,
             "沿道の形状と下地材質を確認する。ハイト変位は横接続の「変位もつなぐ」で確認する")) m_graph.MarkDirty();
         const char* sides[] = {"左", "右"};
-        ui::PropertyCombo("配置する側", &m_surfaceBandSide, sides, 2, 0, "道路の進行方向に向かっての左右");
+        if (ui::PropertyCombo("配置する側", &m_surfaceBandSide, sides, 2, 0, "道路の進行方向に向かっての左右。横接続を試す側も切り替える")) m_graph.MarkDirty();
         if (ui::PropertyBool("横接続を試す", &m_connectSurfaceBands, false,
-            "道路1種類と左沿道の最大2種類を境界で混ぜる。形状表示もオンにする。凹凸は「変位もつなぐ」で有効にする")) {
+            "道路1種類と片側の沿道の最大2種類を境界で混ぜる。両側にある場合は選択側、片側だけならその側を接続する。形状表示もオンにする。凹凸は「変位もつなぐ」で有効にする")) {
             if (m_connectSurfaceBands) m_previewSurfaceBands = true;
             m_graph.MarkDirty();
         }
@@ -34,7 +34,7 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
     const auto side = m_surfaceBandSide == 0 ? graph::SurfaceSide::Left : graph::SurfaceSide::Right;
     if (m_previewSurfaceBands && m_connectSurfaceBands) ui::HintText(m_displaceConnectedBands
         ? "境界付近の凹凸を滑らかに抑え、段差の基準高さへ接続します"
-        : "左側の横接続を試作中。接続した道路と沿道の変位は停止します");
+        : "片側の横接続を試作中。接続した道路と沿道の変位は停止します");
     bool exists = false;
     for (const auto& layout : m_surfaceLayouts.layouts) if (layout.roadNode == roadId)
         for (const auto& candidate : layout.bands) if (candidate.side == side) exists = true;

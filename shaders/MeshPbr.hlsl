@@ -185,7 +185,7 @@ float2 LayerUv(LayerContext c, uint slot, float2 meters, float3 worldPosition)
         return worldPosition.xz / repeat;
     }
     const float2 uv = meters / repeat;
-    return (c.roadUvAlongU != 0u) ? uv.yx : uv;
+    return ((c.roadUvAlongU & 1) != 0u) ? uv.yx : uv;
 }
 
 // スロット 1〜4 の被覆率。マスクが無ければスロット 1 だけ。
@@ -296,6 +296,13 @@ float4 ContextWeights(LayerContext c, float2 meters, float3 worldPosition, out f
     return LayerHeightBlend(c, coverage, heights);
 }
 
+float2 ConnectionLocal(LayerContext c, float2 meters)
+{
+    float2 local = meters - c.origin;
+    if ((c.roadUvAlongU & 2) != 0) local.x = -local.x;
+    return local;
+}
+
 float ConnectionHeight(float2 meters, float3 worldPosition)
 {
     const float3 weights = ConnectionWeights(meters);
@@ -306,7 +313,7 @@ float ConnectionHeight(float2 meters, float3 worldPosition)
         if (weights[context] <= 0) continue;
         const LayerContext c = g_mesh.connectionContexts[context];
         float4 heights;
-        const float4 blend = ContextWeights(c, meters - c.origin, worldPosition, heights);
+        const float4 blend = ContextWeights(c, ConnectionLocal(c, meters), worldPosition, heights);
         height += weights[context] * dot(blend, heights - 0.5f) * c.displacementMeters;
     }
     if (g_mesh.connectionHeightFade.y > 0.0f)
@@ -334,7 +341,7 @@ void ConnectionShading(float2 meters, float3 worldPosition,
     {
         // 微分は分岐前に計算し、被覆境界でも同じLODを読む。
         const LayerContext c = g_mesh.connectionContexts[context];
-        const float2 local = meters - c.origin;
+        const float2 local = ConnectionLocal(c, meters);
         float2 uvs[4], dx[4], dy[4];
         [unroll]
         for (uint slot = 0; slot < 4; ++slot)
@@ -359,7 +366,8 @@ void ConnectionShading(float2 meters, float3 worldPosition,
             surface += surfaceMap.SampleGrad(g_samplerAnisoWrap, uvs[layer], dx[layer], dy[layer]) * weight;
             float3 detail = DecodeTangentNormal(normalMap.SampleGrad(g_samplerAnisoWrap, uvs[layer], dx[layer], dy[layer]));
             // UV軸を入れ替えたプリセットの法線を、共通断面の接空間へ揃える。
-            if (c.layerWorldUv[layer] == 0 && c.roadUvAlongU != 0) detail.xy = detail.yx;
+            if (c.layerWorldUv[layer] == 0 && (c.roadUvAlongU & 1) != 0) detail.xy = detail.yx;
+            if (c.layerWorldUv[layer] == 0 && (c.roadUvAlongU & 4) != 0) detail.x = -detail.x;
             contextNormal = ReorientNormal(contextNormal, WeightedDetailNormal(detail, blend[layer]));
         }
         normal = ReorientNormal(normal, WeightedDetailNormal(contextNormal, weights[context]));

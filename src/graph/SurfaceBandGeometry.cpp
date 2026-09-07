@@ -272,7 +272,7 @@ CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const Surfac
     for (auto& context : contexts) result.scene.meshes.push_back(std::move(context));
     return result;
 }
-bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
+bool ConnectSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
                                     const SurfaceLayoutDocument& document, GraphId roadId,
                                     SurfaceId bandId, std::string& error, bool enableDisplacement) {
     error.clear();
@@ -281,7 +281,8 @@ bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& 
     const SurfaceBand* band = nullptr;
     for (const auto& layout : document.layouts) if (layout.roadNode == roadId)
         for (const auto& candidate : layout.bands) if (candidate.id == bandId) band = &candidate;
-    if (!band || band->side != SurfaceSide::Left) return fail("横接続の試作は左側の沿道に対応します");
+    if (!band || band->side == SurfaceSide::Road) return fail("横接続には左または右の沿道が必要です");
+    const bool isRight = band->side == SurfaceSide::Right;
     const auto roadSource = std::find(scene.meshSources.begin(), scene.meshSources.end(), roadId);
     if (roadSource == scene.meshSources.end()) return fail("接続先の道路が表示されていません");
     const size_t roadIndex = roadSource - scene.meshSources.begin();
@@ -327,6 +328,7 @@ bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& 
         auto meters = vertex.roadUv;
         meters.x *= sourceRoad.roadMetersPerUv; meters.y *= sourceRoad.roadMetersPerUv;
         if (sourceRoad.roadUvAlongU) std::swap(meters.x, meters.y);
+        if (isRight) meters.x = width - meters.x;
         vertex.roadUv = meters;
     }
     for (auto& vertex : sideMesh.geometry.vertices) vertex.roadUv.x += width;
@@ -340,7 +342,9 @@ bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& 
             ? DirectX::XMFLOAT2{width, std::min({0.5f, width * 0.5f, (totalWidth - width) * 0.5f})}
             : DirectX::XMFLOAT2{};
         mesh->connectionSources = {contextStart, contextStart + 1, contextStart + static_cast<int>(presets.size())};
-        mesh->connectionOrigins = {DirectX::XMFLOAT2{0, 0}, DirectX::XMFLOAT2{width, 0}, DirectX::XMFLOAT2{width, 0}};
+        mesh->connectionAcrossSigns = {isRight ? -1.0f : 1.0f, 1.0f, 1.0f};
+        mesh->connectionFrameSign = isRight && mesh == &roadMesh ? -1.0f : 1.0f;
+        mesh->connectionOrigins = {DirectX::XMFLOAT2{isRight ? width : 0, 0}, DirectX::XMFLOAT2{width, 0}, DirectX::XMFLOAT2{width, 0}};
         mesh->roadMask.width = 512;
         mesh->roadMask.height = std::max(16u, static_cast<uint32_t>(std::ceil(length * 64)));
         mesh->roadMask.rgba.resize(size_t(mesh->roadMask.width) * mesh->roadMask.height * 4);
@@ -382,6 +386,7 @@ bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& 
             vertex.roadUv.x *= sourceRoad.roadMetersPerUv;
             vertex.roadUv.y *= sourceRoad.roadMetersPerUv;
             if (sourceRoad.roadUvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
+            if (isRight) vertex.roadUv.x = width - vertex.roadUv.x;
         }
     }
     next.scene.meshes[roadIndex] = std::move(roadMesh);

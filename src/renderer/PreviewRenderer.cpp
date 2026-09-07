@@ -961,7 +961,10 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                     }
                     c.roadMaskIndex = gpu.roadMask.IsValid() ? gpu.roadMask.SrvIndex() : kNoShadowIndex;
                     c.layerBlendRange = cpu.layerBlendRange;
-                    c.roadUvAlongU = cpu.roadUvAlongU ? 1u : 0u;
+                    // bit0: UV軸交換、bit1: 素材の幅反転、bit2: 描画接線に対する法線X反転。
+                    c.roadUvAlongU = (cpu.roadUvAlongU ? 1u : 0u) |
+                        (connection.connectionAcrossSigns[context] < 0 ? 2u : 0u) |
+                        (connection.connectionAcrossSigns[context] * connection.connectionFrameSign < 0 ? 4u : 0u);
                     c.displacementMeters = cpu.displacementMeters;
                     c.roadMaskScale[0] = cpu.roadWidthMeters > 0 ? 1.0f / cpu.roadWidthMeters : 0;
                     c.roadMaskScale[1] = cpu.roadLengthMeters > 0 ? 1.0f / cpu.roadLengthMeters : 0;

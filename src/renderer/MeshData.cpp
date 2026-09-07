@@ -9,6 +9,8 @@ namespace tg::renderer {
 bool ValidateMeshScene(const MeshScene& scene) {
     for (const auto& mesh : scene.meshes) {
         const auto& data = mesh.geometry;
+        if (mesh.connectionFrameSign != 1 && mesh.connectionFrameSign != -1) return false;
+        for (float sign : mesh.connectionAcrossSigns) if (sign != 1 && sign != -1) return false;
         if (!std::isfinite(mesh.connectionHeightFade.x) || !std::isfinite(mesh.connectionHeightFade.y) ||
             mesh.connectionHeightFade.y < 0) return false;
         if (mesh.materialOnly) {

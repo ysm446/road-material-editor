@@ -379,7 +379,7 @@ void RunSurfaceLayoutTests() {
     auto lateralScene = graph::CompileMeshGraph(sceneGraph);
     const size_t originalMeshes = lateralScene.scene.meshes.size();
     const auto lateralBandId = roadside.layouts[0].bands[1].id;
-    Check(graph::ConnectLeftSurfaceBandMaterials(lateralScene, sceneGraph, roadside, roadId, lateralBandId, error) &&
+    Check(graph::ConnectSurfaceBandMaterials(lateralScene, sceneGraph, roadside, roadId, lateralBandId, error) &&
           renderer::ValidateMeshScene(lateralScene.scene), "道路1構成と左沿道2構成の材質を接続する");
     if (lateralScene.scene.meshes.size() == originalMeshes + 4) {
         const auto& roadSurface = lateralScene.scene.meshes[0];
@@ -407,17 +407,36 @@ void RunSurfaceLayoutTests() {
     }
     auto unsupportedScene = normalScene;
     const auto countBefore = unsupportedScene.scene.meshes.size();
-    Check(!graph::ConnectLeftSurfaceBandMaterials(unsupportedScene, sceneGraph, roadside, roadId, lateralBandId, error) &&
+    Check(!graph::ConnectSurfaceBandMaterials(unsupportedScene, sceneGraph, roadside, roadId, lateralBandId, error) &&
           unsupportedScene.scene.meshes.size() == countBefore &&
           unsupportedScene.scene.meshes[0].connectionSources == normalScene.scene.meshes[0].connectionSources,
           "複数の道路プリセットは部分的に接続せずシーンを保持する");
     auto wrongSideScene = graph::CompileMeshGraph(sceneGraph);
-    Check(!graph::ConnectLeftSurfaceBandMaterials(wrongSideScene, sceneGraph, rightSide, roadId,
-          rightSide.layouts[0].bands[1].id, error), "右側は対応するまで明示的に拒否する");
+    Check(graph::ConnectSurfaceBandMaterials(wrongSideScene, sceneGraph, rightSide, roadId,
+          rightSide.layouts[0].bands[1].id, error, true), "右側にも材質と変位を接続できる");
+    if (wrongSideScene.scene.meshes.size() == originalMeshes + 4) {
+        const auto& r = wrongSideScene.scene.meshes[0];
+        const auto& rightSurface = wrongSideScene.scene.meshes.back();
+        Check(r.connectionAcrossSigns[0] == -1 && r.connectionFrameSign == -1 && rightSurface.connectionFrameSign == 1,
+              "右接続は道路の素材座標と接線の反転を明示する");
+        Check(r.connectionHeightFade.x == bandRoad.settings.widthMeters && renderer::ValidateMeshScene(wrongSideScene.scene),
+              "右接続も同じ境界高さへ変位を減衰する");
+        const auto original = graph::CompileMeshGraph(sceneGraph);
+        bool preserved = true;
+        for (size_t m = 0; m < originalMeshes; ++m) {
+            for (size_t i = 0; i < original.scene.meshes[m].geometry.vertices.size(); ++i) {
+                const auto a = original.scene.meshes[m].geometry.vertices[i].roadUv;
+                const auto b = wrongSideScene.scene.meshes[m].geometry.vertices[i].roadUv;
+                preserved &= std::abs((r.connectionOrigins[0].x - b.x) - a.x * original.scene.meshes[0].roadMetersPerUv) < 1e-5f;
+            }
+        }
+        Check(preserved, "右接続後も道路と白線の素材参照位置を保持する");
+        Check(rightSurface.geometry.vertices.front().roadUv.x == r.connectionHeightFade.x, "右路肩の内端も共通境界座標に一致する");
+    }
     auto axisGraph = sceneGraph;
     std::get<graph::RoadNodeSettings>(axisGraph.FindMutableNode(roadId)->settings).uvAlongU = true;
     auto axisScene = graph::CompileMeshGraph(axisGraph);
-    Check(graph::ConnectLeftSurfaceBandMaterials(axisScene, axisGraph, roadside, roadId, lateralBandId, error),
+    Check(graph::ConnectSurfaceBandMaterials(axisScene, axisGraph, roadside, roadId, lateralBandId, error),
           "道路のUVが長さ方向Uでも横接続を生成できる");
     if (!axisScene.scene.meshes.empty()) {
         const auto& axisRoad = axisScene.scene.meshes[0];
@@ -431,7 +450,7 @@ void RunSurfaceLayoutTests() {
     auto displacedScene = graph::CompileMeshGraph(axisGraph);
     const auto oldRoad = displacedScene.scene.meshes[0];
     const auto oldMarking = displacedScene.scene.meshes[1];
-    Check(graph::ConnectLeftSurfaceBandMaterials(displacedScene, axisGraph, roadside, roadId, lateralBandId, error, true),
+    Check(graph::ConnectSurfaceBandMaterials(displacedScene, axisGraph, roadside, roadId, lateralBandId, error, true),
           "変位を有効にした横接続を生成できる");
     if (displacedScene.scene.meshes.size() == originalMeshes + 4) {
         const auto& roadMesh = displacedScene.scene.meshes[0];

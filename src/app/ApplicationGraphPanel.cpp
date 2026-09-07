@@ -319,9 +319,13 @@ void Application::SyncMeshGraph() {
                     continue;
                 }
                 auto preview = graph::CompileSurfaceBandPreview(m_graph, m_surfaceLayouts, layout.roadNode, band.id);
-                if (m_connectSurfaceBands && band.side == graph::SurfaceSide::Left && preview.error.empty()) {
+                const auto selectedSide = m_surfaceBandSide == 0 ? graph::SurfaceSide::Left : graph::SurfaceSide::Right;
+                const bool hasSelectedSide = std::any_of(layout.bands.begin(), layout.bands.end(), [&](const auto& other) {
+                    return other.side == selectedSide && !other.spans.empty();
+                });
+                if (m_connectSurfaceBands && (band.side == selectedSide || !hasSelectedSide) && preview.error.empty()) {
                     std::string error;
-                    if (graph::ConnectLeftSurfaceBandMaterials(compiled, m_graph, m_surfaceLayouts, layout.roadNode, band.id, error, m_displaceConnectedBands)) continue;
+                    if (graph::ConnectSurfaceBandMaterials(compiled, m_graph, m_surfaceLayouts, layout.roadNode, band.id, error, m_displaceConnectedBands)) continue;
                     if (!compiled.error.empty()) compiled.error += " / ";
                     compiled.error += error;
                 }

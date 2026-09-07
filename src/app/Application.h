@@ -292,6 +292,7 @@ private:
     bool m_showLegacyRoadInputs = false;
     bool m_previewSurfaceBands = false;
     bool m_connectSurfaceBands = false;
+    bool m_displaceConnectedBands = false;
     int m_surfaceBandSide = 0;
     int m_surfaceBandSpan = 0;
     graph::GraphId m_selectedGraphNode = 0;

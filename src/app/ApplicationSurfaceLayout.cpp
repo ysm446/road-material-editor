@@ -16,18 +16,25 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
     ui::SectionHeader("沿道形状（試作）");
     if (ui::BeginPropertyTable("surfaceBandPreviewRows")) {
         if (ui::PropertyBool("形状を表示", &m_previewSurfaceBands, false,
-            "沿道の形状と下地材質を確認する。ハイト変位の接続はまだ反映しない")) m_graph.MarkDirty();
+            "沿道の形状と下地材質を確認する。ハイト変位は横接続の「変位もつなぐ」で確認する")) m_graph.MarkDirty();
         const char* sides[] = {"左", "右"};
         ui::PropertyCombo("配置する側", &m_surfaceBandSide, sides, 2, 0, "道路の進行方向に向かっての左右");
         if (ui::PropertyBool("横接続を試す", &m_connectSurfaceBands, false,
-            "道路1種類と左沿道の最大2種類を境界で混ぜる。形状表示もオンにし、接続した道路と沿道の変位を停止する")) {
+            "道路1種類と左沿道の最大2種類を境界で混ぜる。形状表示もオンにする。凹凸は「変位もつなぐ」で有効にする")) {
             if (m_connectSurfaceBands) m_previewSurfaceBands = true;
+            m_graph.MarkDirty();
+        }
+        if (ui::PropertyBool("変位もつなぐ", &m_displaceConnectedBands, false,
+            "境界付近の変位を共通の基準高さへ戻し、離れた所では素材の凹凸を残す。変位方向は世界Y")) {
+            if (m_displaceConnectedBands) { m_connectSurfaceBands = true; m_previewSurfaceBands = true; }
             m_graph.MarkDirty();
         }
         ui::EndPropertyTable();
     }
     const auto side = m_surfaceBandSide == 0 ? graph::SurfaceSide::Left : graph::SurfaceSide::Right;
-    if (m_previewSurfaceBands && m_connectSurfaceBands) ui::HintText("左側の横接続を試作中。接続した道路と沿道の変位は停止します");
+    if (m_previewSurfaceBands && m_connectSurfaceBands) ui::HintText(m_displaceConnectedBands
+        ? "境界付近の凹凸を滑らかに抑え、段差の基準高さへ接続します"
+        : "左側の横接続を試作中。接続した道路と沿道の変位は停止します");
     bool exists = false;
     for (const auto& layout : m_surfaceLayouts.layouts) if (layout.roadNode == roadId)
         for (const auto& candidate : layout.bands) if (candidate.side == side) exists = true;
@@ -91,6 +98,9 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                         ui::PropertyValue("プリセット", "%s", preset->name.c_str());
                         auto& material = preset->materials.front();
                         const graph::PresetMaterial defaults;
+                        const graph::SurfacePreset presetDefaults;
+                        changed |= ui::PropertyFloat("凹凸の高さ", &preset->displacementMeters, 0, 1, presetDefaults.displacementMeters,
+                            "横接続で変位もつなぐときの押し出し量。境界では自動で抑える", "%.3f m");
                         changed |= DrawMaterialSlotRow("素材", material.material, m_materialLibrary);
                         changed |= ui::PropertyFloat("反復長", &material.uvRepeatMeters, 0.01f, 100, defaults.uvRepeatMeters,
                             "素材が繰り返す実距離。断面の垂直面も距離に含む", "%.2f m");
@@ -115,7 +125,7 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
                 break;
             }
         }
-        ui::HintText("下地1層の試作。上層・ハイト変位の接続は後続です");
+        ui::HintText("下地1層の試作。凹凸は横接続の「変位もつなぐ」で確認");
     }
     ui::SectionHeader("路面区間");
     auto edited = m_surfaceLayouts;

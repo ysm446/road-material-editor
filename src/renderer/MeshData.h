@@ -51,6 +51,8 @@ struct SceneMesh {
     float displacementMeters = 0.0f;
     // P0: 直線の共通面を世界 Y 方向へ変位する。法線が分かれる縁石でも位置を揃える。
     bool connectionPrototype = false;
+    // 横接続で変位を基準高さへ戻す共通境界と幅（m）。幅0は無効。
+    DirectX::XMFLOAT2 connectionHeightFade{};
     std::array<float, 4> layerDisplacementMeters{0.0f, 0.0f, 0.0f, 0.0f};
     // 押し出しに使うハイトを別のメッシュ（道路面）の材質から読む。-1 なら自分の材質。
     // 白線はこれで道路面と同じ量だけ押し出され、変位後の路面に貼り付く。

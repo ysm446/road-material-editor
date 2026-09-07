@@ -423,4 +423,35 @@ void RunSurfaceLayoutTests() {
         Check(axisScene.meshSources.size() == axisScene.scene.meshes.size(), "追加後も描画メッシュと由来の配列が対応する");
     }
 
+    tests::Section("横接続の変位 — 共通の高さ基準と白線UV");
+    auto displacedScene = graph::CompileMeshGraph(axisGraph);
+    const auto oldRoad = displacedScene.scene.meshes[0];
+    const auto oldMarking = displacedScene.scene.meshes[1];
+    Check(graph::ConnectLeftSurfaceBandMaterials(displacedScene, axisGraph, roadside, roadId, lateralBandId, error, true),
+          "変位を有効にした横接続を生成できる");
+    if (displacedScene.scene.meshes.size() == originalMeshes + 4) {
+        const auto& roadMesh = displacedScene.scene.meshes[0];
+        const auto& sideMesh = displacedScene.scene.meshes.back();
+        Check(roadMesh.displacementMeters == 1 && sideMesh.displacementMeters == 1 &&
+              roadMesh.connectionPrototype && sideMesh.connectionPrototype,
+              "道路・沿道の変位方向を世界Yに揃える");
+        Check(roadMesh.connectionHeightFade.x == bandRoad.settings.widthMeters &&
+              roadMesh.connectionHeightFade.x == sideMesh.connectionHeightFade.x &&
+              roadMesh.connectionHeightFade.y == sideMesh.connectionHeightFade.y && roadMesh.connectionHeightFade.y > 0,
+              "両面に同じ境界位置と変位抑制幅を渡す");
+        Check(displacedScene.scene.meshes[originalMeshes + 2].displacementMeters == roadside.presets[1].displacementMeters,
+              "境界から離れた歩道の変位量はプリセットから取得する");
+        bool uvMatches = true;
+        for (size_t i = 0; i < oldMarking.geometry.vertices.size(); ++i) {
+            const auto oldUv = oldMarking.geometry.vertices[i].roadUv;
+            const auto uv = displacedScene.scene.meshes[1].geometry.vertices[i].roadUv;
+            uvMatches &= std::abs(uv.x - oldUv.y * oldRoad.roadMetersPerUv) < 1e-5f &&
+                         std::abs(uv.y - oldUv.x * oldRoad.roadMetersPerUv) < 1e-5f;
+        }
+        Check(uvMatches, "白線も道路と同じ実距離UVから変位を評価する");
+        auto invalidScene = displacedScene.scene;
+        invalidScene.meshes[0].connectionHeightFade.y = std::numeric_limits<float>::quiet_NaN();
+        Check(!renderer::ValidateMeshScene(invalidScene), "不正な変位抑制幅をGPUへ渡さない");
+    }
+
 }

@@ -266,7 +266,7 @@ CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const Surfac
 }
 bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
                                     const SurfaceLayoutDocument& document, GraphId roadId,
-                                    SurfaceId bandId, std::string& error) {
+                                    SurfaceId bandId, std::string& error, bool enableDisplacement) {
     error.clear();
     const auto fail = [&](const char* message) { error = message; return false; };
     if (!ValidateSurfaceLayouts(document, error)) return false;
@@ -293,7 +293,8 @@ bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& 
     } else roadContext = sourceRoad;
     roadContext.geometry = {}; roadContext.materialOnly = true;
     roadContext.connectionSources = {-1, -1, -1};
-    roadContext.connectionSeams.clear(); roadContext.displacementMeters = 0;
+    roadContext.connectionSeams.clear();
+    if (!enableDisplacement) roadContext.displacementMeters = 0;
     roadContext.layerUvRepeat[0] = roadContext.roadMetersPerUv;
     if (!roadContext.materialStack) {
         compositor::MaterialStack stack;
@@ -324,7 +325,12 @@ bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& 
     const int contextStart = static_cast<int>(scene.scene.meshes.size());
     for (auto* mesh : {&roadMesh, &sideMesh}) {
         mesh->roadMetersPerUv = 1; mesh->roadUvAlongU = false;
-        mesh->roadWidthMeters = totalWidth; mesh->roadLengthMeters = length; mesh->displacementMeters = 0;
+        mesh->roadWidthMeters = totalWidth; mesh->roadLengthMeters = length;
+        mesh->displacementMeters = enableDisplacement ? 1.0f : 0.0f;
+        mesh->connectionPrototype = enableDisplacement;
+        mesh->connectionHeightFade = enableDisplacement
+            ? DirectX::XMFLOAT2{width, std::min({0.5f, width * 0.5f, (totalWidth - width) * 0.5f})}
+            : DirectX::XMFLOAT2{};
         mesh->connectionSources = {contextStart, contextStart + 1, contextStart + static_cast<int>(presets.size())};
         mesh->connectionOrigins = {DirectX::XMFLOAT2{0, 0}, DirectX::XMFLOAT2{width, 0}, DirectX::XMFLOAT2{width, 0}};
         mesh->roadMask.width = 512;
@@ -360,9 +366,20 @@ bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& 
         }
     }
     auto next = scene;
+    // 白線などが持つ旧Road UVも、参照する道路と同じ実距離座標へ変換する。
+    for (size_t i = 0; i < next.scene.meshes.size(); ++i) {
+        auto& child = next.scene.meshes[i];
+        if (i == roadIndex || child.displacementSource != static_cast<int>(roadIndex)) continue;
+        for (auto& vertex : child.geometry.vertices) {
+            vertex.roadUv.x *= sourceRoad.roadMetersPerUv;
+            vertex.roadUv.y *= sourceRoad.roadMetersPerUv;
+            if (sourceRoad.roadUvAlongU) std::swap(vertex.roadUv.x, vertex.roadUv.y);
+        }
+    }
     next.scene.meshes[roadIndex] = std::move(roadMesh);
     next.scene.meshes.push_back(std::move(roadContext)); next.meshSources.push_back(0);
     for (size_t i = 1; i < roadside.scene.meshes.size(); ++i) {
+        roadside.scene.meshes[i].displacementMeters = enableDisplacement ? presets[i - 1]->displacementMeters : 0;
         next.scene.meshes.push_back(std::move(roadside.scene.meshes[i])); next.meshSources.push_back(0);
     }
     next.scene.meshes.push_back(std::move(sideMesh)); next.meshSources.push_back(0);

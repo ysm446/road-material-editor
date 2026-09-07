@@ -119,7 +119,7 @@ struct MeshConstants
     float4 layerDisplacementMeters;
     uint connectionPrototype;
     uint connectionContextCount;
-    float2 connectionPad;
+    float2 connectionHeightFade;
     LayerContext connectionContexts[3];
 };
 
@@ -308,6 +308,11 @@ float ConnectionHeight(float2 meters, float3 worldPosition)
         float4 heights;
         const float4 blend = ContextWeights(c, meters - c.origin, worldPosition, heights);
         height += weights[context] * dot(blend, heights - 0.5f) * c.displacementMeters;
+    }
+    if (g_mesh.connectionHeightFade.y > 0.0f)
+    {
+        const float t = saturate(abs(meters.x - g_mesh.connectionHeightFade.x) / g_mesh.connectionHeightFade.y);
+        height *= t * t * (3.0f - 2.0f * t);
     }
     return 0.5f + height;
 }

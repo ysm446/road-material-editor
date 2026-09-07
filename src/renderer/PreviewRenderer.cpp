@@ -157,7 +157,7 @@ struct MeshConstants {
     float layerDisplacementMeters[4];
     uint32_t connectionPrototype;
     uint32_t connectionContextCount;
-    float connectionPad[2];
+    float connectionHeightFade[2];
     LayerContextConstants connectionContexts[3];
 };
 
@@ -929,6 +929,8 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 if (!baseReady) drawConstants.displacementScale = 0.0f;
             }
             const auto& connection = m_meshScene.meshes[layerSource];
+            drawConstants.connectionHeightFade[0] = connection.connectionHeightFade.x;
+            drawConstants.connectionHeightFade[1] = connection.connectionHeightFade.y;
             if (connection.connectionSources[0] >= 0) {
                 drawConstants.connectionContextCount = 3;
                 bool ready = true;

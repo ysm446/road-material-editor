@@ -13,8 +13,8 @@ bool BuildSurfaceBandGeometry(const RoadGeometry& road, const SurfaceLayoutDocum
 CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const SurfaceLayoutDocument& document,
                                           GraphId roadId, SurfaceId bandId);
 // 左1帯の材質境界試作。道路1構成＋沿道最大2構成。失敗時はシーンを保持する。
-// 成功時は道路を置換し沿道を追加する。双方の変位は停止する。
+// 成功時は道路を置換し沿道を追加する。変位有効時は共通境界で押し出しを抑え、世界Yへ変位する。
 bool ConnectLeftSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& graph,
                                     const SurfaceLayoutDocument& document, GraphId roadId,
-                                    SurfaceId bandId, std::string& error);
+                                    SurfaceId bandId, std::string& error, bool enableDisplacement = false);
 }  // namespace tg::graph

@@ -58,7 +58,7 @@ struct MaterialSnapshot {
 // ノードの位置も含まれる（graph::Node が持つ）ので、構造を戻すと配置も一緒に戻る。
 // ただし**移動だけでは段を積まない**（毎フレーム位置が返ってくるため）。
 //
-// テクスチャとペイントマスクは入れない。GPU リソースそのもので、
+// テクスチャのGPUリソースは入れない。
 // 複製も作り直しも高くつく。参照している ID だけを持ち、
 // 戻すときに存在しない ID は落とす（DocumentSnapshot を適用する側の責任）。
 struct DocumentSnapshot {
@@ -74,7 +74,7 @@ struct DocumentSnapshot {
 // アンドゥ / リドゥの履歴。スナップショットを積むだけ。
 class UndoHistory {
 public:
-    // 積める段数。1 段が数 KB なので、100 段でも 1 MB に届かない。
+    // 積める段数。各段のサイズはグラフ・材質・配置データの量に依存する。
     static constexpr size_t kMaxDepth = 100;
 
     // **変更が確定した直後に、変更前の状態を渡して呼ぶ。**
@@ -104,7 +104,7 @@ public:
     size_t UndoCount() const { return m_undo.size(); }
     size_t RedoCount() const { return m_redo.size(); }
 
-    // 履歴に残っているすべての段。ペイントマスクの掃除で参照を数えるのに使う。
+    // 履歴に残っているすべての段。Undoで復元するアセットの参照確認に使う。
     const std::vector<DocumentSnapshot>& UndoStack() const { return m_undo; }
     const std::vector<DocumentSnapshot>& RedoStack() const { return m_redo; }
 

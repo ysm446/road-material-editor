@@ -1321,6 +1321,8 @@ bool WriteJsonFile(const fs::path& path, const json& document) {
         // 人が読める形で書く。差分も取りやすい。壊れた文字列が混ざっていても
         // 例外を出さない（不正な UTF-8 は置換文字にする）。
         stream << document.dump(2, ' ', false, json::error_handler_t::replace) << '\n';
+        // バッファの最終書き込み・closeの失敗も、元ファイルの差し替え前に検出する。
+        stream.close();
         if (!stream.good()) {
             TG_LOG_ERROR("ファイルの書き込みに失敗しました: %s", ToUtf8Portable(tempPath).c_str());
             return false;

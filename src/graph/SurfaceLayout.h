@@ -117,6 +117,8 @@ bool ExtractLayerMaterials(SurfaceLayoutDocument& document, std::string& error);
 SurfaceLayoutDocument ResolveLayerMaterials(const SurfaceLayoutDocument& document);
 SurfacePreset MaterialPreviewPreset(const LayerMaterial& material);
 SurfaceId PresetLayerMaterial(const SurfaceLayoutDocument& document, SurfaceId preset);
+// 断面・公開値のIDと区間の参照を一緒に複製する。ID不足では変更しない。
+bool CloneSurfacePresetForSpan(SurfaceLayoutDocument& document, SurfaceSpan& span);
 bool AssignLayerMaterial(SurfaceLayoutDocument& document, SurfaceSpan& span, SurfaceId material);
 
 // 参照・区間・寸法を検査する。シーングラフやGPUには依存しない。

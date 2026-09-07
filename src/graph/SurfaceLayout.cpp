@@ -47,6 +47,23 @@ SurfaceId PresetLayerMaterial(const SurfaceLayoutDocument& document, SurfaceId i
     const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == id; });
     return found == document.presets.end() ? 0 : found->layerMaterial;
 }
+bool CloneSurfacePresetForSpan(SurfaceLayoutDocument& document, SurfaceSpan& span) {
+    const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == span.preset; });
+    if (found == document.presets.end()) return false;
+    auto preset = *found;
+    const uint64_t needed = 1 + preset.section.size() + preset.parameters.size();
+    if (!document.nextId || uint64_t(document.nextId) + needed > std::numeric_limits<SurfaceId>::max()) return false;
+    preset.id = document.AllocateId();
+    for (auto& point : preset.section) point.id = document.AllocateId();
+    for (auto& parameter : preset.parameters) {
+        const auto old = parameter.id;
+        parameter.id = document.AllocateId();
+        for (auto& value : span.parameters) if (value.parameter == old) value.parameter = parameter.id;
+    }
+    span.preset = preset.id;
+    document.presets.push_back(std::move(preset));
+    return true;
+}
 bool AssignLayerMaterial(SurfaceLayoutDocument& document, SurfaceSpan& span, SurfaceId material) {
     const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == span.preset; });
     if (found == document.presets.end() || found->layerMaterial == material ||
@@ -56,20 +73,8 @@ bool AssignLayerMaterial(SurfaceLayoutDocument& document, SurfaceSpan& span, Sur
     for (const auto& layout : document.layouts) for (const auto& band : layout.bands)
         for (const auto& candidate : band.spans) uses += candidate.preset == span.preset;
     if (uses == 1) { found->layerMaterial = material; return true; }
-    auto preset = *found;
-    const uint64_t needed = 1 + preset.section.size() + preset.parameters.size();
-    if (!document.nextId || uint64_t(document.nextId) + needed > std::numeric_limits<SurfaceId>::max()) return false;
-    preset.id = document.AllocateId();
-    if (!preset.id) return false;
-    for (auto& point : preset.section) { point.id = document.AllocateId(); if (!point.id) return false; }
-    for (auto& parameter : preset.parameters) {
-        const auto old = parameter.id;
-        parameter.id = document.AllocateId();
-        for (auto& value : span.parameters) if (value.parameter == old) value.parameter = parameter.id;
-    }
-    preset.layerMaterial = material;
-    span.preset = preset.id;
-    document.presets.push_back(std::move(preset));
+    if (!CloneSurfacePresetForSpan(document, span)) return false;
+    document.presets.back().layerMaterial = material;
     return true;
 }
 bool ValidateSurfaceLayoutRoads(const SurfaceLayoutDocument& document, const NodeGraph& graph, std::string& error) {

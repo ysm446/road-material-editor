@@ -1,5 +1,7 @@
 #include "app/UndoHistory.h"
 
+#include <utility>
+
 namespace tg {
 
 void UndoHistory::Push(const DocumentSnapshot& before, uint32_t editId) {
@@ -21,7 +23,7 @@ void UndoHistory::Push(const DocumentSnapshot& before, uint32_t editId) {
 }
 
 DocumentSnapshot UndoHistory::Undo(const DocumentSnapshot& current) {
-    DocumentSnapshot restored = m_undo.back();
+    DocumentSnapshot restored = std::move(m_undo.back());
     m_undo.pop_back();
     m_redo.push_back(current);
     // 戻した直後の編集が、直前のドラッグと同じ段にまとめられないようにする。
@@ -30,7 +32,7 @@ DocumentSnapshot UndoHistory::Undo(const DocumentSnapshot& current) {
 }
 
 DocumentSnapshot UndoHistory::Redo(const DocumentSnapshot& current) {
-    DocumentSnapshot restored = m_redo.back();
+    DocumentSnapshot restored = std::move(m_redo.back());
     m_redo.pop_back();
     m_undo.push_back(current);
     m_lastEditId = 0;

@@ -70,7 +70,7 @@ UploadAllocation UploadRing::Allocate(uint64_t size, uint64_t alignment) {
 
     // アライメントはバッファ先頭からの絶対オフセット（= GPU 仮想アドレス）に対して満たす。
     const uint64_t alignedOffset = AlignUp(m_frameBase + m_offset, alignment) - m_frameBase;
-    if (alignedOffset + size > m_bytesPerFrame) {
+    if (alignedOffset > m_bytesPerFrame || size > m_bytesPerFrame - alignedOffset) {
         if (!m_overflowReported) {
             const uint64_t remaining =
                 (alignedOffset < m_bytesPerFrame) ? m_bytesPerFrame - alignedOffset : 0;

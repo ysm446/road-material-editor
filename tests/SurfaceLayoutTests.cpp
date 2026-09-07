@@ -52,6 +52,30 @@ void RunSurfaceLayoutTests() {
     document.layouts.push_back(layout);
     std::string error;
     Check(graph::ValidateSurfaceLayouts(document, error), "道路3種・沿道3種の独立した区間列を保持できる");
+    {
+        auto cloned = document;
+        Check(graph::ExtractLayerMaterials(cloned, error), "複製検証用の独立材質を用意する");
+        const auto original = io::WriteSurfaceLayouts(cloned);
+        auto& cloneBand = cloned.layouts[0].bands[0];
+        const auto parameterId = cloneBand.spans[0].parameters[0].parameter;
+        Check(graph::DuplicateSurfacePreset(cloned, cloneBand, 0) &&
+              cloneBand.spans[0].parameters[0].parameter != parameterId &&
+              cloneBand.spans[0].parameters[0].parameter == cloned.presets.back().parameters[0].id &&
+              cloneBand.spans[0].parameters[0].startValue == 0.2f &&
+              cloneBand.spans[0].parameters[0].endValue == 0.8f &&
+              graph::ValidateSurfaceLayouts(cloned, error), "複製は公開値の始終端値を維持して参照IDを更新する");
+        Check(io::WriteSurfaceLayouts(cloned)["presets"][0] == original["presets"][0],
+              "複製元のプリセットを変更しない");
+        for (const graph::SurfaceId nextId : {graph::SurfaceId{0}, std::numeric_limits<graph::SurfaceId>::max() - 2}) {
+            auto exhausted = document;
+            Check(graph::ExtractLayerMaterials(exhausted, error), "ID不足検証用の独立材質を用意する");
+            exhausted.nextId = nextId;
+            const auto before = io::WriteSurfaceLayouts(exhausted);
+            Check(!graph::DuplicateSurfacePreset(exhausted, exhausted.layouts[0].bands[0], 0) &&
+                  exhausted.nextId == nextId && io::WriteSurfaceLayouts(exhausted) == before,
+                  "不正な次ID・ID不足ではプリセットも区間参照も変更しない");
+        }
+    }
     graph::NodeGraph sceneGraph;
     Check(!graph::ValidateSurfaceLayoutRoads(document, sceneGraph, error), "存在しないRoad参照を保存・読込前に拒否する");
     auto linked = document;
@@ -264,6 +288,15 @@ void RunSurfaceLayoutTests() {
     auto* retainedRoad = graph::FindRoadBand(retained, roadId);
     const auto bandId = retainedRoad->id;
     retainedRoad->spans.clear();
+    {
+        auto lastIds = retained;
+        lastIds.nextId = std::numeric_limits<graph::SurfaceId>::max() - 4;
+        Check(graph::CreateRoadLayout(lastIds, sceneGraph, roadId, error) &&
+              lastIds.nextId == std::numeric_limits<graph::SurfaceId>::max() &&
+              graph::FindRoadBand(lastIds, roadId)->id == bandId &&
+              graph::ValidateSurfaceLayouts(lastIds, error),
+              "既存道路帯の再作成はプリセット・断面2点・区間の4IDだけを使う");
+    }
     Check(graph::CompileMeshGraphWithLayouts(sceneGraph, retained).error.empty(), "解除した空の道路帯は元のRoad材質で表示する");
     Check(graph::CreateRoadLayout(retained, sceneGraph, roadId, error) &&
           graph::FindRoadBand(retained, roadId)->id == bandId &&

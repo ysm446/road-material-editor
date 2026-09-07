@@ -3,7 +3,6 @@
 #include "graph/SurfaceBandGeometry.h"
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace tg::graph {
 SurfaceBand* FindRoadBand(SurfaceLayoutDocument& document, GraphId roadId) {
@@ -82,16 +81,20 @@ bool CreateRoadLayout(SurfaceLayoutDocument& document, const NodeGraph& graph, G
         }
         preset.materials.push_back(material);
     }
-    SurfaceBand band;
-    band.id = next.AllocateId(); band.side = SurfaceSide::Road;
     SurfaceSpan span;
     span.id = next.AllocateId(); span.preset = preset.id; span.endMeters = length;
-    band.spans.push_back(span);
-    RoadLayout layout;
-    layout.id = next.AllocateId(); layout.roadNode = roadId; layout.bands.push_back(std::move(band));
     next.presets.push_back(std::move(preset));
-    if (auto* existing = FindRoadBand(next, roadId)) existing->spans = std::move(layout.bands[0].spans);
-    else next.layouts.push_back(std::move(layout));
+    if (auto* existing = FindRoadBand(next, roadId)) {
+        existing->spans = {span};
+    } else {
+        SurfaceBand band;
+        band.id = next.AllocateId(); band.side = SurfaceSide::Road;
+        band.spans.push_back(span);
+        RoadLayout layout;
+        layout.id = next.AllocateId(); layout.roadNode = roadId;
+        layout.bands.push_back(std::move(band));
+        next.layouts.push_back(std::move(layout));
+    }
     if (!ValidateSurfaceLayouts(next, error)) return false;
     document = std::move(next);
     return true;
@@ -163,20 +166,8 @@ bool DuplicateLayerMaterial(SurfaceLayoutDocument& document, SurfaceSpan& span) 
 }
 bool DuplicateSurfacePreset(SurfaceLayoutDocument& document, SurfaceBand& band, size_t index) {
     if (index >= band.spans.size()) return false;
-    auto& span = band.spans[index];
-    const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& preset) { return preset.id == span.preset; });
-    if (found == document.presets.end()) return false;
-    auto preset = *found;
-    const uint64_t needed = 1 + preset.section.size() + preset.parameters.size();
-    if (uint64_t(document.nextId) + needed > std::numeric_limits<SurfaceId>::max()) return false;
-    preset.id = document.AllocateId(); preset.name += " コピー";
-    for (auto& point : preset.section) point.id = document.AllocateId();
-    for (auto& parameter : preset.parameters) {
-        const auto old = parameter.id; parameter.id = document.AllocateId();
-        for (auto& value : span.parameters) if (value.parameter == old) value.parameter = parameter.id;
-    }
-    span.preset = preset.id;
-    document.presets.push_back(std::move(preset));
+    if (!CloneSurfacePresetForSpan(document, band.spans[index])) return false;
+    document.presets.back().name += " コピー";
     return true;
 }
 void EnsureRoadsideTransitions(SurfaceBand& band) {

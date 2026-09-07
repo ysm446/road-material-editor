@@ -1,4 +1,5 @@
 #include "TestSupport.h"
+#include "graph/SurfaceBandGeometry.h"
 #include "graph/SurfaceLayout.h"
 #include "graph/SurfaceLayoutEditing.h"
 #include "graph/SurfaceLayoutEvaluation.h"
@@ -268,5 +269,61 @@ void RunSurfaceLayoutTests() {
     Check(io::WriteSurfaceLayouts(editUndo.surfaceLayouts) == io::WriteSurfaceLayouts(editBefore.surfaceLayouts) &&
           io::WriteSurfaceLayouts(history.Redo(editUndo).surfaceLayouts) == io::WriteSurfaceLayouts(editAfter.surfaceLayouts),
           "区間分割の全IDをUndo・Redoで復元する");
+
+    tests::Section("沿道断面 — 左右・移行・高さ・保存");
+    graph::SurfaceLayoutDocument roadside;
+    Check(graph::CreateRoadsideExample(roadside, sceneGraph, roadId, graph::SurfaceSide::Left, error),
+          "左側に路肩から歩道へ移る記述を作れる");
+    const auto roadsideJson = io::WriteSurfaceLayouts(roadside);
+    Check(!graph::CreateRoadsideExample(roadside, sceneGraph, roadId, graph::SurfaceSide::Left, error) &&
+          io::WriteSurfaceLayouts(roadside) == roadsideJson, "既存の沿道は上書きしない");
+    graph::RoadGeometry bandRoad;
+    graph::EvaluateRoad(sceneGraph, roadId, bandRoad, error);
+    renderer::MeshData bandMesh;
+    Check(graph::BuildSurfaceBandGeometry(bandRoad, roadside, roadside.layouts[0].bands[1], bandMesh, error),
+          "路肩から歩道の連続した断面を生成する");
+    renderer::SceneMesh bandSceneMesh; bandSceneMesh.geometry = bandMesh;
+    renderer::MeshScene bandScene; bandScene.meshes.push_back(bandSceneMesh);
+    Check(renderer::ValidateMeshScene(bandScene), "沿道の頂点・法線・接線・インデックスが有効");
+    if (!bandMesh.vertices.empty()) {
+        Check(std::abs(bandMesh.vertices.front().position.x - bandRoad.surface.vertices[bandRoad.stride - 1].position.x) < 1e-5f &&
+              std::abs(bandMesh.vertices.back().position.y - 0.15f) < 1e-5f,
+              "内端は道路端に一致し、終端の歩道は15 cm上がる");
+        bool hasSlope = false;
+        for (const auto& v : bandMesh.vertices) if (v.uv.x == 1 && v.position.y > 0 && v.position.y < 0.14f) hasSlope = true;
+        Check(hasSlope, "移行区間には中間の高さが存在する");
+    }
+    auto rightSide = roadside;
+    rightSide.layouts[0].bands[1].side = graph::SurfaceSide::Right;
+    renderer::MeshData rightMesh;
+    Check(graph::BuildSurfaceBandGeometry(bandRoad, rightSide, rightSide.layouts[0].bands[1], rightMesh, error),
+          "右側にも同じ断面を生成できる");
+    if (!rightMesh.vertices.empty() && rightMesh.vertices.size() == bandMesh.vertices.size()) {
+        bool mirrored = true;
+        for (size_t i = 0; i < rightMesh.vertices.size(); ++i)
+            mirrored &= std::abs(rightMesh.vertices[i].position.x + bandMesh.vertices[i].position.x) < 1e-5f &&
+                        std::abs(rightMesh.vertices[i].normal.y - bandMesh.vertices[i].normal.y) < 1e-5f;
+        Check(mirrored, "左右を反転しても面の表裏は反転しない");
+    }
+    auto bentRoad = bandRoad;
+    for (auto& v : bentRoad.surface.vertices) {
+        v.position.x += std::sin(v.position.z * 0.05f);
+        v.position.y += v.position.z * 0.02f;
+    }
+    Check(graph::BuildSurfaceBandGeometry(bentRoad, roadside, roadside.layouts[0].bands[1], rightMesh, error),
+          "曲がりと縦断高さを持つ道路格子に沿道が追従する");
+    if (!rightMesh.vertices.empty()) Check(std::abs(rightMesh.vertices.back().position.y - 1.15f) < 1e-5f,
+          "沿道の高さは道路の縦断高さを基準にする");
+    auto brokenSide = roadside;
+    brokenSide.layouts[0].bands[1].spans[0].blendOutMeters = 0;
+    brokenSide.layouts[0].bands[1].spans[1].blendInMeters = 0;
+    const auto retainedCount = rightMesh.vertices.size();
+    Check(!graph::BuildSurfaceBandGeometry(bandRoad, brokenSide, brokenSide.layouts[0].bands[1], rightMesh, error) &&
+          !error.empty() && rightMesh.vertices.size() == retainedCount, "移行なしの異種断面は拒否し、出力を保持する");
+    graph::SurfaceLayoutDocument roadsideReloaded;
+    Check(io::ReadSurfaceLayouts(roadsideJson, roadsideReloaded, error) &&
+          graph::BuildSurfaceBandGeometry(bandRoad, roadsideReloaded, roadsideReloaded.layouts[0].bands[1], rightMesh, error) &&
+          rightMesh.vertices.size() == bandMesh.vertices.size() && rightMesh.indices == bandMesh.indices,
+          "保存した仮沿道から同じ分割の形状を再生成する");
 
 }

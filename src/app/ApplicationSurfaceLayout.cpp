@@ -1,4 +1,5 @@
 #include "app/Application.h"
+#include "graph/SurfaceBandGeometry.h"
 #include "app/RoadMaskUi.h"
 #include "app/ApplicationUiHelpers.h"
 #include "graph/SurfaceLayoutEditing.h"
@@ -12,6 +13,60 @@
 
 namespace tg {
 bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
+    ui::SectionHeader("沿道形状（試作）");
+    if (ui::BeginPropertyTable("surfaceBandPreviewRows")) {
+        if (ui::PropertyBool("形状を表示", &m_previewSurfaceBands, false,
+            "沿道断面を単色で確認する。材質・ハイト変位の接続はまだ反映しない")) m_graph.MarkDirty();
+        const char* sides[] = {"左", "右"};
+        ui::PropertyCombo("配置する側", &m_surfaceBandSide, sides, 2, 0, "道路の進行方向に向かっての左右");
+        ui::EndPropertyTable();
+    }
+    const auto side = m_surfaceBandSide == 0 ? graph::SurfaceSide::Left : graph::SurfaceSide::Right;
+    bool exists = false;
+    for (const auto& layout : m_surfaceLayouts.layouts) if (layout.roadNode == roadId)
+        for (const auto& candidate : layout.bands) if (candidate.side == side) exists = true;
+    if (!exists) {
+        if (ui::Button("路肩→歩道を作る", ui::kWideButtonWidth)) {
+            std::string error;
+            if (graph::CreateRoadsideExample(m_surfaceLayouts, m_graph, roadId, side, error)) {
+                m_previewSurfaceBands = true;
+                return true;
+            }
+            TG_LOG_ERROR("沿道形状: %s", error.c_str());
+        }
+    } else {
+        auto roadsideEdit = m_surfaceLayouts;
+        for (auto& layout : roadsideEdit.layouts) if (layout.roadNode == roadId) {
+            for (auto& candidate : layout.bands) if (candidate.side == side && candidate.spans.size() == 2) {
+                auto& first = candidate.spans[0]; auto& second = candidate.spans[1];
+                const float length = second.endMeters;
+                bool changed = false;
+                if (length > 0.1f && ui::BeginPropertyTable("roadsideSpanRows")) {
+                    if (ui::PropertyFloat("切替位置", &first.endMeters, 0.05f, length - 0.05f, length * 0.5f,
+                        "道路の始点から、路肩と歩道が切り替わる位置", "%.2f m")) {
+                        second.startMeters = first.endMeters;
+                        graph::ClampSpanBlends(first); graph::ClampSpanBlends(second); changed = true;
+                    }
+                    float transition = std::min(first.blendOutMeters, second.blendInMeters);
+                    const float limit = std::min(first.endMeters - first.startMeters, second.endMeters - second.startMeters) * 0.5f;
+                    if (limit >= 0.01f && ui::PropertyFloat("移行距離", &transition, 0.01f, limit, std::min(2.0f, limit),
+                        "切替位置の前後それぞれで断面を変える距離", "%.2f m")) {
+                        first.blendOutMeters = second.blendInMeters = transition; changed = true;
+                    }
+                    ui::EndPropertyTable();
+                }
+                if (changed) {
+                    graph::RoadGeometry road; renderer::MeshData mesh; std::string error;
+                    if (graph::EvaluateRoad(m_graph, roadId, road, error) &&
+                        graph::BuildSurfaceBandGeometry(road, roadsideEdit, candidate, mesh, error)) {
+                        m_surfaceLayouts = std::move(roadsideEdit); return true;
+                    }
+                    TG_LOG_ERROR("沿道形状: %s", error.c_str());
+                }
+            }
+        }
+        ui::HintText("単色の形状試作。材質・変位の接続は後続です");
+    }
     ui::SectionHeader("路面区間");
     auto edited = m_surfaceLayouts;
     auto* band = graph::FindRoadBand(edited, roadId);

@@ -102,6 +102,8 @@ set(tg_sources
     src/graph/Road.cpp
     src/graph/SurfaceLayoutEditing.cpp
     src/graph/SurfaceLayoutEditing.h
+    src/graph/SurfaceBandGeometry.cpp
+    src/graph/SurfaceBandGeometry.h
     src/graph/SurfaceLayoutEvaluation.cpp
     src/graph/SurfaceLayoutEvaluation.h
     src/graph/SurfaceLayout.cpp
@@ -283,6 +285,8 @@ add_executable(road_editor_tests
     tests/ConnectionPrototypeTests.cpp
     src/graph/SurfaceLayoutEditing.cpp
     src/graph/SurfaceLayoutEditing.h
+    src/graph/SurfaceBandGeometry.cpp
+    src/graph/SurfaceBandGeometry.h
     src/graph/SurfaceLayoutEvaluation.cpp
     src/graph/SurfaceLayoutEvaluation.h
     src/graph/SurfaceLayout.cpp

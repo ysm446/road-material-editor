@@ -12,6 +12,7 @@
 // このプロジェクト独自（サーフェス / シェイプ / 水面 / 出力）。
 
 #include "app/Application.h"
+#include "graph/SurfaceBandGeometry.h"
 #include "app/RoadMaskUi.h"
 
 #include "app/ApplicationUiHelpers.h"
@@ -305,6 +306,33 @@ void Application::SyncMeshGraph() {
         ? graph::CompileConnectionPrototype(m_graph, m_options.prototypeRoad, m_options.prototypeGravel,
                                             m_options.prototypeSidewalk, m_options.prototypeDisplacement)
         : graph::CompileMeshGraphWithLayouts(m_graph, m_surfaceLayouts, previewMeshNode);
+    if (m_previewSurfaceBands) {
+        for (const auto& layout : m_surfaceLayouts.layouts) {
+            if (std::find(compiled.meshSources.begin(), compiled.meshSources.end(), layout.roadNode) == compiled.meshSources.end()) continue;
+            graph::RoadGeometry road;
+            std::string error;
+            if (!graph::EvaluateRoad(m_graph, layout.roadNode, road, error)) continue;
+            for (const auto& band : layout.bands) {
+                if (band.side == graph::SurfaceSide::Road || band.spans.empty()) continue;
+                if (std::count_if(layout.bands.begin(), layout.bands.end(), [&](const auto& other) {
+                    return other.side == band.side && !other.spans.empty();
+                }) > 1) {
+                    if (!compiled.error.empty()) compiled.error += " / ";
+                    compiled.error += "沿道形状の試作は左右それぞれ1帯に対応します";
+                    continue;
+                }
+                renderer::SceneMesh mesh;
+                if (graph::BuildSurfaceBandGeometry(road, m_surfaceLayouts, band, mesh.geometry, error)) {
+                    mesh.material.baseColor = {0.45f, 0.45f, 0.45f};
+                    mesh.material.roughness = 0.85f;
+                    compiled.scene.meshes.push_back(std::move(mesh));
+                } else {
+                    if (!compiled.error.empty()) compiled.error += " / ";
+                    compiled.error += error;
+                }
+            }
+        }
+    }
     if (m_options.prototypeRoad != 0 || m_options.surfaceLayoutRoad != 0 || m_options.measurePreview) {
         const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - compileStart).count();
         size_t vertices = 0, triangles = 0, maskBytes = 0;

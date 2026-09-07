@@ -20,7 +20,7 @@ bool Application::DrawSurfaceLayoutSettings(graph::GraphId roadId) {
         const char* sides[] = {"左", "右"};
         if (ui::PropertyCombo("配置する側", &m_surfaceBandSide, sides, 2, 0, "編集する沿道の左右。横接続は左右両方へ適用する")) m_graph.MarkDirty();
         if (ui::PropertyBool("横接続を試す", &m_connectSurfaceBands, false,
-            "道路1種類と左右それぞれ最大2種類の沿道を境界で混ぜる。形状表示もオンにする。凹凸は「変位もつなぐ」で有効にする")) {
+            "道路最大3種類と左右それぞれ最大2種類の沿道を境界で混ぜる。形状表示もオンにする。凹凸は「変位もつなぐ」で有効にする")) {
             if (m_connectSurfaceBands) m_previewSurfaceBands = true;
             m_graph.MarkDirty();
         }

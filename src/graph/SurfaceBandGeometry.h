@@ -2,6 +2,11 @@
 #include "graph/SurfaceLayoutEvaluation.h"
 
 namespace tg::graph {
+// 道路最大3構成と左右各2構成を接続。存在しない側はID 0を渡す。
+bool ConnectSurfaceLayoutBands(CompiledMeshGraph& scene, const NodeGraph& graph,
+                               const SurfaceLayoutDocument& document, GraphId roadId,
+                               SurfaceId leftBand, SurfaceId rightBand, std::string& error,
+                               bool enableDisplacement = false);
 // 左右各1帯を一括接続する。片側でも失敗した場合は元のシーンを保持する。
 bool ConnectBothSurfaceBands(CompiledMeshGraph& scene, const NodeGraph& graph,
                              const SurfaceLayoutDocument& document, GraphId roadId,

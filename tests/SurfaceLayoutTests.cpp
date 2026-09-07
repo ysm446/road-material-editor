@@ -489,6 +489,41 @@ void RunSurfaceLayoutTests() {
           failedBoth.scene.meshes.size() == beforeBoth && failedBoth.scene.meshes[0].connectionSources[0] == -1,
           "左右の指定が不正なら途中の接続を残さない");
 
+    tests::Section("道路の3プリセットと沿道の同時接続");
+    auto multiDocument = layered;
+    auto& multiBands = multiDocument.layouts[0].bands;
+    std::erase_if(multiBands, [](const auto& band) { return band.side != graph::SurfaceSide::Road; });
+    Check(graph::CreateRoadsideExample(multiDocument, sceneGraph, roadId, graph::SurfaceSide::Left, error), "複数路面の左沿道を作る");
+    const auto multiLeft = multiDocument.layouts[0].bands.back().id;
+    Check(graph::CreateRoadsideExample(multiDocument, sceneGraph, roadId, graph::SurfaceSide::Right, error), "複数路面の右沿道を作る");
+    const auto multiRight = multiDocument.layouts[0].bands.back().id;
+    const auto originalMulti = graph::CompileMeshGraphWithLayouts(sceneGraph, multiDocument);
+    for (bool bothSides : {false, true}) {
+        auto connectedMulti = originalMulti;
+        Check(graph::ConnectSurfaceLayoutBands(connectedMulti, sceneGraph, multiDocument, roadId,
+              bothSides ? multiLeft : 0, multiRight, error, true), "道路3構成を右片側・左右両側へ接続する");
+        const auto& multiRoad = connectedMulti.scene.meshes[0];
+        if (multiRoad.connectionRoadMixSource >= 0) {
+            Check(renderer::ValidateMeshScene(connectedMulti.scene), "道路区間付きの全接続参照が有効");
+            Check(connectedMulti.scene.meshes[multiRoad.connectionRoadMixSource].roadMask.rgba == originalMulti.scene.meshes[0].roadMask.rgba,
+                  "道路の進行方向の混合率を変えずに保持する");
+            const auto& originalContext = originalMulti.scene.meshes[originalMulti.scene.meshes[0].connectionSources[1]];
+            const auto& connectedContext = connectedMulti.scene.meshes[multiRoad.connectionRoadSources[0]];
+            Check(connectedContext.layerUvRepeat == originalContext.layerUvRepeat &&
+                  connectedContext.displacementMeters == originalContext.displacementMeters,
+                  "追加した道路プリセットのUVと変位量を維持する");
+            if (!bothSides) {
+                bool emptyExtra = true;
+                for (size_t i = 0; i < multiRoad.roadMask.rgba.size(); i += 4)
+                    emptyExtra &= multiRoad.roadMask.rgba[i + 2] == 0 && multiRoad.roadMask.rgba[i + 3] == 0;
+                Check(emptyExtra, "片側接続の未使用マスクを道路の被覆に混ぜない");
+            }
+            auto brokenMix = connectedMulti.scene;
+            brokenMix.meshes[0].connectionRoadSources[1] = -1;
+            Check(!renderer::ValidateMeshScene(brokenMix), "不足した道路プリセット参照を拒否する");
+        } else Check(false, "道路の区間混合参照を生成する");
+    }
+
     tests::Section("横接続の変位 — 共通の高さ基準と白線UV");
     auto displacedScene = graph::CompileMeshGraph(axisGraph);
     const auto oldRoad = displacedScene.scene.meshes[0];

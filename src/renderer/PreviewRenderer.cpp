@@ -158,9 +158,10 @@ struct MeshConstants {
     uint32_t connectionPrototype;
     uint32_t connectionContextCount;
     float connectionHeightFade[2];
-    LayerContextConstants connectionContexts[5];
+    LayerContextConstants connectionContexts[7];
     float connectionSecondHeightFade[2];
-    float connectionEndPad[2];
+    uint32_t connectionRoadMixIndex;
+    uint32_t connectionEndPad;
 };
 
 // 道路空間マスク（RGBA8）を GPU へ上げる。ミップは持たない（低解像度でぼかして読む）。
@@ -934,12 +935,23 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             drawConstants.connectionHeightFade[0] = connection.connectionHeightFade.x;
             drawConstants.connectionHeightFade[1] = connection.connectionHeightFade.y;
             if (connection.connectionSources[0] >= 0) {
-                drawConstants.connectionContextCount = connection.connectionExtraSources[0] >= 0 ? 5 : 3;
+                drawConstants.connectionContextCount = connection.connectionRoadMixSource >= 0 ? 7 : connection.connectionExtraSources[0] >= 0 ? 5 : 3;
+                if (connection.connectionRoadMixSource >= 0) {
+                    const auto& mask = m_sceneMaterials[connection.connectionRoadMixSource].roadMask;
+                    if (!mask.IsValid()) continue;
+                    drawConstants.connectionRoadMixIndex = mask.SrvIndex();
+                }
                 drawConstants.connectionSecondHeightFade[0] = connection.connectionSecondHeightFade.x;
                 drawConstants.connectionSecondHeightFade[1] = connection.connectionSecondHeightFade.y;
                 bool ready = true;
                 for (size_t context = 0; context < drawConstants.connectionContextCount; ++context) {
-                    const size_t index = static_cast<size_t>((context < 3 ? connection.connectionSources[context] : connection.connectionExtraSources[context - 3]));
+                    const int contextSource = context < 3 ? connection.connectionSources[context] : context < 5
+                        ? connection.connectionExtraSources[context - 3] : connection.connectionRoadSources[context - 5];
+                    const size_t index = static_cast<size_t>(contextSource >= 0 ? contextSource : connection.connectionSources[0]);
+                    const float acrossSign = context < 3 ? connection.connectionAcrossSigns[context] : context < 5
+                        ? connection.connectionExtraSigns[context - 3] : connection.connectionAcrossSigns[0];
+                    const auto origin = context < 3 ? connection.connectionOrigins[context] : context < 5
+                        ? connection.connectionExtraOrigins[context - 3] : connection.connectionOrigins[0];
                     const auto& cpu = m_meshScene.meshes[index];
                     const auto& gpu = m_sceneMaterials[index];
                     auto& c = drawConstants.connectionContexts[context];
@@ -967,13 +979,13 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                     c.layerBlendRange = cpu.layerBlendRange;
                     // bit0: UV軸交換、bit1: 素材の幅反転、bit2: 描画接線に対する法線X反転。
                     c.roadUvAlongU = (cpu.roadUvAlongU ? 1u : 0u) |
-                        ((context < 3 ? connection.connectionAcrossSigns[context] : connection.connectionExtraSigns[context - 3]) < 0 ? 2u : 0u) |
-                        ((context < 3 ? connection.connectionAcrossSigns[context] : connection.connectionExtraSigns[context - 3]) * connection.connectionFrameSign < 0 ? 4u : 0u);
+                        (acrossSign < 0 ? 2u : 0u) |
+                        (acrossSign * connection.connectionFrameSign < 0 ? 4u : 0u);
                     c.displacementMeters = cpu.displacementMeters;
                     c.roadMaskScale[0] = cpu.roadWidthMeters > 0 ? 1.0f / cpu.roadWidthMeters : 0;
                     c.roadMaskScale[1] = cpu.roadLengthMeters > 0 ? 1.0f / cpu.roadLengthMeters : 0;
-                    c.origin[0] = (context < 3 ? connection.connectionOrigins[context] : connection.connectionExtraOrigins[context - 3]).x;
-                    c.origin[1] = (context < 3 ? connection.connectionOrigins[context] : connection.connectionExtraOrigins[context - 3]).y;
+                    c.origin[0] = origin.x;
+                    c.origin[1] = origin.y;
                 }
                 // 評価途中の欠落した材質を混ぜず、全入力が揃ったフレームから描く。
                 if (!ready) continue;

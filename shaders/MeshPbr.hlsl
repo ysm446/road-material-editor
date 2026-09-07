@@ -120,9 +120,10 @@ struct MeshConstants
     uint connectionPrototype;
     uint connectionContextCount;
     float2 connectionHeightFade;
-    LayerContext connectionContexts[5];
+    LayerContext connectionContexts[7];
     float2 connectionSecondHeightFade;
-    float2 connectionEndPad;
+    uint connectionRoadMixIndex;
+    uint connectionEndPad;
 };
 
 
@@ -275,7 +276,7 @@ float LayerHeightLevel(LayerContext c, uint slot, float2 uv)
 }
 
 // プリセット内の合成と、プリセット間の被覆を別々に評価する。
-struct ConnectionMix { float values[5]; };
+struct ConnectionMix { float values[7]; };
 ConnectionMix ConnectionWeights(float2 meters)
 {
     Texture2D<float4> mask = ResourceDescriptorHeap[g_mesh.roadMaskIndex];
@@ -283,9 +284,19 @@ ConnectionMix ConnectionWeights(float2 meters)
     if (g_mesh.connectionContextCount < 5) coverage.ba = 0;
     const float base = saturate(1 - dot(coverage, 1.0f));
     const float total = max(base + dot(coverage, 1.0f), 1e-6f);
-    ConnectionMix result;
+    ConnectionMix result = (ConnectionMix)0;
     result.values[0] = base / total;
     [unroll] for (uint i = 0; i < 4; ++i) result.values[i + 1] = coverage[i] / total;
+    if (g_mesh.connectionContextCount == 7)
+    {
+        Texture2D<float4> roadMix = ResourceDescriptorHeap[g_mesh.connectionRoadMixIndex];
+        const float2 mix = saturate(roadMix.SampleLevel(g_samplerLinearClamp, float2(0.5f, meters.y * g_mesh.roadMaskScale.y), 0).rg);
+        const float3 roadWeights = float3(saturate(1 - mix.x - mix.y), mix);
+        const float remaining = result.values[0] / max(dot(roadWeights, 1.0f), 1e-6f);
+        result.values[0] = remaining * roadWeights.x;
+        result.values[5] = remaining * roadWeights.y;
+        result.values[6] = remaining * roadWeights.z;
+    }
     return result;
 }
 

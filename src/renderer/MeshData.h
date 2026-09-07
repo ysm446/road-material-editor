@@ -48,6 +48,9 @@ struct SceneMesh {
     std::array<DirectX::XMFLOAT2, 2> connectionExtraOrigins{};
     std::array<float, 2> connectionExtraSigns{1, 1};
     DirectX::XMFLOAT2 connectionSecondHeightFade{};
+    // 道路の区間混合。第1構成はconnectionSources[0]、残り2構成を追加する。
+    std::array<int, 2> connectionRoadSources{-1, -1};
+    int connectionRoadMixSource = -1;
     // 接続すべき二辺の頂点。位置の一致から逆算せず、生成時の隣接関係を記録する。
     std::vector<std::array<uint32_t, 4>> connectionSeams;
     MaterialSettings material;

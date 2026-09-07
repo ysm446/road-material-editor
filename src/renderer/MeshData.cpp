@@ -22,6 +22,14 @@ bool ValidateMeshScene(const MeshScene& scene) {
                 !scene.meshes[static_cast<size_t>(source)].materialOnly)) return false;
         }
         const bool hasContexts = mesh.connectionSources[0] >= 0;
+        const bool hasRoadMix = mesh.connectionRoadMixSource >= 0;
+        if (mesh.connectionRoadMixSource < -1 || (hasRoadMix && (!hasContexts ||
+            static_cast<size_t>(mesh.connectionRoadMixSource) >= scene.meshes.size() ||
+            !scene.meshes[mesh.connectionRoadMixSource].materialOnly ||
+            !scene.meshes[mesh.connectionRoadMixSource].roadMask.IsValid()))) return false;
+        for (int source : mesh.connectionRoadSources)
+            if ((source >= 0) != hasRoadMix || source < -1 || (hasRoadMix &&
+                (static_cast<size_t>(source) >= scene.meshes.size() || !scene.meshes[source].materialOnly))) return false;
         const bool hasExtra = mesh.connectionExtraSources[0] >= 0;
         if (!std::isfinite(mesh.connectionSecondHeightFade.x) || !std::isfinite(mesh.connectionSecondHeightFade.y) || mesh.connectionSecondHeightFade.y < 0) return false;
         for (size_t i = 0; i < 2; ++i) {

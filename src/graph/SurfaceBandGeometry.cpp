@@ -471,4 +471,54 @@ bool ConnectBothSurfaceBands(CompiledMeshGraph& scene, const NodeGraph& graph,
     if (!renderer::ValidateMeshScene(next.scene)) { error = "左右接続の描画データが不正です"; return false; }
     scene = std::move(next); error.clear(); return true;
 }
+bool ConnectSurfaceLayoutBands(CompiledMeshGraph& scene, const NodeGraph& graph,
+                               const SurfaceLayoutDocument& document, GraphId roadId,
+                               SurfaceId leftBand, SurfaceId rightBand, std::string& error,
+                               bool enableDisplacement) {
+    const auto source = std::find(scene.meshSources.begin(), scene.meshSources.end(), roadId);
+    if (source == scene.meshSources.end() || !renderer::ValidateMeshScene(scene.scene)) {
+        error = "接続先の道路が不正です"; return false;
+    }
+    const size_t roadIndex = source - scene.meshSources.begin();
+    if (roadIndex >= scene.scene.meshes.size()) { error = "道路の描画参照が不正です"; return false; }
+    const auto original = scene.scene.meshes[roadIndex];
+    const bool multiple = original.connectionSources[0] >= 0 &&
+        (original.connectionSources[0] != original.connectionSources[1] || original.connectionSources[0] != original.connectionSources[2]);
+    auto next = scene;
+    if (multiple) {
+        if (original.roadMask.width != 1 || original.connectionExtraSources[0] >= 0 || original.connectionRoadMixSource >= 0) {
+            error = "道路の区間混合には未接続の道路プリセットが必要です"; return false;
+        }
+        next.scene.meshes[roadIndex].connectionSources.fill(original.connectionSources[0]);
+    }
+    const bool connected = leftBand && rightBand
+        ? ConnectBothSurfaceBands(next, graph, document, roadId, leftBand, rightBand, error, enableDisplacement)
+        : ConnectSurfaceBandMaterials(next, graph, document, roadId, leftBand ? leftBand : rightBand, error, enableDisplacement);
+    if (!connected) return false;
+    if (multiple) {
+        const int firstContext = next.scene.meshes[roadIndex].connectionSources[0];
+        const int extraStart = static_cast<int>(next.scene.meshes.size());
+        for (size_t i = 1; i < 3; ++i) {
+            auto context = scene.scene.meshes[original.connectionSources[i]];
+            if (!enableDisplacement) context.displacementMeters = 0;
+            next.scene.meshes.push_back(std::move(context)); next.meshSources.push_back(0);
+        }
+        renderer::SceneMesh mix;
+        mix.materialOnly = true; mix.materialStack.emplace();
+        mix.materialStack->Layers() = {compositor::MaterialStack::MakeBaseLayer()};
+        mix.roadMask = original.roadMask;
+        const int mixSource = static_cast<int>(next.scene.meshes.size());
+        next.scene.meshes.push_back(std::move(mix)); next.meshSources.push_back(0);
+        for (auto& mesh : next.scene.meshes) {
+            if (mesh.materialOnly || mesh.connectionSources[0] != firstContext) continue;
+            mesh.connectionRoadSources = {extraStart, extraStart + 1};
+            mesh.connectionRoadMixSource = mixSource;
+            // 片側接続の旧マスクのA=255は被覆ではない。追加の左右成分は0にする。
+            if (mesh.connectionExtraSources[0] < 0)
+                for (size_t i = 0; i < mesh.roadMask.rgba.size(); i += 4) mesh.roadMask.rgba[i + 2] = mesh.roadMask.rgba[i + 3] = 0;
+        }
+    }
+    if (!renderer::ValidateMeshScene(next.scene)) { error = "道路区間と沿道の接続データが不正です"; return false; }
+    scene = std::move(next); error.clear(); return true;
+}
 }  // namespace tg::graph

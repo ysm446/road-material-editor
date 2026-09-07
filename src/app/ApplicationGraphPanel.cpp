@@ -319,7 +319,7 @@ void Application::SyncMeshGraph() {
             const bool connectBoth = m_connectSurfaceBands && leftCount == 1 && rightCount == 1;
             if (connectBoth) {
                 std::string error;
-                if (graph::ConnectBothSurfaceBands(compiled, m_graph, m_surfaceLayouts, layout.roadNode,
+                if (graph::ConnectSurfaceLayoutBands(compiled, m_graph, m_surfaceLayouts, layout.roadNode,
                                                   leftBand, rightBand, error, m_displaceConnectedBands)) continue;
                 if (!compiled.error.empty()) compiled.error += " / ";
                 compiled.error += error;
@@ -340,7 +340,8 @@ void Application::SyncMeshGraph() {
                 });
                 if (m_connectSurfaceBands && !connectBoth && (band.side == selectedSide || !hasSelectedSide) && preview.error.empty()) {
                     std::string error;
-                    if (graph::ConnectSurfaceBandMaterials(compiled, m_graph, m_surfaceLayouts, layout.roadNode, band.id, error, m_displaceConnectedBands)) continue;
+                    if (graph::ConnectSurfaceLayoutBands(compiled, m_graph, m_surfaceLayouts, layout.roadNode,
+                        band.side == graph::SurfaceSide::Left ? band.id : 0, band.side == graph::SurfaceSide::Right ? band.id : 0, error, m_displaceConnectedBands)) continue;
                     if (!compiled.error.empty()) compiled.error += " / ";
                     compiled.error += error;
                 }

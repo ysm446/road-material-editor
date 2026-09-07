@@ -932,7 +932,6 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.material.baseColor = {0.85f, 0.85f, 0.82f};
                 mesh.material.roughness = 0.6f;
                 mesh.roadMetersPerUv = marking->uvRepeatMeters;
-                mesh.roadGridOverlay = false;
                 // 道路面と同じハイト・同じ量で押し出し、変位後の路面に貼り付ける。
                 mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
                 mesh.displacementSource = chain.roadIndex;
@@ -956,7 +955,6 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.material.baseColor = {0.6f, 0.6f, 0.6f};
                 mesh.material.roughness = 0.7f;
                 mesh.roadMetersPerUv = decal->uvRepeatMeters;
-                mesh.roadGridOverlay = false;
                 mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
                 mesh.displacementSource = chain.roadIndex;
                 mesh.useBlendMode = true;
@@ -976,7 +974,6 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.material.baseColor = {0.2f, 0.2f, 0.2f};
                 mesh.material.roughness = 0.8f;
                 mesh.roadMetersPerUv = crack->uvRepeatMeters;
-                mesh.roadGridOverlay = false;
                 mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
                 mesh.displacementSource = chain.roadIndex;
                 mesh.useBlendMode = true;

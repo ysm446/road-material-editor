@@ -155,7 +155,7 @@ void Application::DrawViewportOverlay(const ImVec2& viewportMin, const ImVec2& v
         changed |= ImGui::MenuItem("FPS", nullptr, &settings.showFps);
         changed |= ImGui::MenuItem("統計", nullptr, &settings.showStats);
         changed |= ImGui::MenuItem("グリッド（50 m × 50 m / 1 m間隔）", nullptr, &settings.showReferenceGrid);
-        changed |= ImGui::MenuItem("道路の1 mグリッド", nullptr, &settings.showRoadGrid);
+        changed |= ImGui::MenuItem("ワイヤーフレーム（分割前）", nullptr, &settings.showRoadGrid);
         changed |= ImGui::MenuItem("UVチェッカー", nullptr, &settings.showUvChecker);
         changed |= ImGui::MenuItem("ワイヤーフレーム（分割後）", nullptr, &settings.showWireframe);
         if (changed) {

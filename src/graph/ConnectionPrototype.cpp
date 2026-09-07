@@ -96,7 +96,6 @@ bool BuildConnectionPrototype(const RoadGeometry& road, const ConnectionPrototyp
     }
     renderer::SceneMesh mesh;
     mesh.roadMetersPerUv = 2.0f;
-    mesh.roadGridOverlay = false;
     mesh.roadLengthMeters = length;
     const float groundWidth = s.shoulderWidth + road.settings.widthMeters;
     // u は断面に沿う距離。垂直面にも幅を与えて UV と接線を縮退させない。

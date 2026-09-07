@@ -375,7 +375,6 @@ CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const Surfac
     mesh.roadMetersPerUv = 1;
     mesh.roadWidthMeters = *std::max_element(arcLengths.begin(), arcLengths.end());
     mesh.roadLengthMeters = road.rowDistances.back();
-    mesh.roadGridOverlay = false;
     // 法線が分かれる縁石の変位を独立に適用すると割れるため、この段階では全コンテキストとも0。
     mesh.displacementMeters = 0;
     for (size_t i = 0; i < 3; ++i) mesh.connectionSources[i] = static_cast<int>(std::min(i, presets.size() - 1) + 1);

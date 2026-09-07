@@ -755,7 +755,7 @@ VsOutput DsMain(HsPatchConstants patchConstants, float3 barycentric : SV_DomainL
     return output;
 }
 
-// 距離場を画面微分でなだらかにし、遠方の細いグリッドのちらつきを抑える。
+// UVチェッカーのタイル境界を画面微分でなだらかにする。
 float GridLine(float2 coordinate)
 {
     float2 footprint = max(fwidth(coordinate), 1e-5f);
@@ -764,15 +764,8 @@ float GridLine(float2 coordinate)
     coverage *= saturate(1.0f - footprint);
     return max(coverage.x, coverage.y);
 }
-float3 ApplyRoadGrid(float3 color, float2 uv)
-{
-    if ((g_mesh.meshDisplayFlags & 1u) != 0u && g_mesh.roadMetersPerUv > 0.0f)
-        color *= lerp(1.0f, 0.12f, GridLine(uv * g_mesh.roadMetersPerUv));
-    return color;
-}
 
-// ワイヤーフレームの重ね描き。トーンマップ後の表示用テクスチャへ表示色のまま描く。
-// 本描画と同じ VS / HS / DS を通るので、テセレーションと変位の後の辺が出る。
+// トーンマップ後のワイヤーフレーム。分割前はVSのみ、分割後はHS/DSも通す。
 float4 PsWireframe(VsOutput input) : SV_Target0
 {
     return float4(0.55f, 0.85f, 1.0f, 0.85f);
@@ -791,7 +784,7 @@ float4 PsMain(VsOutput input) : SV_Target0
         color = lerp(color, float3(0.8f,0.12f,0.08f), step(local.y,0.07f)*fade);
         color = lerp(color, float3(0.08f,0.65f,0.18f), step(local.x,0.07f)*fade);
         color *= lerp(1.0f,0.25f,GridLine(input.uv));
-        return float4(ApplyRoadGrid(color,input.uv),1.0f);
+        return float4(color,1.0f);
     }
     const float3 geometricNormal = normalize(input.worldNormal);
     const float3 viewDirection = normalize(g_mesh.cameraPosition - input.worldPosition);
@@ -1034,7 +1027,7 @@ float4 PsMain(VsOutput input) : SV_Target0
             debugColor = saturate(local).xxx;
         }
 
-        return float4(ApplyRoadGrid(debugColor, input.uv), 1.0f);
+        return float4(debugColor, 1.0f);
     }
 
     float3 diffuseColor;
@@ -1082,7 +1075,7 @@ float4 PsMain(VsOutput input) : SV_Target0
 
     // シーンカラーは R16G16B16A16_FLOAT。half の上限（65504）を超えると Inf になり、
     // トーンマップを経て NaN → ハイライト中心の黒点になる。上限手前でクランプする。
-    return float4(ApplyRoadGrid(min(radiance, 60000.0f), input.uv),
+    return float4(min(radiance, 60000.0f),
                   (g_mesh.opacityMode == 2u) ? opacity : 1.0f);
 }
 

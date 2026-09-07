@@ -61,8 +61,6 @@ struct SceneMesh {
     MaterialSettings material;
     // 道路の表示用メタデータ。0は道路以外。生成時に再構築する。
     float roadMetersPerUv = 0.0f;
-    // 道路の1 mグリッドを重ねるか。白線などの帯は道路面の目盛りを持たない。
-    bool roadGridOverlay = true;
     // 材質のハイトで法線方向へ押し出す量（m）。0 なら形は変えない。材質が無ければ効かない。
     float displacementMeters = 0.0f;
     // P0: 直線の共通面を世界 Y 方向へ変位する。法線が分かれる縁石でも位置を揃える。

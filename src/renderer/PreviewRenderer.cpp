@@ -874,7 +874,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     constants.useMaterialTextures = 0u;
     constants.displacementScale = 0.0f;
     constants.debugView = static_cast<uint32_t>(m_debugView);
-    constants.meshDisplayFlags = (m_showRoadGrid ? 1u : 0u) | (m_showUvChecker ? 2u : 0u);
+    constants.meshDisplayFlags = m_showUvChecker ? 2u : 0u;
     // 分割量はカメラから見た見え方で決める。本描画では viewProjection と同一で、
     // シャドウパスだけが viewProjection 側を上書きして分岐する。
     XMStoreFloat4x4(&constants.tessellationViewProjection, viewProjection);
@@ -891,7 +891,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     };
     // 各メッシュは世界座標で受け取る。
     // passMask: kPassOpaque = 路面など、kPassDecal = 路面に貼る帯（白線。深度バイアス付き）、
-    // kPassTranslucent = 半透明の帯。影とワイヤーフレームは半透明以外を全部描く。
+    // kPassTranslucent = 半透明の帯。ワイヤーフレームには半透明の帯も含める。
     constexpr uint32_t kPassOpaque = 1u;
     constexpr uint32_t kPassDecal = 2u;
     constexpr uint32_t kPassTranslucent = 4u;
@@ -900,7 +900,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         return m_meshScene.meshes[i].useBlendMode ? kPassDecal : kPassOpaque;
     };
     // シーンが無ければ何も描かない（m_sceneMeshes が空）。背景とグリッドだけが出る。
-    const auto drawMeshes = [&](const MeshConstants& passConstants, uint32_t passMask) {
+    const auto drawMeshes = [&](const MeshConstants& passConstants, uint32_t passMask, bool tessellate) {
         for (size_t i = 0; i < m_sceneMeshes.size(); ++i) {
             if (m_meshScene.meshes[i].materialOnly) continue;
             MeshConstants drawConstants = passConstants;
@@ -1035,7 +1035,6 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 if (layerSource == i) drawConstants.useMaterialTextures = 1;
                 drawConstants.displacementScale = connection.displacementMeters;
             }
-            if (!m_meshScene.meshes[i].roadGridOverlay) drawConstants.meshDisplayFlags &= ~1u;
             const auto& material = m_meshScene.meshes[i].material;
             drawConstants.baseColor = material.baseColor;
             drawConstants.roughness = material.roughness;
@@ -1057,8 +1056,8 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 probeConstants = allocation.gpuAddress;
                 probeMesh = i;
             }
-            drawMesh.Draw(commandList, useTessellation);
-            CountMeshDraw(m_stats, drawMesh, useTessellation);
+            drawMesh.Draw(commandList, tessellate);
+            CountMeshDraw(m_stats, drawMesh, tessellate);
         }
     };
 
@@ -1128,7 +1127,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 commandList->SetPipelineState(shadowPipeline);
                 // 路面に貼る白線・ひび割れ・Decalは影を受けるだけにする。
                 // 深度だけのパスへ含めると透明マスクが無視され、帯全体が路面を遮光する。
-                drawMeshes(shadowConstants, kPassOpaque);
+                drawMeshes(shadowConstants, kPassOpaque, useTessellation);
 
                 TransitionIfNeeded(commandList, shadowMap,
                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -1162,7 +1161,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
     commandList->SetPipelineState(meshPipeline);
-    drawMeshes(constants, kPassOpaque);
+    drawMeshes(constants, kPassOpaque, useTessellation);
     if (m_meshSceneEnabled) {
         uint32_t passes = 0u;
         for (size_t i = 0; i < m_sceneMeshes.size(); ++i) passes |= passOf(i);
@@ -1173,7 +1172,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             decalDesc.slopeScaledDepthBias = kDecalSlopeScaledDepthBias;
             if (ID3D12PipelineState* decalPipeline = pipelineCache.GetGraphics(decalDesc)) {
                 commandList->SetPipelineState(decalPipeline);
-                drawMeshes(constants, kPassDecal);
+                drawMeshes(constants, kPassDecal, useTessellation);
             }
         }
         // 半透明の帯は最後にアルファ合成で描く。深度は読むだけ。
@@ -1185,7 +1184,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             blendDesc.slopeScaledDepthBias = kDecalSlopeScaledDepthBias;
             if (ID3D12PipelineState* blendPipeline = pipelineCache.GetGraphics(blendDesc)) {
                 commandList->SetPipelineState(blendPipeline);
-                drawMeshes(constants, kPassTranslucent);
+                drawMeshes(constants, kPassTranslucent, useTessellation);
             }
         }
         commandList->SetPipelineState(meshPipeline);
@@ -1320,12 +1319,14 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 
     PIXEndEvent(commandList);
 
-    // ワイヤーフレームの重ね描き。本描画と同じ VS / HS / DS を通し、表示色で線だけを描く。
-    if (m_meshSceneEnabled && m_showWireframe) {
+    // 分割前は元の三角形、分割後は本描画と同じHS/DSで生成した辺を重ねる。
+    for (const bool beforeTessellation : {true, false}) {
+        if (!m_meshSceneEnabled || !(beforeTessellation ? m_showRoadGrid : m_showWireframe)) continue;
+        const bool wireTessellation = !beforeTessellation && useTessellation;
         rhi::GraphicsPipelineDesc wireDesc;
         wireDesc.shaderPath = L"MeshPbr.hlsl";
-        wireDesc.vertexEntry = useTessellation ? L"VsControl" : L"VsMain";
-        if (useTessellation) {
+        wireDesc.vertexEntry = wireTessellation ? L"VsControl" : L"VsMain";
+        if (wireTessellation) {
             wireDesc.hullEntry = L"HsMain";
             wireDesc.domainEntry = L"DsMain";
         }
@@ -1337,9 +1338,11 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         wireDesc.fillMode = D3D12_FILL_MODE_WIREFRAME;
         wireDesc.depthTest = true;
         wireDesc.depthWrite = false;
+        wireDesc.depthBias = -32;
+        wireDesc.slopeScaledDepthBias = -1.0f;
         wireDesc.alphaBlend = true;
         if (ID3D12PipelineState* wirePipeline = pipelineCache.GetGraphics(wireDesc)) {
-            PIXBeginEvent(commandList, PIX_COLOR(160, 200, 240), "PreviewWireframe");
+            PIXBeginEvent(commandList, PIX_COLOR(160, 200, 240), beforeTessellation ? "PreviewWireframeBase" : "PreviewWireframeTessellated");
             TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_RENDER_TARGET);
             TransitionIfNeeded(commandList, m_depth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
             const D3D12_CPU_DESCRIPTOR_HANDLE outputRtv = m_output.rtv.cpu;
@@ -1347,7 +1350,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             commandList->OMSetRenderTargets(1, &outputRtv, FALSE, &depthDsv);
             commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
             commandList->SetPipelineState(wirePipeline);
-            drawMeshes(constants, kPassOpaque | kPassDecal);
+            drawMeshes(constants, kPassOpaque | kPassDecal | kPassTranslucent, wireTessellation);
             PIXEndEvent(commandList);
         }
     }

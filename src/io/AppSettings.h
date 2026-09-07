@@ -40,6 +40,7 @@ struct DisplaySettings {
     bool showStats = false;
     // 原点中心の50m四方、1m刻みの作業グリッド。
     bool showReferenceGrid = true;
+    // 分割前ワイヤーフレーム。保存キーは旧道路グリッドから引き継ぐ。
     bool showRoadGrid = false;
     bool showUvChecker = false;
     // メッシュシーンにワイヤーフレームを重ねるか。

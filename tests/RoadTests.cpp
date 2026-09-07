@@ -192,8 +192,6 @@ void RunRoadTests() {
     compiled = graph::CompileMeshGraph(chain);
     Check(compiled.error.empty() && compiled.scene.meshes.size() == 2, "road and markings reach one Mesh Output");
     if (compiled.scene.meshes.size() == 2) {
-        Check(compiled.scene.meshes[0].roadGridOverlay && !compiled.scene.meshes[1].roadGridOverlay,
-              "grid overlay is only on the road surface");
         Check(compiled.scene.meshes[1].material.baseColor.x > 0.8f && !compiled.scene.meshes[1].materialStack,
               "unconnected marking is white");
         Check(compiled.scene.meshes[0].displacementSource == -1 && compiled.scene.meshes[1].displacementSource == 0,

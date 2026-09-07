@@ -1318,6 +1318,8 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
         std::vector<size_t> bends;
         float traveled = 0;
         float turnSide = rng.Chance(0.5f) ? 1.0f : -1.0f;
+        // 細部用の乱数を分離し、大きな折れの並びを細分数に依存させない。
+        CrackRandom detailRng(settings.seed ^ (static_cast<uint32_t>(cluster) + 1u) * 0x85EBCA6Bu);
         while (traveled < length) {
             const float heading = theta + turnSide * jitter * 0.8f * rng.Range(0.55f, 1.0f);
             const float segment = std::min(rng.Range(0.9f, 1.7f), length - traveled);
@@ -1328,10 +1330,19 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
             if (std::abs(dz) > 1e-6f) available = std::min(available, ((dz > 0 ? total - 0.05f : 0.05f) - origin.distance) / dz);
             if (available < 1e-4f) break;
             if (trunk.size() > 1) bends.push_back(trunk.size() - 1);
-            const int steps = static_cast<int>(std::ceil(available / stepMeters));
+            const bool detailed = detailRng.Chance(0.55f);
+            const float spacing = detailed ? detailRng.Range(0.12f, 0.20f) : stepMeters;
+            const int steps = static_cast<int>(std::ceil(available / spacing));
+            const float amplitude = std::sin(jitter) * detailRng.Range(0.025f, 0.065f);
+            const float detailSide = detailRng.Chance(0.5f) ? 1.0f : -1.0f;
             for (int step = 1; step <= steps; ++step) {
                 const float at = available * float(step) / float(steps);
-                trunk.push_back({origin.lateral + dx * at, origin.distance + dz * at, 0,
+                // 大きな角の前後は直線を残し、枝が出る方向と根元を維持する。
+                const float envelope = std::sin(DirectX::XM_PI * float(step) / float(steps));
+                const float offset = detailed && step > 1 && step < steps - 1 ?
+                    detailSide * (step % 2 ? -1.0f : 1.0f) * amplitude * envelope * detailRng.Range(0.5f, 1.0f) : 0;
+                trunk.push_back({std::clamp(origin.lateral + dx * at + dz * offset, -halfInside, halfInside),
+                                 std::clamp(origin.distance + dz * at - dx * offset, 0.05f, total - 0.05f), 0,
                                  trunkWidthAt((traveled + at) / length)});
             }
             traveled += available;

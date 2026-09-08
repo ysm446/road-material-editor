@@ -29,10 +29,9 @@ constexpr std::array<PinDefinition, 2> kPathPins = {{
     {PinKind::Input, ValueType::Mesh, "Surface"},
     {PinKind::Output, ValueType::Path, "Path"},
 }};
-constexpr std::array<PinDefinition, 4> kDecalPins = {{
+constexpr std::array<PinDefinition, 3> kDecalPins = {{
     {PinKind::Input, ValueType::Mesh, "RoadSurface"},
     {PinKind::Input, ValueType::Path, "Path"},
-    {PinKind::Input, ValueType::Material, "Material"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 // 路肩のピン。Path には Road の Left / Right か、別の路肩の Outer を繋ぐ。
@@ -50,10 +49,9 @@ constexpr std::array<PinDefinition, 10> kShoulderPins = {{
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Path, "Outer"},
 }};
-// ひび割れのピン。Decal と同じく RoadSurface を受けて RoadSurface を返す。Material は幹の材質。
-constexpr std::array<PinDefinition, 3> kCrackPins = {{
+// ひび割れのピン。Decal と同じく RoadSurface を受けて RoadSurface を返す。材質はプロパティで指定する。
+constexpr std::array<PinDefinition, 2> kCrackPins = {{
     {PinKind::Input, ValueType::Mesh, "RoadSurface"},
-    {PinKind::Input, ValueType::Material, "Material"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 // Merge のピン。入力は可変で、繋ぐたびに空きが 1 本増える（NormalizeVariablePins）。
@@ -82,9 +80,8 @@ constexpr std::array<PinDefinition, 1> kRoadMaskPins = {{
 constexpr std::array<PinDefinition, 1> kMeshOutputPins = {{
     {PinKind::Input, ValueType::Mesh, "Mesh"},
 }};
-constexpr std::array<PinDefinition, 3> kRoadMarkingPins = {{
+constexpr std::array<PinDefinition, 2> kRoadMarkingPins = {{
     {PinKind::Input, ValueType::Mesh, "RoadSurface"},
-    {PinKind::Input, ValueType::Material, "Material"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 

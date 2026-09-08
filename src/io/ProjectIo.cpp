@@ -46,7 +46,8 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 16: crack ノード。
 // 17: 埋込プリセットと道路・沿道の配置記述。旧ビルドによる消失を防ぐ。
 // 24: 中央線・外側線・車線境界線の線幅を独立させる。
-constexpr int kProjectFormatVersion = 24;
+// 25: 白線・Decal・CrackのMaterial入力をプロパティへ移す。
+constexpr int kProjectFormatVersion = 25;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -640,12 +641,12 @@ json WriteGraph(const graph::NodeGraph& graphData,
                                                            road->layerBlendMode[2], road->layerBlendMode[3]})},
                             {"layerBlendRange", road->layerBlendRange}};
         } else if (const auto* decal = std::get_if<graph::DecalNodeSettings>(&node.settings)) {
-            item["decal"] = {{"width", decal->widthMeters}, {"lift", decal->liftMeters},
+            item["decal"] = {{"material", decal->material ? WriteLayer(*decal->material, writeMaterial) : json()}, {"width", decal->widthMeters}, {"lift", decal->liftMeters},
                              {"uvRepeat", decal->uvRepeatMeters}, {"uvAlongU", decal->uvAlongU}};
         } else if (const auto* crack = std::get_if<graph::CrackNodeSettings>(&node.settings)) {
             static const char* const kCrackOrientationNames[] = {"longitudinal", "transverse", "mixed"};
             static const char* const kCrackPlacementNames[] = {"uniform", "wheelTracks", "edges"};
-            item["crack"] = {{"seed", crack->seed}, {"density", crack->densityPer100m},
+            item["crack"] = {{"material", crack->material ? WriteLayer(*crack->material, writeMaterial) : json()}, {"seed", crack->seed}, {"density", crack->densityPer100m},
                              {"lengthMin", crack->lengthMinMeters}, {"lengthMax", crack->lengthMaxMeters},
                              {"orientation", EnumName(kCrackOrientationNames, static_cast<uint32_t>(crack->orientation))},
                              {"transverseRatio", crack->transverseRatio}, {"angleJitter", crack->angleJitterDegrees},
@@ -711,6 +712,9 @@ json WriteGraph(const graph::NodeGraph& graphData,
                                    {"arrowInterval", marking->arrowIntervalMeters},
                                    {"arrowLength", marking->arrowLengthMeters},
                                    {"uvAlongU", marking->uvAlongU}};
+            item["roadMarking"]["materials"] = json::array();
+            for (const auto& material : marking->materials)
+                item["roadMarking"]["materials"].push_back(material ? WriteLayer(*material, writeMaterial) : json());
         } else if (const auto* path = std::get_if<graph::PathNodeSettings>(&node.settings)) {
             item["path"] = WritePath(path->path);
         }
@@ -737,6 +741,7 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
                const std::function<compositor::MaterialAssetId(const json&)>& readMaterial) {
     std::vector<graph::Node> nodes;
     std::vector<graph::Link> links;
+    std::vector<std::pair<graph::GraphId, graph::GraphId>> legacyMaterialInputs;
     graph::GraphId maxId = 0;
 
     // **リンクの ID を先に見ておく。** ノードの種類にピンを足した後で古いファイルを
@@ -787,6 +792,17 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
             // 欠けているぶんは後で maxId から振り直す（リンクは繋がらないまま消える）。
             const json* inputIds = FindMember(item, "inputs");
             const json* outputIds = FindMember(item, "outputs");
+            // 旧Materialピンは末尾の入力。リンクを落とす前に接続先のSurface設定を移す。
+            const bool decalNode = created.kind == graph::NodeKind::Decal;
+            const char* materialKey = created.kind == graph::NodeKind::RoadMarking ? "roadMarking" :
+                (created.kind == graph::NodeKind::Crack ? "crack" : (decalNode ? "decal" : nullptr));
+            const size_t legacyIndex = decalNode ? 2 : 1;
+            const json* materialSettings = materialKey ? FindMember(item, materialKey) : nullptr;
+            const char* bindingKey = created.kind == graph::NodeKind::RoadMarking ? "materials" : "material";
+            if (materialKey && (!materialSettings || !FindMember(*materialSettings, bindingKey)) &&
+                inputIds && inputIds->is_array() && inputIds->size() > legacyIndex && (*inputIds)[legacyIndex].is_number_integer())
+                legacyMaterialInputs.emplace_back(created.id, (*inputIds)[legacyIndex].get<int>());
+
             size_t inputIndex = 0;
             size_t outputIndex = 0;
             for (const graph::PinDefinition& pin : definition->pins) {
@@ -871,6 +887,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
             } else if (created.kind == graph::NodeKind::Decal) {
                 graph::DecalNodeSettings settings;
                 if (const json* decal = FindMember(item, "decal"); decal && decal->is_object()) {
+                    if (const json* material = FindMember(*decal, "material"); material && material->is_object())
+                        settings.material = ReadLayer(*material, readMaterial);
                     settings.widthMeters = ReadFloat(*decal, "width", settings.widthMeters);
                     settings.liftMeters = ReadFloat(*decal, "lift", settings.liftMeters);
                     settings.uvRepeatMeters = ReadFloat(*decal, "uvRepeat", settings.uvRepeatMeters);
@@ -880,6 +898,8 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
             } else if (created.kind == graph::NodeKind::Crack) {
                 graph::CrackNodeSettings settings;
                 if (const json* crack = FindMember(item, "crack"); crack && crack->is_object()) {
+                    if (const json* material = FindMember(*crack, "material"); material && material->is_object())
+                        settings.material = ReadLayer(*material, readMaterial);
                     static const char* const kCrackOrientationNames[] = {"longitudinal", "transverse", "mixed"};
                     static const char* const kCrackPlacementNames[] = {"uniform", "wheelTracks", "edges"};
                     settings.seed = static_cast<uint32_t>(std::max(0, ReadInt(*crack, "seed", static_cast<int>(settings.seed))));
@@ -971,6 +991,9 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
             } else if (created.kind == graph::NodeKind::RoadMarking) {
                 graph::RoadMarkingNodeSettings settings;
                 if (const json* marking = FindMember(item, "roadMarking"); marking && marking->is_object()) {
+                    if (const json* materials = FindMember(*marking, "materials"); materials && materials->is_array())
+                        for (size_t i = 0; i < settings.materials.size() && i < materials->size(); ++i)
+                            if ((*materials)[i].is_object()) settings.materials[i] = ReadLayer((*materials)[i], readMaterial);
                     const float legacyWidth = ReadFloat(*marking, "lineWidth", settings.centerLineWidthMeters);
                     settings.centerLineWidthMeters = ReadFloat(*marking, "centerLineWidth", legacyWidth);
                     settings.edgeLineWidthMeters = ReadFloat(*marking, "edgeLineWidth", legacyWidth);
@@ -1036,6 +1059,23 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
 
     if (nodes.empty()) {
         return false;
+    }
+    for (const auto& [nodeId, pinId] : legacyMaterialInputs) {
+        const auto link = std::find_if(links.begin(), links.end(), [&](const auto& value) { return value.endPin == pinId; });
+        if (link == links.end()) continue;
+        const compositor::MaterialLayer* layer = nullptr;
+        for (const auto& source : nodes) {
+            if (std::none_of(source.outputs.begin(), source.outputs.end(), [&](const auto& pin) { return pin.id == link->startPin; })) continue;
+            if (const auto* settings = std::get_if<graph::LayerNodeSettings>(&source.settings)) layer = &settings->layer;
+            break;
+        }
+        if (!layer) continue;
+        for (auto& target : nodes) {
+            if (target.id != nodeId) continue;
+            if (auto* settings = std::get_if<graph::RoadMarkingNodeSettings>(&target.settings)) settings->materials.fill(*layer);
+            if (auto* settings = std::get_if<graph::DecalNodeSettings>(&target.settings)) settings->material = *layer;
+            if (auto* settings = std::get_if<graph::CrackNodeSettings>(&target.settings)) settings->material = *layer;
+        }
     }
     // Replace が壊れたリンクの除去と次の採番の再構築を行う。
     graphData.Replace(std::move(nodes), std::move(links));

@@ -214,8 +214,8 @@ void RunRoadTests() {
             Check(matched, "marking road UV maps to the road surface UV");
         }
     }
-    const auto paint = chain.CreateNode(graph::NodeKind::Surface);
-    chain.CreateLink(chain.FindNode(paint)->outputs[0].id, chain.FindNode(chainMarking)->inputs[1].id);
+    auto& paint = std::get<graph::RoadMarkingNodeSettings>(chain.FindMutableNode(chainMarking)->settings).materials;
+    paint.fill(compositor::MaterialLayer{});
     compiled = graph::CompileMeshGraph(chain);
     Check(compiled.scene.meshes.size() == 2 && compiled.scene.meshes[1].materialStack &&
           !compiled.scene.meshes[0].materialStack, "marking material does not leak to the road");
@@ -238,9 +238,25 @@ void RunRoadTests() {
         markingSettings.uvAlongU = false;
         roadSettings.uvAlongU = false;
     }
-    std::get<graph::LayerNodeSettings>(chain.FindMutableNode(paint)->settings).layer.material = 7;
+    for (auto& material : paint) material->material = 7;
     compiled = graph::CompileMeshGraph(chain);
     Check(compiled.scene.meshes[1].blendMaterial == 7, "blend material comes from the top layer");
+
+    {
+        paint[0]->material = 8;
+        auto split = graph::CompileMeshGraph(chain);
+        Check(split.error.empty() && split.scene.meshes.size() == 3 &&
+              split.scene.meshes[1].blendMaterial == 8 && split.scene.meshes[2].blendMaterial == 7 &&
+              split.scene.meshes[1].displacementSource == 0 && split.scene.meshes[2].displacementSource == 0,
+              "center and outer markings use independent materials and follow the same road");
+        size_t vertices = 0;
+        for (size_t i = 1; i < split.scene.meshes.size(); ++i) vertices += split.scene.meshes[i].geometry.vertices.size();
+        Check(vertices == compiled.scene.meshes[1].geometry.vertices.size(), "splitting materials keeps all marking geometry");
+        const auto extraOutput = chain.CreateNode(graph::NodeKind::MeshOutput);
+        chain.CreateLink(chain.FindNode(chainMarking)->outputs[0].id, chain.FindNode(extraOutput)->inputs[0].id);
+        Check(graph::CompileMeshGraph(chain).scene.meshes.size() == 3, "multiple outputs retain all material groups without duplication");
+        Check(chain.FindNode(chainMarking)->inputs.size() == 1, "marking material is assigned in properties, not an input pin");
+    }
 
     tests::Section("Vertical curve and bank angle");
     {
@@ -606,7 +622,13 @@ void RunRoadTests() {
         cg.CreateLink(cg.FindNode(cPath)->outputs[0].id, cg.FindNode(cRoad)->inputs[0].id);
         Check(cg.CreateLink(cg.FindNode(cRoad)->outputs[0].id, cg.FindNode(cCrack)->inputs[0].id), "RoadSurface connects to Crack");
         Check(cg.CreateLink(cg.FindNode(cCrack)->outputs[0].id, cg.FindNode(cOut)->inputs[0].id), "Crack connects to Mesh Output");
+        auto& assigned = std::get<graph::CrackNodeSettings>(cg.FindMutableNode(cCrack)->settings).material;
+        assigned.emplace();
+        assigned->material = 17;
         auto crackCompiled = graph::CompileMeshGraph(cg);
+        Check(crackCompiled.scene.meshes.size() == 2 && crackCompiled.scene.meshes[1].blendMaterial == 17 &&
+              crackCompiled.scene.meshes[1].materialStack && !crackCompiled.scene.meshes[0].materialStack,
+              "Crack property material only affects its decal mesh");
         Check(crackCompiled.error.empty() && crackCompiled.scene.meshes.size() == 2 && crackCompiled.scene.meshes[1].useBlendMode &&
               crackCompiled.scene.meshes[1].displacementSource == 0, "road and cracks reach the Mesh Output as a decal pass mesh");
     }
@@ -878,7 +900,13 @@ void RunRoadTests() {
         dg.CreateLink(dg.FindNode(dRoad)->outputs[0].id, dg.FindNode(dDecal)->inputs[0].id);
         dg.CreateLink(dg.FindNode(dSurfacePath)->outputs[0].id, dg.FindNode(dDecal)->inputs[1].id);
         dg.CreateLink(dg.FindNode(dDecal)->outputs[0].id, dg.FindNode(dOut)->inputs[0].id);
+        auto& assigned = std::get<graph::DecalNodeSettings>(dg.FindMutableNode(dDecal)->settings).material;
+        assigned.emplace();
+        assigned->material = 17;
         auto decalCompiled = graph::CompileMeshGraph(dg);
+        Check(decalCompiled.scene.meshes.size() == 2 && decalCompiled.scene.meshes[1].blendMaterial == 17 &&
+              decalCompiled.scene.meshes[1].materialStack && !decalCompiled.scene.meshes[0].materialStack,
+              "Decal property material only affects its decal mesh");
         Check(decalCompiled.error.empty() && decalCompiled.scene.meshes.size() == 2 &&
               decalCompiled.scene.meshes[1].useBlendMode && decalCompiled.scene.meshes[1].displacementSource == 0,
               "road and decal reach the Mesh Output as a decal pass mesh");

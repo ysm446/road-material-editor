@@ -44,7 +44,7 @@ bool EvaluateRoad(const NodeGraph& graph, GraphId nodeId, RoadGeometry& result,
 // 中央線は横位置0、外側線は道路端から edgeInsetMeters 内側。UVは幅方向0〜1、長さ方向は実距離÷UV反復長。
 // 進行方向の矢印は左右の車線の中央に置き、走行側の車線は線形の向き、対向車線は逆向きにする。
 bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
-                       bool leftHandTraffic, renderer::MeshData& result, std::string& error);
+                       bool leftHandTraffic, renderer::MeshData& result, std::string& error, uint32_t typeMask = 31u);
 // --- 面上の座標 -------------------------------------------------------------
 // 道路面上の点。distance は始点からの実距離、lateral は横位置（m、正が Left = 列末尾側）。
 struct RoadSurfacePoint {

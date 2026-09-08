@@ -3,6 +3,8 @@
 #include "compositor/MaterialLayer.h"
 #include "graph/Path.h"
 
+#include <array>
+#include <optional>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -143,6 +145,7 @@ enum class RoadMaskShape : uint32_t {
 // デカール。Path（Surface に道路を繋いだ面上のパス）に沿った幅 widthMeters の帯を、
 // 道路面と一体で押し出される帯メッシュとして貼る。材質の不透明度で模様をくり抜く。
 struct DecalNodeSettings {
+    std::optional<compositor::MaterialLayer> material;
     float widthMeters = 1.0f;
     float liftMeters = 0.008f;
     float uvRepeatMeters = 1.0f;
@@ -195,6 +198,7 @@ enum class CrackPlacement : uint32_t {
 // ひび割れ。乱数種と密度から塊を置き、幹（ランダムウォークの折れ線）と枝を Decal と同じ帯メッシュで貼る。
 // 生成結果は保存せず、設定から毎回作る。個別に直したいものは面上の Path ＋ Decal で手描きする。
 struct CrackNodeSettings {
+    std::optional<compositor::MaterialLayer> material;
     uint32_t seed = 1u;
     float densityPer100m = 4.0f;
     float lengthMinMeters = 3.0f;
@@ -254,7 +258,9 @@ struct RoadNetworkSettings {
 };
 
 // 白線（Lane Marking）。寸法は m。外側線は道路端から中心線側へ edgeInsetMeters の位置に置く。
+// 中央線・外側線・車線境界線・停止線・矢印の順。未指定は既定の白。
 struct RoadMarkingNodeSettings {
+    std::array<std::optional<compositor::MaterialLayer>, 5> materials;
     float centerLineWidthMeters = 0.15f;
     float edgeLineWidthMeters = 0.15f;
     float laneLineWidthMeters = 0.15f;
@@ -308,6 +314,16 @@ struct Node {
     float posY = 0.0f;
     bool positionValid = false;
 };
+
+// 素材削除・Undo復元で、プロパティ内の参照もSurfaceと同じように扱う。
+template<class Visitor>
+void VisitNodeMaterialLayers(Node& node, const Visitor& visit) {
+    if (auto* settings = std::get_if<LayerNodeSettings>(&node.settings)) visit(settings->layer);
+    if (auto* settings = std::get_if<RoadMarkingNodeSettings>(&node.settings))
+        for (auto& material : settings->materials) if (material) visit(*material);
+    if (auto* settings = std::get_if<DecalNodeSettings>(&node.settings); settings && settings->material) visit(*settings->material);
+    if (auto* settings = std::get_if<CrackNodeSettings>(&node.settings); settings && settings->material) visit(*settings->material);
+}
 
 struct Link {
     GraphId id = 0;

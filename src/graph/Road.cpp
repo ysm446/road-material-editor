@@ -438,7 +438,7 @@ bool BuildRoad(const PathSettings& path, const RoadNodeSettings& settings,
 }
 
 bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& settings,
-                       bool leftHandTraffic, renderer::MeshData& result, std::string& error) {
+                       bool leftHandTraffic, renderer::MeshData& result, std::string& error, uint32_t typeMask) {
     result = {};
     error.clear();
     const auto fail = [&](const char* message) { error = message; return false; };
@@ -454,19 +454,19 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
         return fail("線幅は0.05〜1 m、浮かせ量は0〜0.1 m、UV反復長は0.1〜100 mにしてください");
     // 帯の中心の横位置（m）。正が Left（列末尾側）。
     const RoadLanes lanes = ComputeRoadLanes(road.settings, leftHandTraffic);
-    struct Strip { float offset; float line; bool dashed; };
+    struct Strip { float offset; float line; bool dashed; uint32_t type; };
     std::vector<Strip> strips;
     const bool dashedCenter = settings.centerLine && lanes.hasCenter && settings.centerLineDashed;
     if (settings.centerLine && lanes.hasCenter)
-        strips.push_back({lanes.centerLateral, settings.centerLineWidthMeters, dashedCenter});
+        strips.push_back({lanes.centerLateral, settings.centerLineWidthMeters, dashedCenter, 1u});
     if (settings.edgeLines) {
         const float edge = width * 0.5f - settings.edgeInsetMeters;
         if (edge - settings.edgeLineWidthMeters * 0.5f < 0.0f) return fail("外側線が中心を越えています。端からの距離を小さくしてください");
-        strips.push_back({-edge, settings.edgeLineWidthMeters, false});
-        strips.push_back({edge, settings.edgeLineWidthMeters, false});
+        strips.push_back({-edge, settings.edgeLineWidthMeters, false, 2u});
+        strips.push_back({edge, settings.edgeLineWidthMeters, false, 2u});
     }
     if (settings.laneLines)
-        for (const float divider : lanes.dividers) strips.push_back({divider, settings.laneLineWidthMeters, true});
+        for (const float divider : lanes.dividers) strips.push_back({divider, settings.laneLineWidthMeters, true, 4u});
     const bool dashed = dashedCenter || (settings.laneLines && !lanes.dividers.empty());
     if (dashed && (!std::isfinite(settings.dashLengthMeters) || settings.dashLengthMeters < 0.1f ||
                    !std::isfinite(settings.dashGapMeters) || settings.dashGapMeters < 0.0f))
@@ -482,7 +482,7 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
                             settings.arrowLengthMeters > 20.0f))
         return fail("矢印の間隔は1 m以上、長さは0.5〜20 mにしてください");
     for (size_t i = 0; i < strips.size(); ++i) {
-        const auto [offset, line, isDashed] = strips[i];
+        const auto [offset, line, isDashed, type] = strips[i];
         if (!std::isfinite(line) || line < 0.05f || line > 1.0f)
             return fail("各線の幅は0.05〜1 mにしてください");
         if (lanes.laneWidthMeters < line * 2.0f)
@@ -495,8 +495,8 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
     }
     const size_t rows = surface.vertices.size() / road.stride;
     if (rows * strips.size() * 2 > 65536 * 3) return fail("白線の頂点数が多すぎます");
-    for (const auto [offset, line, isDashed] : strips) {
-        if (isDashed) continue;
+    for (const auto [offset, line, isDashed, type] : strips) {
+        if (isDashed || !(typeMask & type)) continue;
         const uint32_t base = static_cast<uint32_t>(result.vertices.size());
         for (size_t row = 0; row < rows; ++row) {
             const auto& left = surface.vertices[row * road.stride];
@@ -532,9 +532,9 @@ bool BuildRoadMarkings(const RoadGeometry& road, const RoadMarkingNodeSettings& 
         }
     }
     for (const auto& strip : strips)
-        if (strip.dashed) BuildDashedStrip(road, settings, strip.offset, strip.line, result);
-    if (stops) BuildStopLines(road, settings, lanes, result);
-    if (settings.arrows) BuildArrowMarkings(road, settings, lanes, result);
+        if (strip.dashed && (typeMask & strip.type)) BuildDashedStrip(road, settings, strip.offset, strip.line, result);
+    if (stops && (typeMask & 8u)) BuildStopLines(road, settings, lanes, result);
+    if (settings.arrows && (typeMask & 16u)) BuildArrowMarkings(road, settings, lanes, result);
     return true;
 }
 
@@ -783,16 +783,30 @@ bool BuildStack(const NodeGraph& graph, const Pin& pin, float metersPerUv, compo
     return true;
 }
 
-// 最初の Material 入力（スロット 1）だけを繋ぐ。白線など、レイヤーを持たないメッシュ用。
-void AttachMaterial(const NodeGraph& graph, const Node& node, renderer::SceneMesh& mesh) {
-    for (const auto& pin : node.inputs) {
-        if (pin.valueType != ValueType::Material) continue;
-        compositor::MaterialStack stack;
-        if (BuildStack(graph, pin, mesh.roadMetersPerUv, stack, &mesh.blendMaterial)) {
-            mesh.materialStack = std::move(stack);
-        }
-        break;
-    }
+// プロパティで指定した材質を、従来のSurfaceと同じ評価経路へ渡す。
+void AttachMaterial(const std::optional<compositor::MaterialLayer>& binding, renderer::SceneMesh& mesh) {
+    if (!binding) return;
+    auto layer = binding->enabled ? *binding : compositor::MaterialStack::MakeBaseLayer();
+    layer.heightSource = compositor::ValueSource::Texture;
+    layer.heightBase = 0.5f;
+    layer.heightGain = 1.0f;
+    layer.uvScale = 1.0f;
+    compositor::MaterialStack stack;
+    stack.Layers() = {layer};
+    stack.SetTerrainScale(mesh.roadMetersPerUv, 1.0f);
+    mesh.blendMaterial = layer.material;
+    mesh.materialStack = std::move(stack);
+}
+
+// 評価に使う値が同じ線は1メッシュにまとめる（ハイト・UVは上で正規化する）。
+bool SameMarkingMaterial(const std::optional<compositor::MaterialLayer>& a,
+                         const std::optional<compositor::MaterialLayer>& b) {
+    if (!a || !b) return a.has_value() == b.has_value();
+    if (a->enabled != b->enabled) return false;
+    if (!a->enabled) return true;
+    return a->material == b->material && a->channelMask == b->channelMask &&
+        a->baseColor.x == b->baseColor.x && a->baseColor.y == b->baseColor.y && a->baseColor.z == b->baseColor.z &&
+        a->roughness == b->roughness && a->metallic == b->metallic && a->ambientOcclusion == b->ambientOcclusion;
 }
 
 // Road のスロット 1〜4 と道路マスク。スロット 2〜4 は材質とマスクの両方が繋がったときだけ有効。
@@ -851,13 +865,15 @@ struct MeshChain {
     // meshes と同じ並びで、そのメッシュを作ったノード。Merge や複数の Mesh Output で
     // 同じノードのメッシュを 2 回積まないための鍵。
     std::vector<GraphId> sources;
+    std::vector<uint32_t> sourceParts;
     RoadGeometry road;
     // 道路面が chain.meshes の何番目か。白線の押し出し元にする。
     int roadIndex = -1;
 };
-int AppendChainMesh(MeshChain& chain, renderer::SceneMesh mesh, GraphId source) {
+int AppendChainMesh(MeshChain& chain, renderer::SceneMesh mesh, GraphId source, uint32_t part = 0) {
     chain.meshes.push_back(std::move(mesh));
     chain.sources.push_back(source);
+    chain.sourceParts.push_back(part);
     return static_cast<int>(chain.meshes.size()) - 1;
 }
 // 複数の理由を「 / 」で繋いで残す。
@@ -874,14 +890,14 @@ std::vector<int> MergeChainMeshes(MeshChain& into, MeshChain& from) {
         const GraphId source = from.sources[i];
         int existing = -1;
         for (size_t j = 0; j < into.sources.size(); ++j) {
-            if (into.sources[j] == source) { existing = static_cast<int>(j); break; }
+            if (into.sources[j] == source && into.sourceParts[j] == from.sourceParts[i]) { existing = static_cast<int>(j); break; }
         }
         if (existing >= 0) { remap[i] = existing; continue; }
         renderer::SceneMesh mesh = std::move(from.meshes[i]);
         if (mesh.displacementSource >= 0) {
             mesh.displacementSource = remap[static_cast<size_t>(mesh.displacementSource)];
         }
-        remap[i] = AppendChainMesh(into, std::move(mesh), source);
+        remap[i] = AppendChainMesh(into, std::move(mesh), source, from.sourceParts[i]);
     }
     return remap;
 }
@@ -932,17 +948,26 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             error = "Lane MarkingにRoadSurfaceを接続してください";
         } else if (EvaluateMeshChain(graph, upstream, chain, errors, visiting)) {
             success = true;  // 道路面はある。白線が失敗しても道路は残す。
-            renderer::SceneMesh mesh;
-            if (BuildRoadMarkings(chain.road, *marking, graph.RoadNetwork().leftHandTraffic, mesh.geometry, error)) {
+            uint32_t remaining = 31u;
+            for (size_t slot = 0; slot < marking->materials.size(); ++slot) {
+                if (!(remaining & (1u << slot))) continue;
+                uint32_t mask = 0;
+                for (size_t other = slot; other < marking->materials.size(); ++other)
+                    if ((remaining & (1u << other)) && SameMarkingMaterial(marking->materials[slot], marking->materials[other]))
+                        mask |= 1u << other;
+                remaining &= ~mask;
+                renderer::SceneMesh mesh;
+                if (!BuildRoadMarkings(chain.road, *marking, graph.RoadNetwork().leftHandTraffic, mesh.geometry, error, mask)) break;
+                if (mesh.geometry.vertices.empty()) continue;
                 mesh.material.baseColor = {0.85f, 0.85f, 0.82f};
                 mesh.material.roughness = 0.6f;
                 mesh.roadMetersPerUv = marking->uvRepeatMeters;
-                // 道路面と同じハイト・同じ量で押し出し、変位後の路面に貼り付ける。
+                // 路面と同じハイトで押し出し、材質別の各メッシュも路面へ追従させる。
                 mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
                 mesh.displacementSource = chain.roadIndex;
                 mesh.useBlendMode = true;
-                AttachMaterial(graph, *node, mesh);
-                AppendChainMesh(chain, std::move(mesh), node->id);
+                AttachMaterial(marking->materials[slot], mesh);
+                AppendChainMesh(chain, std::move(mesh), node->id, mask);
             }
         }
     } else if (const auto* decal = std::get_if<DecalNodeSettings>(&node->settings)) {
@@ -963,7 +988,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
                 mesh.displacementSource = chain.roadIndex;
                 mesh.useBlendMode = true;
-                AttachMaterial(graph, *node, mesh);
+                AttachMaterial(decal->material, mesh);
                 AppendChainMesh(chain, std::move(mesh), node->id);
             }
         }
@@ -982,7 +1007,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
                 mesh.displacementSource = chain.roadIndex;
                 mesh.useBlendMode = true;
-                AttachMaterial(graph, *node, mesh);
+                AttachMaterial(crack->material, mesh);
                 AppendChainMesh(chain, std::move(mesh), node->id);
             }
         }

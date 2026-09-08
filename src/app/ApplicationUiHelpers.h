@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <optional>
 #include <string>
 
 namespace tg {
@@ -129,8 +130,9 @@ inline int ResolutionIndex(uint32_t resolution) {
 
 // マテリアルを選ぶ行。サムネイル付きの一覧から選ぶ。
 inline bool DrawMaterialSlotRow(const char* label, compositor::MaterialAssetId& slot,
-                         const compositor::MaterialLibrary& library, bool showThumbnail = false) {
-    ui::PropertyLabel(label, "「なし」ならレイヤーの定数値だけで塗る");
+                         const compositor::MaterialLibrary& library, bool showThumbnail = false,
+                         const char* hint = "「なし」ならレイヤーの定数値だけで塗る") {
+    ui::PropertyLabel(label, hint);
 
     std::string preview = "なし";
     if (const compositor::MaterialAsset* current = library.Find(slot); current != nullptr) {
@@ -188,6 +190,20 @@ inline bool DrawMaterialSlotRow(const char* label, compositor::MaterialAssetId& 
     }
     ui::PropertyEnd();
     return changed;
+}
+
+// 旧Surfaceの定数設定を保持し、新しく選び直した場合は素材の標準設定に戻す。
+inline bool DrawMeshMaterialSlotRow(const char* label, std::optional<compositor::MaterialLayer>& slot,
+                                    const compositor::MaterialLibrary& library) {
+    auto material = slot ? slot->material : compositor::kNoMaterialAsset;
+    if (!DrawMaterialSlotRow(label, material, library, true,
+        "「なし」を選ぶとノードの既定色に戻る。マテリアル一覧からドラッグして割り当てもできる")) return false;
+    slot.reset();
+    if (material != compositor::kNoMaterialAsset) {
+        slot.emplace();
+        slot->material = material;
+    }
+    return true;
 }
 
 // テクスチャを選ぶコンボ。行の中に置く部品。

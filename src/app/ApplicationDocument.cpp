@@ -119,14 +119,9 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
     // --- グラフ -------------------------------------------------------------
     std::vector<graph::Node> nodes = snapshot.graphNodes;
     for (graph::Node& node : nodes) {
-        auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings);
-        if (settings == nullptr) {
-            continue;
-        }
-        compositor::MaterialLayer& layer = settings->layer;
-        if (m_materialLibrary.Find(layer.material) == nullptr) {
-            layer.material = compositor::kNoMaterialAsset;
-        }
+        graph::VisitNodeMaterialLayers(node, [&](compositor::MaterialLayer& layer) {
+            if (m_materialLibrary.Find(layer.material) == nullptr) layer.material = compositor::kNoMaterialAsset;
+        });
     }
     m_graph.Replace(std::move(nodes), snapshot.graphLinks);
     m_graph.SetRoadNetwork(snapshot.roadNetwork);

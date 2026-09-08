@@ -402,11 +402,12 @@ void Application::ProcessPendingFileWork() {
             // 参照していたノードは「なし」へ戻す。無効な ID を残さない。
             bool graphChanged = false;
             for (graph::Node& node : m_graph.MutableNodes()) {
-                auto* settings = std::get_if<graph::LayerNodeSettings>(&node.settings);
-                if (settings != nullptr && settings->layer.material == removed) {
-                    settings->layer.material = compositor::kNoMaterialAsset;
-                    graphChanged = true;
-                }
+                graph::VisitNodeMaterialLayers(node, [&](compositor::MaterialLayer& layer) {
+                    if (layer.material == removed) {
+                        layer.material = compositor::kNoMaterialAsset;
+                        graphChanged = true;
+                    }
+                });
             }
             if (graphChanged) {
                 m_graph.MarkDirty();

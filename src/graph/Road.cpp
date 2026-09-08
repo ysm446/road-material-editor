@@ -1140,7 +1140,7 @@ struct SurfaceStripPoint {
 // 折れ線を約 0.25 m で刻み直し、点ごとの幅を補間して帯にする。幅方向の U は 0〜1、V は折れ線に沿った実距離÷反復長。
 // 道路面と同じ位置の道路 UV を持ち、押し出しに追従する。2 点未満なら何もしない。
 bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStripPoint>& input, float lift,
-                        float uvRepeat, bool uvAlongU, renderer::MeshData& result, std::string& error, bool preserveCorners = false) {
+                        float uvRepeat, bool uvAlongU, renderer::MeshData& result, std::string& error, bool preserveCorners = false, float gridSpacing = 0.0f) {
     std::vector<SurfaceStripPoint> points;
     for (const auto& p : input) {
         if (points.empty() || std::hypot(p.lateral - points.back().lateral, p.distance - points.back().distance) > 1e-5f)
@@ -1152,8 +1152,14 @@ bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStrip
         lengths[i] = lengths[i - 1] + std::hypot(points[i].lateral - points[i - 1].lateral, points[i].distance - points[i - 1].distance);
     const float total = lengths.back();
     if (!(total > 1e-4f) || total > 16000.0f) { error = "帯のパスが短すぎるか長すぎます"; return false; }
-    const size_t steps = std::max<size_t>(1, static_cast<size_t>(std::ceil(total / 0.25f)));
-    constexpr uint32_t stride = 2;
+    // ハイトを使うDecalだけ幅方向も刻む。細い帯は長さ方向も幅に合わせる。
+    const float spacing = gridSpacing > 0.0f ? gridSpacing : 0.25f;
+    const size_t steps = std::max<size_t>(1, static_cast<size_t>(std::ceil(total / spacing)));
+    float maxWidth = 0.0f;
+    for (const auto& p : points) maxWidth = std::max(maxWidth, p.width);
+    const uint32_t columns = gridSpacing > 0.0f
+        ? std::max(1u, static_cast<uint32_t>(std::ceil(maxWidth / spacing))) : 1u;
+    const uint32_t stride = columns + 1;
     if (result.vertices.size() + (steps + 1) * stride > 400000) { error = "帯の頂点数が多すぎます"; return false; }
     std::vector<SurfaceStripPoint> uniform;
     std::vector<float> sampleDistances;
@@ -1191,8 +1197,9 @@ bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStrip
         if (tl < 1e-6f) { tx = 0.0f; tz = 1.0f; } else { tx /= tl; tz /= tl; }
         const float nx = -tz, nz = tx;
         const float along = sampleDistances[i];
-        for (int side = 0; side < 2; ++side) {
-            const float offset = (side == 0 ? -0.5f : 0.5f) * p.width;
+        for (uint32_t column = 0; column <= columns; ++column) {
+            const float across = static_cast<float>(column) / static_cast<float>(columns);
+            const float offset = (across - 0.5f) * p.width;
             const float lateral = p.lateral + nx * offset;
             const float distance = p.distance + nz * offset;
             const SurfaceSample sample = SampleRoadSurface(road, distance, lateral);
@@ -1203,7 +1210,7 @@ bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStrip
                 XMVectorScale(sample.normal, XMVectorGetX(XMVector3Dot(sample.normal, sample.across)))));
             XMStoreFloat4(&vertex.tangent, tangent);
             vertex.tangent.w = -1.0f;
-            vertex.uv = {static_cast<float>(side), along / uvRepeat};
+            vertex.uv = {across, along / uvRepeat};
             if (uvAlongU) std::swap(vertex.uv.x, vertex.uv.y);
             vertex.roadUv = {(road.settings.widthMeters * 0.5f + lateral) / road.settings.uvRepeatMeters,
                              distance / road.settings.uvRepeatMeters};
@@ -1211,16 +1218,18 @@ bool AppendSurfaceStrip(const RoadGeometry& road, const std::vector<SurfaceStrip
             result.vertices.push_back(vertex);
         }
         if (i > 0) {
-            const uint32_t a = base + static_cast<uint32_t>(i - 1) * stride;
-            const uint32_t tris[2][3] = {{a, a + 2, a + 1}, {a + 1, a + 2, a + 3}};
-            for (const auto& tri : tris) {
-                uint32_t x = tri[0], y = tri[1], z = tri[2];
-                // パスが道路を逆走する区間では巻きが反転するので、法線が路面側を向くよう並べ直す。
-                const XMVECTOR n = XMVector3Cross(
-                    XMVectorSubtract(Load(result.vertices[y].position), Load(result.vertices[x].position)),
-                    XMVectorSubtract(Load(result.vertices[z].position), Load(result.vertices[x].position)));
-                if (XMVectorGetX(XMVector3Dot(n, Load(result.vertices[x].normal))) < 0.0f) std::swap(y, z);
-                result.indices.insert(result.indices.end(), {x, y, z});
+            for (uint32_t column = 0; column < columns; ++column) {
+                const uint32_t a = base + static_cast<uint32_t>(i - 1) * stride + column;
+                const uint32_t tris[2][3] = {{a, a + stride, a + 1}, {a + 1, a + stride, a + stride + 1}};
+                for (const auto& tri : tris) {
+                    uint32_t x = tri[0], y = tri[1], z = tri[2];
+                    // パスが道路を逆走する区間では巻きが反転するので、法線が路面側を向くよう並べ直す。
+                    const XMVECTOR n = XMVector3Cross(
+                        XMVectorSubtract(Load(result.vertices[y].position), Load(result.vertices[x].position)),
+                        XMVectorSubtract(Load(result.vertices[z].position), Load(result.vertices[x].position)));
+                    if (XMVectorGetX(XMVector3Dot(n, Load(result.vertices[x].normal))) < 0.0f) std::swap(y, z);
+                    result.indices.insert(result.indices.end(), {x, y, z});
+                }
             }
         }
     }
@@ -1252,7 +1261,9 @@ bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const
             if (!std::isfinite(sample.x) || !std::isfinite(sample.y) || !std::isfinite(sample.z)) return fail("Path の座標が不正です");
             points.push_back({sample.x, sample.z, sample.y, settings.widthMeters});
         }
-        if (!AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU, result, error))
+        const float gridSpacing = settings.heightMeters > 0.0f ? std::min(0.25f, settings.widthMeters) : 0.0f;
+        if (!AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU,
+                                result, error, false, gridSpacing))
             return false;
     }
     for (auto& vertex : result.vertices) {

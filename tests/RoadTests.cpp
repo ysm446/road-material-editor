@@ -957,6 +957,33 @@ void RunRoadTests() {
             }
             Check(matches, "image scaling preserves geometry and road UV in both orientations");
         }
+        decalSettings = {};
+        decalSettings.heightMeters = 0.02f;
+        for (const float width : {0.1f, 2.0f}) {
+            decalSettings.widthMeters = width;
+            const uint32_t columns = width < 0.25f ? 1u : 8u;
+            const uint32_t stride = columns + 1;
+            Check(graph::BuildDecal(deck, surfacePath, decalSettings, decalMesh, error), "height decal grid builds");
+            Check(decalMesh.vertices.size() % stride == 0 &&
+                  decalMesh.indices.size() == (decalMesh.vertices.size() / stride - 1) * columns * 6,
+                  "height grid has triangles for every cell");
+            bool balanced = true;
+            for (size_t i = stride; i < decalMesh.vertices.size(); ++i) {
+                if (i % stride == 0) continue;
+                const auto& vertex = decalMesh.vertices[i];
+                const auto& acrossVertex = decalMesh.vertices[i - 1];
+                const auto& alongVertex = decalMesh.vertices[i - stride];
+                const float across = std::hypot(vertex.position.x - acrossVertex.position.x, vertex.position.z - acrossVertex.position.z);
+                const float along = std::hypot(vertex.position.x - alongVertex.position.x, vertex.position.z - alongVertex.position.z);
+                balanced &= across > 0 && along > 0 && across / along < 1.5f && along / across < 1.5f;
+            }
+            Check(balanced, "straight sloped decal cells have balanced physical spacing for wide and narrow strips");
+        }
+        decalSettings.heightMeters = 0;
+        decalSettings.widthMeters = 0.5f;
+        Check(graph::BuildDecal(deck, surfacePath, decalSettings, decalMesh, error) &&
+              decalMesh.vertices.size() == originalDecal.vertices.size() && decalMesh.indices == originalDecal.indices,
+              "zero height restores the original two-column strip topology");
         decalSettings.imageWidthScale = 0;
         Check(!graph::BuildDecal(deck, surfacePath, decalSettings, decalMesh, error), "zero image scale is rejected");
         decalSettings = {};

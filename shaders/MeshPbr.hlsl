@@ -49,7 +49,7 @@ struct MeshConstants
     float lightIlluminance;  // lux 相当
 
     float3 lightColor;
-    float pad1;
+    float surfaceDepthBiasMeters;
 
     float3 baseColor;
     float roughness;
@@ -57,7 +57,7 @@ struct MeshConstants
     float metallic;
     float iblIntensity;
     uint prefilteredMipCount;
-    float pad2;
+    float additiveHeightMeters;
 
     uint irradianceIndex;    // irradiance キューブの SRV
     uint prefilteredIndex;   // プリフィルタ済みキューブの SRV
@@ -615,15 +615,37 @@ float SampleCascadedShadow(float3 worldPosition, float nDotL)
 // 頂点 / ドメインシェーダには微分が無いので SampleLevel を使う。
 float3 ApplyDisplacement(float3 worldPosition, float3 worldNormal, float2 uv, float2 roadUv)
 {
-    if (g_mesh.displacementScale == 0.0f || g_mesh.layerCount == 0u)
+    float3 displaced = worldPosition;
+    if (g_mesh.displacementScale != 0.0f && g_mesh.layerCount != 0u)
     {
-        return worldPosition;
+        const float height = BlendedHeightLevel(roadUv, worldPosition);
+        const float3 direction = (g_mesh.connectionPrototype != 0u) ? float3(0, 1, 0) : worldNormal;
+        displaced += direction * ((height - 0.5f) * g_mesh.displacementScale);
     }
-    // 道路面と、その上の帯（白線）。同じ道路座標からブレンド後のハイトを読む。
-    const float height = BlendedHeightLevel(roadUv, worldPosition);
-    // 高さの中央（0.5）を基準にする。全体が膨らまないようにするため。
-    const float3 direction = (g_mesh.connectionPrototype != 0u) ? float3(0, 1, 0) : worldNormal;
-    return worldPosition + direction * ((height - 0.5f) * g_mesh.displacementScale);
+    // Decal自身のハイトは黒を基準に加算。UVは画像倍率適用後なので色・不透明度と一致する。
+    if (g_mesh.additiveHeightMeters > 0.0f && g_mesh.useMaterialTextures != 0u)
+    {
+        Texture2D<float> heightMap = ResourceDescriptorHeap[g_mesh.materialHeightIndex];
+        displaced += worldNormal * (saturate(heightMap.SampleLevel(g_samplerAnisoWrap, uv, 0)) * g_mesh.additiveHeightMeters);
+    }
+    return displaced;
+}
+
+// D32の固定バイアスだけでは近接時の実寸余裕が不足する。
+// 路面のハイトの値域を余裕に使い、投影深度だけを寄せる。帯の形状・UV・陰影位置は保持する。
+float4 ProjectSurfacePosition(float3 worldPosition)
+{
+    float4 clip = mul(g_mesh.viewProjection, float4(worldPosition, 1.0f));
+    if (g_mesh.surfaceDepthBiasMeters > 0.0f && clip.w > 0.0f)
+    {
+        const float3 toCamera = g_mesh.cameraPosition - worldPosition;
+        const float distance = length(toCamera);
+        const float offset = min(g_mesh.surfaceDepthBiasMeters, distance * 0.25f);
+        const float3 biased = worldPosition + toCamera * (offset / max(distance, 1e-6f));
+        const float4 projected = mul(g_mesh.viewProjection, float4(biased, 1.0f));
+        if (projected.w > 0.0f) clip.z = max(0.0f, projected.z / projected.w) * clip.w;
+    }
+    return clip;
 }
 
 VsOutput VsMain(VsInput input)
@@ -635,7 +657,7 @@ VsOutput VsMain(VsInput input)
     worldPosition = ApplyDisplacement(worldPosition, normalize(worldNormal), input.uv, input.roadUv);
 
     output.worldPosition = worldPosition;
-    output.clipPosition = mul(g_mesh.viewProjection, float4(worldPosition, 1.0f));
+    output.clipPosition = ProjectSurfacePosition(worldPosition);
     output.worldNormal = worldNormal;
     output.worldTangent = mul((float3x3)g_mesh.model, input.tangent.xyz);
     output.tangentSign = input.tangent.w;
@@ -746,7 +768,7 @@ VsOutput DsMain(HsPatchConstants patchConstants, float3 barycentric : SV_DomainL
     worldPosition = ApplyDisplacement(worldPosition, worldNormal, uv, roadUv);
 
     output.worldPosition = worldPosition;
-    output.clipPosition = mul(g_mesh.viewProjection, float4(worldPosition, 1.0f));
+    output.clipPosition = ProjectSurfacePosition(worldPosition);
     output.worldNormal = worldNormal;
     output.worldTangent = worldTangent;
     output.tangentSign = patch[0].tangentSign;

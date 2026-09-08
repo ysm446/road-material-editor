@@ -937,6 +937,29 @@ void RunRoadTests() {
             decalScene.meshes.push_back({decalMesh, {}});
             Check(renderer::ValidateMeshScene(decalScene), "decal mesh is valid");
         }
+        // 画像倍率とUVの向きは帯の形状・道路追従用UVを変更しない。
+        const auto originalDecal = decalMesh;
+        for (const bool alongU : {false, true}) {
+            decalSettings.uvAlongU = alongU;
+            decalSettings.imageWidthScale = 2;
+            decalSettings.imageLengthScale = 3;
+            Check(graph::BuildDecal(deck, surfacePath, decalSettings, decalMesh, error), "scaled decal builds");
+            bool matches = decalMesh.vertices.size() == originalDecal.vertices.size();
+            for (size_t i = 0; matches && i < decalMesh.vertices.size(); ++i) {
+                const auto& v = decalMesh.vertices[i];
+                const auto& original = originalDecal.vertices[i];
+                const float across = alongU ? v.uv.y : v.uv.x;
+                const float along = alongU ? v.uv.x : v.uv.y;
+                matches = v.position.x == original.position.x && v.position.y == original.position.y &&
+                    v.position.z == original.position.z && v.roadUv.x == original.roadUv.x && v.roadUv.y == original.roadUv.y &&
+                    std::abs(across - (0.5f + (original.uv.x - 0.5f) / 2)) < 1e-5f &&
+                    std::abs(along - original.uv.y / 3) < 1e-5f;
+            }
+            Check(matches, "image scaling preserves geometry and road UV in both orientations");
+        }
+        decalSettings.imageWidthScale = 0;
+        Check(!graph::BuildDecal(deck, surfacePath, decalSettings, decalMesh, error), "zero image scale is rejected");
+        decalSettings = {};
         surfacePath.surfaceSpace = false;
         Check(!graph::BuildDecal(deck, surfacePath, decalSettings, decalMesh, error), "world-space path is rejected");
         // グラフ: Path.Surface ← Road.RoadSurface、Decal(Road, Path)。
@@ -960,7 +983,17 @@ void RunRoadTests() {
         auto& assigned = std::get<graph::DecalNodeSettings>(dg.FindMutableNode(dDecal)->settings).material;
         assigned.emplace();
         assigned->material = 17;
+        auto& decalOptions = std::get<graph::DecalNodeSettings>(dg.FindMutableNode(dDecal)->settings);
+        decalOptions.heightMeters = 0.03f;
+        std::get<graph::RoadNodeSettings>(dg.FindMutableNode(dRoad)->settings).displacementMeters = 0.04f;
+        decalOptions.showWireframe = true;
         auto decalCompiled = graph::CompileMeshGraph(dg);
+        Check(decalCompiled.scene.meshes.size() == 2 &&
+              decalCompiled.scene.meshes[1].surfaceDepthBiasMeters == 0.04f &&
+              decalCompiled.scene.meshes[0].surfaceDepthBiasMeters == 0 &&
+              decalCompiled.scene.meshes[1].additiveHeightMeters == 0.03f && decalCompiled.scene.meshes[1].showWireframe &&
+              decalCompiled.scene.meshes[0].additiveHeightMeters == 0 && !decalCompiled.scene.meshes[0].showWireframe,
+              "decal height and wireframe are independent of the road");
         Check(decalCompiled.scene.meshes.size() == 2 && decalCompiled.scene.meshes[1].blendMaterial == 17 &&
               decalCompiled.scene.meshes[1].materialStack && !decalCompiled.scene.meshes[0].materialStack,
               "Decal property material only affects its decal mesh");

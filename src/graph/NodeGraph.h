@@ -145,6 +145,10 @@ enum class RoadMaskShape : uint32_t {
 // デカール。Path（Surface に道路を繋いだ面上のパス）に沿った幅 widthMeters の帯を、
 // 道路面と一体で押し出される帯メッシュとして貼る。材質の不透明度で模様をくり抜く。
 struct DecalNodeSettings {
+    float heightMeters = 0.0f;
+    float imageWidthScale = 1.0f;
+    float imageLengthScale = 1.0f;
+    bool showWireframe = false;
     std::optional<compositor::MaterialLayer> material;
     float widthMeters = 1.0f;
     float liftMeters = 0.008f;

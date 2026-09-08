@@ -47,7 +47,8 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 17: 埋込プリセットと道路・沿道の配置記述。旧ビルドによる消失を防ぐ。
 // 24: 中央線・外側線・車線境界線の線幅を独立させる。
 // 25: 白線・Decal・CrackのMaterial入力をプロパティへ移す。
-constexpr int kProjectFormatVersion = 25;
+// 26: Decalのハイト加算・画像倍率・帯ワイヤーフレーム。
+constexpr int kProjectFormatVersion = 26;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -642,7 +643,9 @@ json WriteGraph(const graph::NodeGraph& graphData,
                             {"layerBlendRange", road->layerBlendRange}};
         } else if (const auto* decal = std::get_if<graph::DecalNodeSettings>(&node.settings)) {
             item["decal"] = {{"material", decal->material ? WriteLayer(*decal->material, writeMaterial) : json()}, {"width", decal->widthMeters}, {"lift", decal->liftMeters},
-                             {"uvRepeat", decal->uvRepeatMeters}, {"uvAlongU", decal->uvAlongU}};
+                             {"uvRepeat", decal->uvRepeatMeters}, {"uvAlongU", decal->uvAlongU},
+                             {"heightMeters", decal->heightMeters}, {"imageWidthScale", decal->imageWidthScale},
+                             {"imageLengthScale", decal->imageLengthScale}, {"showWireframe", decal->showWireframe}};
         } else if (const auto* crack = std::get_if<graph::CrackNodeSettings>(&node.settings)) {
             static const char* const kCrackOrientationNames[] = {"longitudinal", "transverse", "mixed"};
             static const char* const kCrackPlacementNames[] = {"uniform", "wheelTracks", "edges"};
@@ -889,6 +892,10 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
                 if (const json* decal = FindMember(item, "decal"); decal && decal->is_object()) {
                     if (const json* material = FindMember(*decal, "material"); material && material->is_object())
                         settings.material = ReadLayer(*material, readMaterial);
+                    settings.heightMeters = ReadFloat(*decal, "heightMeters", settings.heightMeters);
+                    settings.imageWidthScale = ReadFloat(*decal, "imageWidthScale", settings.imageWidthScale);
+                    settings.imageLengthScale = ReadFloat(*decal, "imageLengthScale", settings.imageLengthScale);
+                    settings.showWireframe = ReadBool(*decal, "showWireframe", settings.showWireframe);
                     settings.widthMeters = ReadFloat(*decal, "width", settings.widthMeters);
                     settings.liftMeters = ReadFloat(*decal, "lift", settings.liftMeters);
                     settings.uvRepeatMeters = ReadFloat(*decal, "uvRepeat", settings.uvRepeatMeters);

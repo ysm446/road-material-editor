@@ -1110,11 +1110,18 @@ void Application::DrawGraphPanel() {
         const graph::DecalNodeSettings defaults;
         if (ui::BeginPropertyTable("decalRows")) {
             changed |= DrawMeshMaterialSlotRow("マテリアル", decal->material, m_materialLibrary);
+            changed |= ui::PropertyFloat("凹凸量", &decal->heightMeters, 0.0f, 1.0f, defaults.heightMeters,
+                                         "材質のHeightを路面の凹凸に加算。黒は0、白は指定の高さ。細かな凹凸にはプレビュー設定のテセレーションを使う", "%.3f m");
+            changed |= ui::PropertyBool("帯ワイヤー", &decal->showWireframe, defaults.showWireframe, "この帯の分割前メッシュを重ねて表示する");
+            changed |= ui::PropertyFloat("画像幅倍率", &decal->imageWidthScale, 0.01f, 100.0f, defaults.imageWidthScale,
+                                         "帯の中心を基準に画像を幅方向へ拡大縮小。2で画像が2倍の大きさ。帯幅は変えない", "%.2f 倍");
+            changed |= ui::PropertyFloat("画像長さ倍率", &decal->imageLengthScale, 0.01f, 100.0f, defaults.imageLengthScale,
+                                         "帯の始点を基準に画像を長さ方向へ拡大縮小。UV反復長に掛ける倍率", "%.2f 倍");
             changed |= ui::PropertyFloat("幅", &decal->widthMeters, 0.05f, 50.0f, defaults.widthMeters, "帯の幅", "%.2f m");
             changed |= ui::PropertyFloat("浮かせ量", &decal->liftMeters, 0.0f, 0.1f, defaults.liftMeters,
                                          "路面から法線方向へ持ち上げる量", "%.3f m");
             changed |= ui::PropertyFloat("UV反復長", &decal->uvRepeatMeters, 0.05f, 100.0f, defaults.uvRepeatMeters,
-                                         "帯の長さ方向で UV が 1 増える実距離。幅方向は 0〜1", "%.2f m");
+                                         "画像倍率1のときの長さ方向の反復距離。幅方向は帯幅に画像1枚が収まる", "%.2f m");
             {
                 static const char* const kUvAxisLabels[] = {"長さ方向 = V（縦）", "長さ方向 = U（横）"};
                 int axis = decal->uvAlongU ? 1 : 0;

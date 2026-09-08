@@ -986,6 +986,9 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
                 mesh.material.baseColor = {0.6f, 0.6f, 0.6f};
                 mesh.material.roughness = 0.7f;
                 mesh.roadMetersPerUv = decal->uvRepeatMeters;
+                mesh.additiveHeightMeters = decal->heightMeters;
+                mesh.surfaceDepthBiasMeters = std::max(0.0f, chain.road.settings.displacementMeters);
+                mesh.showWireframe = decal->showWireframe;
                 mesh.displacementMeters = std::max(0.0f, chain.road.settings.displacementMeters);
                 mesh.displacementSource = chain.roadIndex;
                 mesh.useBlendMode = true;
@@ -1236,6 +1239,10 @@ bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const
         !std::isfinite(settings.liftMeters) || settings.liftMeters < 0.0f || settings.liftMeters > 0.1f ||
         !std::isfinite(settings.uvRepeatMeters) || settings.uvRepeatMeters < 0.05f || settings.uvRepeatMeters > 100.0f)
         return fail("幅は0.05〜50 m、浮かせ量は0〜0.1 m、UV反復長は0.05〜100 mにしてください");
+    if (!std::isfinite(settings.heightMeters) || settings.heightMeters < 0 || settings.heightMeters > 1 ||
+        !std::isfinite(settings.imageWidthScale) || settings.imageWidthScale < 0.01f || settings.imageWidthScale > 100 ||
+        !std::isfinite(settings.imageLengthScale) || settings.imageLengthScale < 0.01f || settings.imageLengthScale > 100)
+        return fail("凹凸量は0〜1 m、画像倍率は0.01〜100にしてください");
     const auto strands = BuildPathStrands(surfacePath);
     if (strands.empty()) return fail("Path に点を置いてください");
     for (const auto& strand : strands) {
@@ -1247,6 +1254,12 @@ bool BuildDecal(const RoadGeometry& road, const PathSettings& surfacePath, const
         }
         if (!AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU, result, error))
             return false;
+    }
+    for (auto& vertex : result.vertices) {
+        float& across = settings.uvAlongU ? vertex.uv.y : vertex.uv.x;
+        float& along = settings.uvAlongU ? vertex.uv.x : vertex.uv.y;
+        across = 0.5f + (across - 0.5f) / settings.imageWidthScale;
+        along /= settings.imageLengthScale;
     }
     if (result.vertices.empty()) return fail("Path に 2 点以上の線を置いてください");
     return true;

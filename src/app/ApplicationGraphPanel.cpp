@@ -1181,7 +1181,7 @@ void Application::DrawGraphPanel() {
                 }
             }
             changed |= ui::PropertyFloat("密度", &crack->densityPer100m, 0.0f, 200.0f, defaults.densityPer100m,
-                                         "100 m あたりの塊の数", "%.1f /100m");
+                                         "100 m あたりの塊の数の目安。別の塊と重ならない場所を探し、収まらない場合は数を減らす", "%.1f /100m");
             changed |= ui::PropertyFloat("長さ（最小）", &crack->lengthMinMeters, 0.5f, 30.0f, defaults.lengthMinMeters,
                                          "幹の長さの下限", "%.1f m");
             changed |= ui::PropertyFloat("長さ（最大）", &crack->lengthMaxMeters, 0.5f, 30.0f, defaults.lengthMaxMeters,

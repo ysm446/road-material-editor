@@ -66,6 +66,7 @@ struct StartupOptions {
     graph::SurfaceId editPreset = 0;
     graph::SurfaceId editBoundary = 0;
     graph::PathElementId selectPathPoint = 0;
+    std::vector<graph::PathElementId> selectPathPoints;
     // 線形の編集モード（0 = 制御点、1 = 縦断、2 = バンク）と選択するポイント。スクリーンショット検証用。
     int profileMode = 0;
     bool testDrag = false;

@@ -42,6 +42,7 @@
 #include "graph/Road.h"
 #include "ui/UiStyle.h"
 
+#include <cfloat>
 #include <imgui.h>
 
 #include <DirectXMath.h>
@@ -310,8 +311,9 @@ template <typename WorldFn>
 PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
                                const std::vector<graph::PathElementId>& movable,
                                const XMMATRIX& viewProjection, const ImVec2& viewportMin,
-                               const ImVec2& size, const WorldFn& worldOf) {
+                               const ImVec2& size, const WorldFn& worldOf, const graph::RoadGeometry* surfaceRoad) {
     PathGizmoScreen gizmo;
+    if (path.surfaceSpace && !surfaceRoad) return gizmo;
     float u = 0.0f;
     float v = 0.0f;
     if (movable.empty() || !graph::PathPointsCentroid(path, movable, u, v)) {
@@ -330,8 +332,23 @@ PathGizmoScreen BuildPathGizmo(const graph::PathSettings& path,
         return gizmo;
     }
     gizmo.center = projectedCenter.screen;
+    XMFLOAT3 surfaceAxes[3]{};
+    if (path.surfaceSpace) {
+        gizmo.axisCount = 2;
+        // 道路座標を1m動かしたときの世界変位。法線方向の高さは固定する。
+        constexpr float Step = 0.01f;
+        const float v0 = std::max(0.0f, v - Step);
+        const float v1 = std::min(surfaceRoad->rowDistances.back(), v + Step);
+        if (v1 <= v0) return gizmo;
+        const auto derivative = [](const XMFLOAT3& a, const XMFLOAT3& b, float distance) {
+            return XMFLOAT3{(b.x - a.x) / distance, (b.y - a.y) / distance, (b.z - a.z) / distance};
+        };
+        surfaceAxes[0] = derivative(worldOf(u - Step, v, height), worldOf(u + Step, v, height), 2.0f * Step);
+        surfaceAxes[1] = derivative(worldOf(u, v0, height), worldOf(u, v1, height), v1 - v0);
+    }
     const auto projectedAxes = renderer::ProjectMoveAxes(
-        viewProjection, center, size.x, size.y, ui::Scaled(kGizmoLength), gizmo.axisCount);
+        viewProjection, center, size.x, size.y, ui::Scaled(kGizmoLength), gizmo.axisCount,
+        path.surfaceSpace ? surfaceAxes : nullptr);
     for (int axis = 0; axis < gizmo.axisCount; ++axis) {
         const auto delta = projectedAxes.delta[axis];
         const float length = std::hypot(delta.x, delta.y);
@@ -1089,10 +1106,10 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
     // Ctrl を押している間（伸ばす）は出さない（クリックを横取りしないため）。
     const std::vector<graph::PathElementId> movable = PathMovablePoints(
         path, state.selected, state.selectedEdges, state.selectedStrandInterior);
-    // 面上のパスは面に沿ってドラッグするだけ。世界軸のギズモは意味が変わるので出さない。
+    // 面上のパスは横位置・実距離の2軸で移動し、面からの高さを維持する。
     const PathGizmoScreen gizmo =
-        (!io.KeyCtrl && !state.dragging && !state.boxPending && !path.surfaceSpace)
-            ? BuildPathGizmo(path, movable, viewProjection, viewportMin, size, worldOf)
+        (!io.KeyCtrl && !state.dragging && !state.boxPending)
+            ? BuildPathGizmo(path, movable, viewProjection, viewportMin, size, worldOf, path.surfaceSpace ? SurfacePathRoad(node) : nullptr)
             : PathGizmoScreen{};
     state.gizmoHover = (mouseInside && !state.gizmoDragging && !state.boxPending) ? PathGizmoHit(gizmo, mouse) : -1;
 
@@ -1289,6 +1306,22 @@ void Application::HandlePathInput(graph::Node& node, bool itemActive, bool itemH
                 dy = amount;
             }
             haveDelta = true;
+        }
+        if (haveDelta && path.surfaceSpace) {
+            dy = 0.0f;
+            const auto* road = SurfacePathRoad(node);
+            if (!road) haveDelta = false;
+            else {
+                // 全点へ同じ移動量を適用する。端では一群を止め、点間の配置を崩さない。
+                const float halfWidth = road->settings.widthMeters * 0.5f;
+                float minU = -FLT_MAX, maxU = FLT_MAX, minV = -FLT_MAX, maxV = FLT_MAX;
+                for (const auto& start : state.gizmoStart) {
+                    minU = std::max(minU, -halfWidth - start.x); maxU = std::min(maxU, halfWidth - start.x);
+                    minV = std::max(minV, -start.z); maxV = std::min(maxV, road->rowDistances.back() - start.z);
+                }
+                du = minU <= maxU ? std::clamp(du, minU, maxU) : 0.0f;
+                dv = minV <= maxV ? std::clamp(dv, minV, maxV) : 0.0f;
+            }
         }
         if (haveDelta) {
             for (const PathEditState::GizmoStart& start : state.gizmoStart) {
@@ -1765,11 +1798,11 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
 
     // --- 移動ギズモ -------------------------------------------------------------
     // 座標軸ギズモと同じ色（X = 赤、Z = 青）。掴める所は明るくする。
-    if (!io.KeyCtrl && !state.dragging && !state.boxPending && !profileMode && !path.surfaceSpace) {
+    if (!io.KeyCtrl && !state.dragging && !state.boxPending && !profileMode) {
         const std::vector<graph::PathElementId> movable = PathMovablePoints(
             path, state.selected, state.selectedEdges, state.selectedStrandInterior);
         const PathGizmoScreen gizmo =
-            BuildPathGizmo(path, movable, viewProjection, viewportMin, size, worldOf);
+            BuildPathGizmo(path, movable, viewProjection, viewportMin, size, worldOf, path.surfaceSpace ? SurfacePathRoad(node) : nullptr);
         if (gizmo.valid) {
             const ImU32 axisColors[3] = {IM_COL32(226, 96, 96, 255), IM_COL32(96, 146, 226, 255), IM_COL32(96, 206, 116, 255)};
             const int active = state.gizmoDragging ? state.gizmoAxis : state.gizmoHover;
@@ -1779,7 +1812,7 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
                 const float width = ui::Scaled((active == axis) ? 3.0f : 2.0f);
                 drawList->AddLine(gizmo.center, gizmo.tip[axis], lineShadow, width + ui::Scaled(2.0f));
                 drawList->AddLine(gizmo.center, gizmo.tip[axis], color, width);
-                const char* labels[] = {"X", "Z", "Y"};
+                const char* labels[] = {path.surfaceSpace ? "横" : "X", path.surfaceSpace ? "進行" : "Z", "Y"};
                 drawList->AddText(ImVec2(gizmo.tip[axis].x + ui::Scaled(5.0f), gizmo.tip[axis].y), color, labels[axis]);
                 // 先端の矢じり。
                 const ImVec2 dir = gizmo.direction[axis];

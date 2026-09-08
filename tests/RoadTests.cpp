@@ -612,6 +612,63 @@ void RunRoadTests() {
             }
             Check(maxCenter - minCenter < 1e-4f, "zero bend strength keeps the trunk straight");
         }
+        {
+            // 密度を1塊ずつ増やし、追加された塊と既存の全三角形の面積交差を調べる。
+            auto spaced = cracks;
+            spaced.orientation = graph::CrackOrientation::Mixed;
+            spaced.lengthMinMeters = spaced.lengthMaxMeters = 12.0f;
+            spaced.branchesMin = spaced.branchesMax = 4;
+            spaced.trunkWidthMeters = 0.2f;
+            spaced.angleJitterDegrees = 35.0f;
+            const auto trianglesOverlap = [](const renderer::MeshData& mesh, size_t a, size_t b) {
+                DirectX::XMFLOAT2 triangles[2][3];
+                for (int i = 0; i < 3; ++i) {
+                    triangles[0][i] = mesh.vertices[mesh.indices[a + i]].roadUv;
+                    triangles[1][i] = mesh.vertices[mesh.indices[b + i]].roadUv;
+                }
+                for (int polygon = 0; polygon < 2; ++polygon) {
+                    for (int edge = 0; edge < 3; ++edge) {
+                        const auto p = triangles[polygon][edge], q = triangles[polygon][(edge + 1) % 3];
+                        const float nx = p.y - q.y, ny = q.x - p.x;
+                        if (nx * nx + ny * ny < 1e-12f) continue;
+                        float lo[2] = {1e9f, 1e9f}, hi[2] = {-1e9f, -1e9f};
+                        for (int t = 0; t < 2; ++t) for (const auto& v : triangles[t]) {
+                            const float projection = nx * v.x + ny * v.y;
+                            lo[t] = std::min(lo[t], projection); hi[t] = std::max(hi[t], projection);
+                        }
+                        if (hi[0] <= lo[1] + 1e-6f || hi[1] <= lo[0] + 1e-6f) return false;
+                    }
+                }
+                return true;
+            };
+            size_t previousIndices = 0;
+            bool separated = true, stablePrefix = true;
+            std::vector<uint32_t> previous;
+            for (int count = 1; count <= 12; ++count) {
+                spaced.densityPer100m = static_cast<float>(count);
+                renderer::MeshData placed;
+                Check(graph::BuildCracks(crackRoad, crackLanes, spaced, placed, error), "non-overlapping branched cracks build");
+                stablePrefix &= placed.indices.size() >= previous.size() &&
+                    std::equal(previous.begin(), previous.end(), placed.indices.begin());
+                for (size_t i = previousIndices; separated && i + 2 < placed.indices.size(); i += 3)
+                    for (size_t j = 0; separated && j + 2 < previousIndices; j += 3)
+                        separated &= !trianglesOverlap(placed, i, j);
+                previousIndices = placed.indices.size();
+                previous = placed.indices;
+            }
+            Check(separated && stablePrefix && previousIndices > 0, "different clusters including branch widths never intersect");
+            spaced.densityPer100m = 200;
+            spaced.lengthMinMeters = spaced.lengthMaxMeters = 30;
+            spaced.branchesMin = spaced.branchesMax = 0;
+            Check(graph::BuildCracks(crackRoad, crackLanes, spaced, other, error) && !other.vertices.empty(),
+                  "crowded placement finishes with fewer clusters instead of overlapping");
+            size_t placedCount = 0;
+            for (size_t i = 0; i < other.vertices.size(); i += 2) {
+                const auto uv = other.vertices[i].uv;
+                if ((spaced.uvAlongU ? uv.x : uv.y) == 0.0f) ++placedCount;
+            }
+            Check(placedCount > 0 && placedCount < 200, "saturated density is a target rather than forced overlapping placement");
+        }
         graph::NodeGraph cg;
         const auto cPath = cg.CreateNode(graph::NodeKind::Path);
         const auto cRoad = cg.CreateNode(graph::NodeKind::Road);

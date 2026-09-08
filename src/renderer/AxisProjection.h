@@ -16,13 +16,15 @@ struct AxisProjection {
 inline AxisProjection ProjectMoveAxes(const DirectX::XMMATRIX& viewProjection,
                                      const DirectX::XMFLOAT3& center,
                                      float width, float height, float maxLength,
-                                     int axisCount = 3) {
+                                     int axisCount = 3, const DirectX::XMFLOAT3* localAxes = nullptr) {
     using namespace DirectX;
     AxisProjection result;
     XMFLOAT4 clip;
     XMStoreFloat4(&clip, XMVector3Transform(XMLoadFloat3(&center), viewProjection));
     if (!std::isfinite(clip.w) || clip.w <= 1e-4f || width <= 0 || height <= 0) return result;
-    const XMFLOAT3 axes[] = {{1,0,0}, {0,0,1}, {0,1,0}}; // X / Z / Y
+    const XMFLOAT3 worldAxes[] = {{1,0,0}, {0,0,1}, {0,1,0}}; // X / Z / Y
+    const auto* axes = localAxes ? localAxes : worldAxes;
+    axisCount = std::clamp(axisCount, 0, 3);
     float maximum = 0;
     for (int i = 0; i < axisCount; ++i) {
         XMFLOAT4 direction;

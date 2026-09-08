@@ -2,6 +2,7 @@
 #include "graph/RoadProfile.h"
 #include "graph/RoadMask.h"
 
+#include <cfloat>
 #include <algorithm>
 #include <cmath>
 
@@ -1314,10 +1315,43 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
         const auto& b = points[std::min(index + 1, points.size() - 1)];
         return std::atan2(b.lateral - a.lateral, b.distance - a.distance);
     };
-    const auto emit = [&](const std::vector<SurfaceStripPoint>& points) {
-        return AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU, result, error, true);
+    // 描画される帯の小区間ごとの道路座標の範囲。曲がった道路でもUVから同じ面上で判定する。
+    struct Footprint {
+        float minX, minZ, maxX, maxZ;
+        bool Overlaps(const Footprint& other) const {
+            constexpr float Clearance = 0.05f;
+            return minX < other.maxX + Clearance && maxX + Clearance > other.minX &&
+                   minZ < other.maxZ + Clearance && maxZ + Clearance > other.minZ;
+        }
     };
-    for (int cluster = 0; cluster < count; ++cluster) {
+    struct OccupiedCluster {
+        Footprint bounds;
+        std::vector<Footprint> strips;
+    };
+    std::vector<OccupiedCluster> occupied;
+    std::vector<Footprint> candidate;
+    const auto emit = [&](const std::vector<SurfaceStripPoint>& points) {
+        const size_t firstIndex = result.indices.size();
+        if (!AppendSurfaceStrip(road, points, settings.liftMeters, settings.uvRepeatMeters, settings.uvAlongU, result, error, true)) return false;
+        for (size_t i = firstIndex; i + 5 < result.indices.size(); i += 6) {
+            Footprint bounds{FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX};
+            for (size_t j = 0; j < 6; ++j) {
+                auto uv = result.vertices[result.indices[i + j]].roadUv;
+                if (road.settings.uvAlongU) std::swap(uv.x, uv.y);
+                const float x = uv.x * road.settings.uvRepeatMeters;
+                const float z = uv.y * road.settings.uvRepeatMeters;
+                bounds.minX = std::min(bounds.minX, x); bounds.maxX = std::max(bounds.maxX, x);
+                bounds.minZ = std::min(bounds.minZ, z); bounds.maxZ = std::max(bounds.maxZ, z);
+            }
+            candidate.push_back(bounds);
+        }
+        return true;
+    };
+    // 収まらない密度では配置数を減らす。試行回数を制限し、狭い道路でも処理を終える。
+    for (int cluster = 0; cluster < count * 8 && occupied.size() < static_cast<size_t>(count); ++cluster) {
+        const size_t firstVertex = result.vertices.size();
+        const size_t firstIndex = result.indices.size();
+        candidate.clear();
         // 中心。横位置は分布に従う。
         const float center = rng.Range(1.0f, total - 1.0f);
         float lateral = rng.Range(-halfInside, halfInside);
@@ -1411,6 +1445,30 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
                 if (child.size() >= 2 && !emit(child)) return false;
             }
         }
+        if (candidate.empty()) continue;
+        Footprint bounds = candidate.front();
+        for (const auto& strip : candidate) {
+            bounds.minX = std::min(bounds.minX, strip.minX); bounds.maxX = std::max(bounds.maxX, strip.maxX);
+            bounds.minZ = std::min(bounds.minZ, strip.minZ); bounds.maxZ = std::max(bounds.maxZ, strip.maxZ);
+        }
+        bool overlaps = false;
+        for (const auto& previous : occupied) {
+            if (!bounds.Overlaps(previous.bounds)) continue;
+            for (const auto& strip : candidate) {
+                if (std::any_of(previous.strips.begin(), previous.strips.end(),
+                                [&](const auto& other) { return strip.Overlaps(other); })) {
+                    overlaps = true;
+                    break;
+                }
+            }
+            if (overlaps) break;
+        }
+        if (overlaps) {
+            result.vertices.resize(firstVertex);
+            result.indices.resize(firstIndex);
+            continue;
+        }
+        occupied.push_back({bounds, candidate});
         if (result.vertices.size() > 400000) return fail("ひび割れの頂点数が多すぎます。密度を下げてください");
     }
     return true;

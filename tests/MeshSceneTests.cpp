@@ -56,6 +56,21 @@ void RunMeshSceneTests() {
                  "view-aligned axis is not stretched to full length");
     tests::Check(closeAxes.delta[0].x > 63 && closeAxes.delta[2].y < -63,
                  "near camera plane preserves X and Y orientation");
+    {
+        const auto surfaceView = XMMatrixLookAtRH(XMVectorSet(4,6,8,1), XMVectorZero(), XMVectorSet(0,1,0,0)) * projection;
+        const XMFLOAT3 directions[] = {{0,0,2}, {1,0.5f,0}, {0,1,0}};
+        const auto local = renderer::ProjectMoveAxes(surfaceView, center, 900,600,64,2,directions);
+        const auto world = renderer::ProjectMoveAxes(surfaceView, center, 900,600,64);
+        tests::Check(std::abs(local.pixelsPerMeter[0] - world.pixelsPerMeter[1]*2) < 1e-3f &&
+                     local.pixelsPerMeter[2] == 0 && local.delta[2].x == 0 && local.delta[2].y == 0,
+                     "surface axes preserve coordinate scale and omit height axis");
+        const auto origin = XMVector3TransformCoord(XMLoadFloat3(&center), surfaceView);
+        const auto step = XMVector3TransformCoord(XMVectorScale(XMLoadFloat3(&directions[1]), 0.001f), surfaceView);
+        const float dx = (XMVectorGetX(step)-XMVectorGetX(origin))*450;
+        const float dy = -(XMVectorGetY(step)-XMVectorGetY(origin))*300;
+        tests::Check(local.delta[1].x*dx + local.delta[1].y*dy > 0,
+                     "inclined surface axis follows the road rather than a world axis");
+    }
     const auto behind = renderer::ProjectMoveAxes(view*projection, {0,0,1},900,600,64);
     tests::Check(behind.pixelsPerMeter[0] == 0, "axes behind camera are rejected");
 }

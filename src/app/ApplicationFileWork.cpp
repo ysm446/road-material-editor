@@ -283,6 +283,7 @@ void Application::ProcessPendingFileWork() {
             m_pathEdit = PathEditState{};
             m_pathEdit.nodeId = m_selectedGraphNode;
             if (m_options.selectPathPoint != 0) m_pathEdit.selected = {m_options.selectPathPoint};
+            if (!m_options.selectPathPoints.empty()) m_pathEdit.selected = std::move(m_options.selectPathPoints);
             if (m_options.profileMode != 0) {
                 m_pathEdit.profileMode = std::clamp(m_options.profileMode, 0, 2);
                 m_pathEdit.selectedProfile = m_options.selectPathPoint;

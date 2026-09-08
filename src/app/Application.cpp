@@ -745,27 +745,6 @@ void Application::DrawStatusBar() {
                 }
             }
 
-            // --- 右: いま何を持っているか -----------------------------------
-            const std::string project =
-                m_projectPath.empty() ? std::string("未保存のプロジェクト")
-                                      : ToUtf8Display(m_projectPath.filename());
-            char summary[320] = {};
-            std::snprintf(summary, sizeof(summary),
-                          "%s   ノード %zu / マテリアル %zu / テクスチャ %zu   合成 %u^2   "
-                          "%.0f FPS",
-                          project.c_str(), m_graph.Nodes().size(),
-                          m_materialLibrary.Entries().size(), m_textureLibrary.Entries().size(),
-                          m_renderer.MaterialResolution(), ImGui::GetIO().Framerate);
-
-            const float summaryWidth = ImGui::CalcTextSize(summary).x;
-            const float right = ImGui::GetWindowWidth() - summaryWidth -
-                                ImGui::GetStyle().ItemSpacing.x * 2.0f;
-            // 通知が長いときは重ねない。右寄せできる余白があるときだけ出す。
-            if (right > ImGui::GetCursorPosX()) {
-                ImGui::SetCursorPosX(right);
-                ImGui::TextDisabled("%s", summary);
-            }
-
             ImGui::EndMenuBar();
         }
     }
@@ -967,7 +946,12 @@ void Application::DrawInfoWindow() {
 
     const ImGuiIO& io = ImGui::GetIO();
 
+    const std::string project = m_projectPath.empty() ? "未保存のプロジェクト" : ToUtf8Display(m_projectPath.filename());
     if (ui::BeginPropertyTable("infoRows")) {
+        ui::PropertyValue("プロジェクト", "%s", project.c_str());
+        ui::PropertyValue("ノード", "%zu", m_graph.Nodes().size());
+        ui::PropertyValue("マテリアル", "%zu", m_materialLibrary.Entries().size());
+        ui::PropertyValue("テクスチャ", "%zu", m_textureLibrary.Entries().size());
         ui::PropertyValue("バージョン", "%s", TG_APP_VERSION);
         ui::PropertyValue("フレーム", "%.1f FPS (%.3f ms)", io.Framerate,
                           1000.0f / io.Framerate);

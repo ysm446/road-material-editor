@@ -1812,8 +1812,10 @@ void Application::DrawPathOverlay(const graph::Node& node, const ImVec2& viewpor
                 const float width = ui::Scaled((active == axis) ? 3.0f : 2.0f);
                 drawList->AddLine(gizmo.center, gizmo.tip[axis], lineShadow, width + ui::Scaled(2.0f));
                 drawList->AddLine(gizmo.center, gizmo.tip[axis], color, width);
-                const char* labels[] = {path.surfaceSpace ? "横" : "X", path.surfaceSpace ? "進行" : "Z", "Y"};
-                drawList->AddText(ImVec2(gizmo.tip[axis].x + ui::Scaled(5.0f), gizmo.tip[axis].y), color, labels[axis]);
+                if (!path.surfaceSpace) {
+                    const char* labels[] = {"X", "Z", "Y"};
+                    drawList->AddText(ImVec2(gizmo.tip[axis].x + ui::Scaled(5.0f), gizmo.tip[axis].y), color, labels[axis]);
+                }
                 // 先端の矢じり。
                 const ImVec2 dir = gizmo.direction[axis];
                 const ImVec2 side(-dir.y, dir.x);

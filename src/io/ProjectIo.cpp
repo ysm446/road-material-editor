@@ -45,7 +45,8 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 15: merge ノード（入力数が可変）。旧ビルドが Merge を読み飛ばして Mesh Output との接続を失うことを防ぐ。
 // 16: crack ノード。
 // 17: 埋込プリセットと道路・沿道の配置記述。旧ビルドによる消失を防ぐ。
-constexpr int kProjectFormatVersion = 23;
+// 24: 中央線・外側線・車線境界線の線幅を独立させる。
+constexpr int kProjectFormatVersion = 24;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -692,7 +693,9 @@ json WriteGraph(const graph::NodeGraph& graphData,
                                 {"strength", roadMaskSettings->strength},
                                 {"invert", roadMaskSettings->invert}};
         } else if (const auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&node.settings)) {
-            item["roadMarking"] = {{"lineWidth", marking->lineWidthMeters},
+            item["roadMarking"] = {{"centerLineWidth", marking->centerLineWidthMeters},
+                                   {"edgeLineWidth", marking->edgeLineWidthMeters},
+                                   {"laneLineWidth", marking->laneLineWidthMeters},
                                    {"centerLine", marking->centerLine},
                                    {"centerLineDashed", marking->centerLineDashed},
                                    {"edgeLines", marking->edgeLines},
@@ -968,7 +971,10 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
             } else if (created.kind == graph::NodeKind::RoadMarking) {
                 graph::RoadMarkingNodeSettings settings;
                 if (const json* marking = FindMember(item, "roadMarking"); marking && marking->is_object()) {
-                    settings.lineWidthMeters = ReadFloat(*marking, "lineWidth", settings.lineWidthMeters);
+                    const float legacyWidth = ReadFloat(*marking, "lineWidth", settings.centerLineWidthMeters);
+                    settings.centerLineWidthMeters = ReadFloat(*marking, "centerLineWidth", legacyWidth);
+                    settings.edgeLineWidthMeters = ReadFloat(*marking, "edgeLineWidth", legacyWidth);
+                    settings.laneLineWidthMeters = ReadFloat(*marking, "laneLineWidth", legacyWidth);
                     settings.centerLine = ReadBool(*marking, "centerLine", settings.centerLine);
                     settings.centerLineDashed = ReadBool(*marking, "centerLineDashed", settings.centerLineDashed);
                     settings.edgeLines = ReadBool(*marking, "edgeLines", settings.edgeLines);

@@ -4,6 +4,7 @@
 #include "graph/RoadMask.h"
 #include "app/UndoHistory.h"
 #include <cmath>
+#include <limits>
 
 void RunRoadTests() {
     using namespace tg;
@@ -367,6 +368,49 @@ void RunRoadTests() {
         laneSettings.lanesBackward = 1;
         graph::RoadGeometry laneRoad;
         Check(graph::BuildRoad(path, laneSettings, laneRoad, error), "three-lane road builds");
+        {
+            graph::RoadMarkingNodeSettings widths;
+            widths.arrows = widths.stopLines = false;
+            widths.centerLineWidthMeters = 0.3f;
+            widths.edgeLineWidthMeters = 0.2f;
+            widths.laneLineWidthMeters = 0.1f;
+            for (const bool leftTraffic : {true, false}) for (const bool centerDashed : {false, true}) {
+                widths.centerLineDashed = centerDashed;
+                renderer::MeshData widthMesh;
+                Check(graph::BuildRoadMarkings(laneRoad, widths, leftTraffic, widthMesh, error) && !widthMesh.vertices.empty(),
+                      "線種ごとに異なる幅で実線・破線を生成できる");
+                const auto laneLayout = graph::ComputeRoadLanes(laneSettings, leftTraffic);
+                bool correctWidths = true;
+                size_t centers = 0, edges = 0, dividers = 0;
+                for (size_t i = 0; i + 1 < widthMesh.vertices.size(); i += 2) {
+                    const auto& widthStart = widthMesh.vertices[i].position;
+                    const auto& widthEnd = widthMesh.vertices[i + 1].position;
+                    const float middle = (widthStart.x + widthEnd.x) * 0.5f;
+                    float expected = widths.edgeLineWidthMeters;
+                    if (std::abs(middle - laneLayout.centerLateral) < 1e-4f) {
+                        expected = widths.centerLineWidthMeters; ++centers;
+                    } else if (std::abs(middle - laneLayout.dividers[0]) < 1e-4f) {
+                        expected = widths.laneLineWidthMeters; ++dividers;
+                    } else ++edges;
+                    correctWidths &= std::abs(std::abs(widthEnd.x - widthStart.x) - expected) < 1e-4f;
+                }
+                Check(correctWidths && centers && edges && dividers, "左右通行とも中央線・外側線・車線境界線が指定幅を保つ");
+            }
+            for (auto member : {&graph::RoadMarkingNodeSettings::centerLineWidthMeters,
+                                &graph::RoadMarkingNodeSettings::edgeLineWidthMeters,
+                                &graph::RoadMarkingNodeSettings::laneLineWidthMeters}) {
+                auto invalid = widths;
+                invalid.*member = std::numeric_limits<float>::quiet_NaN();
+                renderer::MeshData rejected;
+                Check(!graph::BuildRoadMarkings(laneRoad, invalid, true, rejected, error) && rejected.vertices.empty(),
+                      "各線の不正な幅をメッシュ生成前に拒否する");
+            }
+            widths.edgeInsetMeters = 0.05f;
+            renderer::MeshData rejected;
+            Check(!graph::BuildRoadMarkings(laneRoad, widths, true, rejected, error), "外側線固有の幅で道路外へのはみ出しを検査する");
+            widths.edgeInsetMeters = 2.85f;
+            Check(!graph::BuildRoadMarkings(laneRoad, widths, true, rejected, error), "線種ごとの半幅の合計で重なりを検査する");
+        }
         graph::RoadMarkingNodeSettings dashes;
         dashes.centerLine = dashes.edgeLines = dashes.arrows = false;
         dashes.laneLines = true;

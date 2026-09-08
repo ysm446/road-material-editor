@@ -1262,10 +1262,12 @@ void Application::DrawGraphPanel() {
     } else if (auto* marking = std::get_if<graph::RoadMarkingNodeSettings>(&selected->settings)) {
         bool changed = false;
         const graph::RoadMarkingNodeSettings defaults;
-        if (ui::BeginPropertyTable("roadMarkingRows")) {
+        if (ui::BeginPropertyTable("roadMarkingRows", 130.0f)) {
             changed |= ui::PropertyBool("中央線", &marking->centerLine, defaults.centerLine,
                 "進行方向と対向の境に1本引く。Road の車線数で位置が決まる。一方通行なら出ない");
             if (marking->centerLine) {
+                changed |= ui::PropertyFloat("中央線の幅", &marking->centerLineWidthMeters, 0.05f, 1.0f,
+                    defaults.centerLineWidthMeters, "中央線の帯の幅。実線・破線の両方に適用", "%.2f m");
                 static const char* const labels[] = {"実線", "破線"};
                 int style = marking->centerLineDashed ? 1 : 0;
                 if (ui::PropertyCombo("中央線の種類", &style, labels, IM_ARRAYSIZE(labels), 0,
@@ -1276,8 +1278,16 @@ void Application::DrawGraphPanel() {
             }
             changed |= ui::PropertyBool("外側線", &marking->edgeLines, defaults.edgeLines,
                 "左右の道路端の手前に1本ずつ引く");
+            if (marking->edgeLines) {
+                changed |= ui::PropertyFloat("外側線の幅", &marking->edgeLineWidthMeters, 0.05f, 1.0f,
+                    defaults.edgeLineWidthMeters, "左右の外側線に共通する帯の幅", "%.2f m");
+            }
             changed |= ui::PropertyBool("車線境界線", &marking->laneLines, defaults.laneLines,
                 "同方向の車線の間に破線で引く。Road の車線数が片側 2 以上のときに出る");
+            if (marking->laneLines) {
+                changed |= ui::PropertyFloat("車線境界線の幅", &marking->laneLineWidthMeters, 0.05f, 1.0f,
+                    defaults.laneLineWidthMeters, "同方向の車線を分ける帯の幅", "%.2f m");
+            }
             if (marking->laneLines || (marking->centerLine && marking->centerLineDashed)) {
                 changed |= ui::PropertyFloat("破線の長さ", &marking->dashLengthMeters, 0.1f, 50.0f,
                     defaults.dashLengthMeters, "破線 1 本の長さ", "%.1f m");
@@ -1290,8 +1300,6 @@ void Application::DrawGraphPanel() {
                 changed |= ui::PropertyFloat("停止線の幅", &marking->stopLineWidthMeters, 0.1f, 2.0f,
                     defaults.stopLineWidthMeters, "停止線の道路の長さ方向の幅", "%.2f m");
             }
-            changed |= ui::PropertyFloat("線幅", &marking->lineWidthMeters, 0.05f, 1.0f,
-                defaults.lineWidthMeters, "帯の幅", "%.2f m");
             changed |= ui::PropertyFloat("端からの距離", &marking->edgeInsetMeters, 0.0f, 5.0f,
                 defaults.edgeInsetMeters, "道路端から外側線の中心までの距離", "%.2f m");
             changed |= ui::PropertyFloat("浮かせ量", &marking->liftMeters, 0.0f, 0.1f,

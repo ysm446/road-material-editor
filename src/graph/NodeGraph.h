@@ -255,7 +255,9 @@ struct RoadNetworkSettings {
 
 // 白線（Lane Marking）。寸法は m。外側線は道路端から中心線側へ edgeInsetMeters の位置に置く。
 struct RoadMarkingNodeSettings {
-    float lineWidthMeters = 0.15f;
+    float centerLineWidthMeters = 0.15f;
+    float edgeLineWidthMeters = 0.15f;
+    float laneLineWidthMeters = 0.15f;
     // 中央線（進行方向と対向の境）。一方通行なら出ない。
     bool centerLine = true;
     bool centerLineDashed = false;

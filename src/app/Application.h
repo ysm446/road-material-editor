@@ -286,6 +286,7 @@ private:
                        float& outU, float& outV) const;
     // パスの座標（x, z, y）をワールド座標へ。面上のパスは道路面から起こす。
     DirectX::XMFLOAT3 PathWorldPosition(float u, float v, float heightOffsetMeters) const;
+    bool SelectedPathFocusTarget(DirectX::XMFLOAT3& target) const;
     // Path ノードのプロパティ（グラフパネルのプロパティ欄から呼ぶ）。変更があれば true。
     bool DrawPathSettings(graph::Node& node);
 

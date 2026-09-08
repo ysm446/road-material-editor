@@ -263,7 +263,8 @@ bool Application::HandleLightDrag(renderer::LightSettings& light, LightInteracti
     return true;
 }
 
-// F でメッシュを画面の中心へ戻し、A でさらに全体が収まる距離まで引く。
+// F で選択中のパス要素（選択が無ければPath全体）へ注視点を移す。
+// Path以外のプレビューは原点へ戻し、Aは全体が収まる距離まで引く。
 // DCC の「選択をフレーム / 全体をフレーム」に倣った割り当て。
 //
 // 修飾キーは付けない（Ctrl は数値の直接入力、Alt は軌道に使っている）。
@@ -296,7 +297,9 @@ void Application::HandleCameraInput(renderer::PreviewRenderer& preview, bool ite
     constexpr DirectX::XMFLOAT3 kMeshCenter{0.0f, 0.0f, 0.0f};
 
     if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
-        camera.Focus(kMeshCenter);
+        DirectX::XMFLOAT3 target = kMeshCenter;
+        if (&preview == &m_renderer) SelectedPathFocusTarget(target);
+        camera.Focus(target);
     } else if (ImGui::IsKeyPressed(ImGuiKey_A, false)) {
         camera.Frame(kMeshCenter, includeReferenceGrid
             ? std::max(preview.BoundingRadius(), renderer::PreviewRenderer::kReferenceGridRadius)

@@ -39,6 +39,7 @@ public:
         bool rightDown = false;
         bool alt = false;
         bool lightKey = false;
+        bool focusKey = false;
         bool shift = false;
         bool escape = false;
     };

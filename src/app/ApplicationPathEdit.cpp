@@ -47,6 +47,7 @@
 #include <DirectXMath.h>
 
 #include <algorithm>
+#include <numeric>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -910,6 +911,34 @@ bool Application::PickSurface(const graph::RoadGeometry& road, const ImVec2& mou
     XMFLOAT3 hit;
     if (!graph::RayHitsRoad(road, origin, direction, hit)) return false;
     return graph::RoadSurfaceCoordinates(road, hit, outDistance, outLateral);
+}
+
+bool Application::SelectedPathFocusTarget(XMFLOAT3& target) const {
+    const auto* node = m_graph.FindNode(m_selectedGraphNode);
+    const auto* settings = node ? std::get_if<graph::PathNodeSettings>(&node->settings) : nullptr;
+    if (!settings) return false;
+    const auto& path = settings->path;
+    if (path.surfaceSpace && !SurfacePathRoad(*node)) return false;
+    std::vector<graph::PathElementId> ids;
+    if (m_pathEdit.nodeId == node->id)
+        ids = PathMovablePoints(path, m_pathEdit.selected, m_pathEdit.selectedEdges, m_pathEdit.selectedStrandInterior);
+    if (ids.empty())
+        for (const auto& point : path.points) ids.push_back(point.id);
+
+    XMFLOAT3 lo{}, hi{};
+    bool found = false;
+    for (const auto id : ids) {
+        const auto* point = path.FindPoint(id);
+        if (!point) continue;
+        const auto world = PathWorldPosition(point->x, point->z, point->y);
+        if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z)) continue;
+        if (!found) { lo = hi = world; found = true; }
+        lo.x = std::min(lo.x, world.x); lo.y = std::min(lo.y, world.y); lo.z = std::min(lo.z, world.z);
+        hi.x = std::max(hi.x, world.x); hi.y = std::max(hi.y, world.y); hi.z = std::max(hi.z, world.z);
+    }
+    if (!found) return false;
+    target = {std::midpoint(lo.x, hi.x), std::midpoint(lo.y, hi.y), std::midpoint(lo.z, hi.z)};
+    return true;
 }
 
 XMFLOAT3 Application::PathWorldPosition(float u, float v, float y) const {

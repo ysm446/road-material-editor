@@ -77,6 +77,7 @@ void Application::DrawSkyLibraryPanel() {
                 DrawSkyContextMenu(asset.id);
                 ImGui::EndPopup();
             }
+            ui::GridCaption(asset.name.c_str(), thumbnailSize);
             ImGui::EndGroup();
 
             ImGui::PopID();

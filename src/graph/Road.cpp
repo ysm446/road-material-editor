@@ -1323,11 +1323,19 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
         std::vector<size_t> bends;
         float traveled = 0;
         float turnSide = rng.Chance(0.5f) ? 1.0f : -1.0f;
-        // 細部用の乱数を分離し、大きな折れの並びを細分数に依存させない。
-        CrackRandom detailRng(settings.seed ^ (static_cast<uint32_t>(cluster) + 1u) * 0x85EBCA6Bu);
+        CrackRandom shortBendRng(settings.seed ^ (static_cast<uint32_t>(cluster) + 1u) * 0xC2B2AE35u);
+        int shortBendsRemaining = 0;
         while (traveled < length) {
             const float heading = theta + turnSide * jitter * 0.8f * rng.Range(0.55f, 1.0f);
-            const float segment = std::min(rng.Range(0.9f, 1.7f), length - traveled);
+            float segmentLength = rng.Range(0.9f, 1.7f);
+            // 一部は通常の1/3〜1/2の長さで折る。細かな揺らぎはテクスチャに任せる。
+            if (shortBendsRemaining == 0 && shortBendRng.Chance(0.3f))
+                shortBendsRemaining = shortBendRng.Int(2, 4);
+            if (shortBendsRemaining > 0) {
+                segmentLength *= shortBendRng.Range(1.0f / 3.0f, 0.5f);
+                --shortBendsRemaining;
+            }
+            const float segment = std::min(segmentLength, length - traveled);
             const auto origin = trunk.back();
             const float dx = std::sin(heading), dz = std::cos(heading);
             float available = segment;
@@ -1335,19 +1343,11 @@ bool BuildCracks(const RoadGeometry& road, const RoadLanes& lanes, const CrackNo
             if (std::abs(dz) > 1e-6f) available = std::min(available, ((dz > 0 ? total - 0.05f : 0.05f) - origin.distance) / dz);
             if (available < 1e-4f) break;
             if (trunk.size() > 1) bends.push_back(trunk.size() - 1);
-            const bool detailed = detailRng.Chance(0.55f);
-            const float spacing = detailed ? detailRng.Range(0.12f, 0.20f) : stepMeters;
-            const int steps = static_cast<int>(std::ceil(available / spacing));
-            const float amplitude = std::sin(jitter) * detailRng.Range(0.025f, 0.065f);
-            const float detailSide = detailRng.Chance(0.5f) ? 1.0f : -1.0f;
+            const int steps = static_cast<int>(std::ceil(available / stepMeters));
             for (int step = 1; step <= steps; ++step) {
                 const float at = available * float(step) / float(steps);
-                // 大きな角の前後は直線を残し、枝が出る方向と根元を維持する。
-                const float envelope = std::sin(DirectX::XM_PI * float(step) / float(steps));
-                const float offset = detailed && step > 1 && step < steps - 1 ?
-                    detailSide * (step % 2 ? -1.0f : 1.0f) * amplitude * envelope * detailRng.Range(0.5f, 1.0f) : 0;
-                trunk.push_back({std::clamp(origin.lateral + dx * at + dz * offset, -halfInside, halfInside),
-                                 std::clamp(origin.distance + dz * at - dx * offset, 0.05f, total - 0.05f), 0,
+                trunk.push_back({std::clamp(origin.lateral + dx * at, -halfInside, halfInside),
+                                 std::clamp(origin.distance + dz * at, 0.05f, total - 0.05f), 0,
                                  trunkWidthAt((traveled + at) / length)});
             }
             traveled += available;

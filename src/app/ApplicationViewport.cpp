@@ -1,4 +1,4 @@
-// ビューポートパネルと、その上の入力（軌道 / ライトドラッグ / パス編集 / 選択）、
+// ビューポートパネルと、その上の入力（軌道 / ライトドラッグ / パス編集）、
 // 重ねて描くギズモ類。
 
 #include "app/Application.h"
@@ -22,77 +22,6 @@
 #include <vector>
 
 namespace tg {
-
-void Application::HandleMeshSelection(bool hovered, const ImVec2& viewportMin,
-                                      const ImVec2& viewportMax) {
-    auto& state = m_meshSelection;
-    const auto& meshes = m_renderer.Scene().meshes;
-    std::erase_if(state.selected, [&](size_t index) { return index >= meshes.size(); });
-    const auto& io = ImGui::GetIO();
-    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        state.pending = true;
-        state.dragging = false;
-        state.additive = io.KeyShift;
-        state.start = state.end = io.MousePos;
-        state.previous = state.selected;
-    }
-    if (state.pending && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-        state.selected = state.previous;
-        state.pending = state.dragging = false;
-    }
-    if (state.pending) {
-        state.end = {std::clamp(io.MousePos.x, viewportMin.x, viewportMax.x),
-                     std::clamp(io.MousePos.y, viewportMin.y, viewportMax.y)};
-        state.dragging |= ImGui::IsMouseDragging(ImGuiMouseButton_Left, ui::Scaled(4.0f));
-        if (state.dragging) state.selected = state.additive ? state.previous : std::vector<size_t>{};
-    }
-    const ImVec2 lo(std::min(state.start.x, state.end.x), std::min(state.start.y, state.end.y));
-    const ImVec2 hi(std::max(state.start.x, state.end.x), std::max(state.start.y, state.end.y));
-    const auto& camera = m_renderer.GetCamera();
-    const auto viewProjection = camera.ViewMatrix() * camera.ProjectionMatrix();
-    const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
-    auto* draw = ImGui::GetWindowDrawList();
-    draw->PushClipRect(viewportMin, viewportMax, true);
-    for (size_t index = 0; index < meshes.size(); ++index) {
-        ImVec2 min{};
-        ImVec2 max{};
-        bool valid = false;
-        for (const auto& vertex : meshes[index].geometry.vertices) {
-            const auto point = ProjectToViewport(viewProjection, vertex.position, viewportMin, size);
-            if (!point.visible) continue;
-            if (!valid) { min = max = point.screen; valid = true; }
-            min.x = std::min(min.x, point.screen.x);
-            min.y = std::min(min.y, point.screen.y);
-            max.x = std::max(max.x, point.screen.x);
-            max.y = std::max(max.y, point.screen.y);
-        }
-        if (!valid) continue;
-        // メッシュは投影した境界矩形と選択枠の交差で選ぶ。点の選択とは区別する。
-        if (state.pending && state.dragging && min.x <= hi.x && max.x >= lo.x &&
-            min.y <= hi.y && max.y >= lo.y &&
-            std::find(state.selected.begin(), state.selected.end(), index) == state.selected.end()) {
-            state.selected.push_back(index);
-        }
-        if (std::find(state.selected.begin(), state.selected.end(), index) != state.selected.end()) {
-            draw->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_PlotLinesHovered), 0.0f, 0, ui::Scaled(2.0f));
-        }
-    }
-    if (state.pending && state.dragging) {
-        draw->AddRectFilled(lo, hi, ImGui::GetColorU32(ImGuiCol_TextSelectedBg, 0.4f));
-        draw->AddRect(lo, hi, ImGui::GetColorU32(ImGuiCol_PlotLinesHovered));
-    }
-    if (state.pending && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        if (!state.dragging && !state.additive) state.selected.clear();
-        state.pending = state.dragging = false;
-    }
-    if (!state.selected.empty()) {
-        char text[64];
-        std::snprintf(text, sizeof(text), "選択: %zu メッシュ", state.selected.size());
-        draw->AddText(ImVec2(viewportMin.x + ui::Scaled(12.0f), viewportMin.y + ui::Scaled(50.0f)),
-                      ImGui::GetColorU32(ImGuiCol_Text), text);
-    }
-    draw->PopClipRect();
-}
 
 // 3 桁ごとに区切る。**桁数の多い数はそのままだと読めない。**
 std::string GroupDigits(uint64_t value) {
@@ -498,12 +427,6 @@ void Application::DrawViewportPanel() {
                 m_pathEdit.boxPending = m_pathEdit.boxSelecting = false;
                 m_pathEdit.dragging = false;
                 m_pathEdit.dragPoint = 0;
-            }
-
-            if (pathNode == nullptr && m_renderer.HasMeshScene() && !lightDragging && !io.KeyAlt) {
-                HandleMeshSelection(itemHovered, imageOrigin, imageMax);
-            } else {
-                m_meshSelection.pending = m_meshSelection.dragging = false;
             }
 
             // 視点操作は Alt を押している間だけ受ける（Maya と同じ割り当て）。

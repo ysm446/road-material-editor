@@ -95,17 +95,6 @@ private:
     // 既定のドックレイアウトを組む。ini に配置が無いときと、明示的な要求で呼ぶ。
     void BuildDefaultLayout(ImGuiID dockspaceId);
     void DrawViewportPanel();
-    void HandleMeshSelection(bool hovered, const ImVec2& viewportMin, const ImVec2& viewportMax);
-    struct MeshSelectionState {
-        bool pending = false;
-        bool dragging = false;
-        bool additive = false;
-        ImVec2 start{};
-        ImVec2 end{};
-        std::vector<size_t> selected;
-        std::vector<size_t> previous;
-    };
-    MeshSelectionState m_meshSelection;
 
     void DrawMaterialPanel();
     void DrawLightingPanel();

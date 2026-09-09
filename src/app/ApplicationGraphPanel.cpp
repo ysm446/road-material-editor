@@ -387,10 +387,7 @@ void Application::SyncMeshGraph() {
     }
     m_meshGraphError = compiled.error;
     if (!uploaded) m_meshGraphError = "道路メッシュをGPUへ転送できませんでした";
-    if (uploaded) {
-        m_meshGraphActive = compiled.active;
-        m_meshSelection = MeshSelectionState{};
-    }
+    if (uploaded) m_meshGraphActive = compiled.active;
     m_meshGraphRevision = m_graph.Revision();
     m_meshGraphPreviewNode = previewMeshNode;
 }

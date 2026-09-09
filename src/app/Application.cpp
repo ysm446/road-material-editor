@@ -394,8 +394,8 @@ int Application::Run() {
         m_imgui.BeginFrame(testDrag ? &testInput : nullptr);
         DrawUi();
         if (testDrag && m_frameCounter == 18) {
-            TG_LOG_INFO("SelectionTest: points=%zu edges=%zu meshes=%zu dirty=%d", m_pathEdit.selected.size(), m_pathEdit.selectedEdges.size(),
-                        m_meshSelection.selected.size(), m_documentDirty ? 1 : 0);
+            TG_LOG_INFO("SelectionTest: points=%zu edges=%zu dirty=%d", m_pathEdit.selected.size(), m_pathEdit.selectedEdges.size(),
+                        m_documentDirty ? 1 : 0);
             TG_LOG_INFO("IndependentLightTest: road=%.4f,%.4f layer=%.4f,%.4f",
                         m_renderer.Light().azimuth, m_renderer.Light().elevation,
                         m_layerPreview.Light().azimuth, m_layerPreview.Light().elevation);

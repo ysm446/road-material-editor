@@ -1182,7 +1182,7 @@ void Application::DrawGraphPanel() {
             changed |= DrawMeshMaterialSlotRow("マテリアル", crack->material, m_materialLibrary);
             {
                 int seed = static_cast<int>(crack->seed);
-                if (ui::PropertyInt("乱数種", &seed, 0, 99999, static_cast<int>(defaults.seed), "変えると配置と形が変わる")) {
+                if (ui::PropertyInt("シード", &seed, 0, 99999, static_cast<int>(defaults.seed), "変えると配置と形が変わる")) {
                     crack->seed = static_cast<uint32_t>(std::max(0, seed));
                     changed = true;
                 }

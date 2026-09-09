@@ -449,7 +449,13 @@ void Application::DrawLayerMaterialLibrary() {
             const auto cached = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == preset.id; });
             const ImTextureID texture = cached != m_layerThumbnails.end() && cached->ready ? static_cast<ImTextureID>(cached->texture.srv.gpu.ptr) : 0;
             const auto thumbnail = ui::ThumbnailButton("thumbnail", texture, size, m_selectedLayerMaterial == preset.id);
-            if (thumbnail.clicked) { m_selectedLayerMaterial = preset.id; m_layerLibraryError.clear(); }
+            if (thumbnail.clicked) {
+                m_selectedLayerMaterial = preset.id; m_layerLibraryError.clear();
+                // 編集ウィンドウが開いていれば、選んだものへ内容を切り替える（フォーカスは移さない）。
+                if (m_editSurfacePreset && m_editSurfacePreset != preset.id) {
+                    m_editSurfacePreset = preset.id; m_selectedPresetLayer = 0; m_selectedPresetMask = false; m_surfacePresetError.clear();
+                }
+            }
             if (thumbnail.doubleClicked) {
                 m_editSurfacePreset = preset.id; m_selectedPresetLayer = 0; m_surfacePresetError.clear();
                 ImGui::SetWindowFocus("レイヤーマテリアル編集");

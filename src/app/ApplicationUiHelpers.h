@@ -128,6 +128,21 @@ inline int ResolutionIndex(uint32_t resolution) {
     return 1;
 }
 
+// 直前のアイテムへマテリアル一覧からのドラッグを受ける。落とせば slot を差し替えて真。
+// ID の無いアイテム（画像や Dummy）でも矩形から受け口を作れる。
+inline bool AcceptMaterialDrop(compositor::MaterialAssetId& slot) {
+    bool changed = false;
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kMaterialDragDropType);
+            payload != nullptr) {
+            slot = *static_cast<const compositor::MaterialAssetId*>(payload->Data);
+            changed = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+    return changed;
+}
+
 // マテリアルを選ぶ行。サムネイル付きの一覧から選ぶ。
 inline bool DrawMaterialSlotRow(const char* label, compositor::MaterialAssetId& slot,
                          const compositor::MaterialLibrary& library, bool showThumbnail = false,
@@ -144,6 +159,8 @@ inline bool DrawMaterialSlotRow(const char* label, compositor::MaterialAssetId& 
     if (showThumbnail) {
         const float rowY = ImGui::GetCursorPosY();
         ui::ThumbnailImage(static_cast<ImTextureID>(library.ThumbnailHandle(slot).ptr), thumbnailSize);
+        // サムネイルもコンボと同じ受け口。狙う先が広いほど落としやすい。
+        changed |= AcceptMaterialDrop(slot);
         ImGui::SameLine();
         ImGui::SetCursorPosY(rowY + (thumbnailSize - ImGui::GetFrameHeight()) * 0.5f);
     }
@@ -180,14 +197,7 @@ inline bool DrawMaterialSlotRow(const char* label, compositor::MaterialAssetId& 
     }
     // マテリアル一覧からドラッグしてきたものを受ける。テクスチャのコンボと同じ作りで、
     // ドラッグ中にコンボは開けないので、直前のアイテムは必ずコンボ本体になる。
-    if (ImGui::BeginDragDropTarget()) {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kMaterialDragDropType);
-            payload != nullptr) {
-            slot = *static_cast<const compositor::MaterialAssetId*>(payload->Data);
-            changed = true;
-        }
-        ImGui::EndDragDropTarget();
-    }
+    changed |= AcceptMaterialDrop(slot);
     ui::PropertyEnd();
     return changed;
 }

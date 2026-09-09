@@ -587,7 +587,10 @@ void Application::DrawSurfacePresetEditor() {
                 m_selectedPresetLayer = i; m_selectedPresetMask = false;
             }
             if (ImGui::BeginDragDropSource()) { ImGui::SetDragDropPayload("TG_PRESET_LAYER", &i, sizeof(i)); ImGui::TextUnformatted(asset ? asset->name.c_str() : "定数材質"); ImGui::EndDragDropSource(); }
-            if (ImGui::BeginDragDropTarget()) {
+            // 行のサムネイルと名前は、レイヤーの並べ替えとマテリアル一覧からのドロップの両方を受ける。
+            // 落とした先のレイヤーへ入れ、そのレイヤーを選ぶ（選択中のレイヤーではない）。
+            const auto acceptLayerDrops = [&]() {
+                if (!ImGui::BeginDragDropTarget()) return;
                 if (const auto* payload = ImGui::AcceptDragDropPayload("TG_PRESET_LAYER")) {
                     const int from = *static_cast<const int*>(payload->Data);
                     if (from >= 0 && from < static_cast<int>(layers.size()) && from != i) {
@@ -598,8 +601,13 @@ void Application::DrawSurfacePresetEditor() {
                         m_selectedPresetLayer = i; changed = true;
                     }
                 }
+                if (const auto* payload = ImGui::AcceptDragDropPayload(kMaterialDragDropType)) {
+                    layers[i].material = *static_cast<const compositor::MaterialAssetId*>(payload->Data);
+                    m_selectedPresetLayer = i; m_selectedPresetMask = false; changed = true;
+                }
                 ImGui::EndDragDropTarget();
-            }
+            };
+            acceptLayerDrops();
             ImGui::SameLine();
             const auto pos = ImGui::GetCursorScreenPos(); const float side = ui::Scaled(64);
             if (ImGui::InvisibleButton("mask", ImVec2(side, side))) { m_selectedPresetLayer = i; m_selectedPresetMask = true; }
@@ -617,6 +625,7 @@ void Application::DrawSurfacePresetEditor() {
             draw->AddRect(pos, ImVec2(pos.x + side, pos.y + side), ImGui::GetColorU32(i == m_selectedPresetLayer && m_selectedPresetMask ? ImGuiCol_HeaderActive : ImGuiCol_Border));
             ImGui::SameLine();
             if (ImGui::Selectable(asset ? asset->name.c_str() : "定数材質", i == m_selectedPresetLayer, 0, ImVec2(0, side))) m_selectedPresetLayer = i;
+            acceptLayerDrops();
             ImGui::PopID();
         }
         ImGui::Separator();

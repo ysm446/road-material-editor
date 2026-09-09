@@ -1,4 +1,4 @@
-// ビューポートパネルと、その上の入力（軌道 / ライトドラッグ / パス編集）、
+// ビューポートパネルと、その上の入力（軌道 / ライトドラッグ / パス編集 / メッシュの選択）、
 // 重ねて描くギズモ類。
 
 #include "app/Application.h"
@@ -12,9 +12,11 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <DirectXCollision.h>
 #include <DirectXMath.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -22,6 +24,80 @@
 #include <vector>
 
 namespace tg {
+
+namespace {
+
+// メッシュの軸平行境界ボックス。頂点が無ければ偽。
+bool MeshBounds(const renderer::MeshData& data, DirectX::BoundingBox& outBounds) {
+    if (data.vertices.empty()) return false;
+    DirectX::XMFLOAT3 lo = data.vertices.front().position;
+    DirectX::XMFLOAT3 hi = lo;
+    for (const auto& vertex : data.vertices) {
+        const auto& p = vertex.position;
+        lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
+        hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y); hi.z = std::max(hi.z, p.z);
+    }
+    DirectX::BoundingBox::CreateFromPoints(outBounds, DirectX::XMLoadFloat3(&lo), DirectX::XMLoadFloat3(&hi));
+    return true;
+}
+
+}  // namespace
+
+// カーソル直下のメッシュ。境界ボックスでふるいにかけてから三角形と交差を取り、最も手前を採る。
+// 判定は分割前・変位前の形なので、凹凸のある路面では数 cm ずれるが、ホバー表示には足りる。
+void Application::HandleMeshHover(bool itemHovered, const ImVec2& viewportMin, const ImVec2& viewportMax) {
+    using namespace DirectX;
+    auto& state = m_meshHighlight;
+    const auto& meshes = m_renderer.Scene().meshes;
+    if (state.selected >= 0 && static_cast<size_t>(state.selected) >= meshes.size()) state.selected = -1;
+    state.hovered = -1;
+    const ImGuiIO& io = ImGui::GetIO();
+    if (!itemHovered) return;
+
+    XMFLOAT3 origin;
+    XMFLOAT3 direction;
+    if (ViewportRay(io.MousePos, viewportMin, viewportMax, origin, direction)) {
+        const XMVECTOR rayOrigin = XMLoadFloat3(&origin);
+        const XMVECTOR rayDirection = XMLoadFloat3(&direction);
+        float nearest = FLT_MAX;
+        for (size_t index = 0; index < meshes.size(); ++index) {
+            const auto& mesh = meshes[index];
+            if (mesh.materialOnly) continue;
+            BoundingBox bounds;
+            float boxDistance = 0.0f;
+            if (!MeshBounds(mesh.geometry, bounds) || !bounds.Intersects(rayOrigin, rayDirection, boxDistance) ||
+                boxDistance >= nearest) {
+                continue;
+            }
+            const auto& vertices = mesh.geometry.vertices;
+            const auto& indices = mesh.geometry.indices;
+            for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+                const XMVECTOR a = XMLoadFloat3(&vertices[indices[t]].position);
+                const XMVECTOR b = XMLoadFloat3(&vertices[indices[t + 1]].position);
+                const XMVECTOR c = XMLoadFloat3(&vertices[indices[t + 2]].position);
+                float distance = 0.0f;
+                if (TriangleTests::Intersects(rayOrigin, rayDirection, a, b, c, distance) && distance < nearest) {
+                    nearest = distance;
+                    state.hovered = static_cast<int>(index);
+                }
+            }
+        }
+    }
+
+    // クリックで選ぶ。空を押せば解除。Esc でも解除。選択は文書を変えない。
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) state.selected = state.hovered;
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) state.selected = -1;
+}
+
+bool Application::SelectedMeshFocusTarget(DirectX::XMFLOAT3& target) const {
+    const auto& meshes = m_renderer.Scene().meshes;
+    const int selected = m_meshHighlight.selected;
+    if (selected < 0 || static_cast<size_t>(selected) >= meshes.size()) return false;
+    DirectX::BoundingBox bounds;
+    if (!MeshBounds(meshes[static_cast<size_t>(selected)].geometry, bounds)) return false;
+    target = bounds.Center;
+    return true;
+}
 
 // 3 桁ごとに区切る。**桁数の多い数はそのままだと読めない。**
 std::string GroupDigits(uint64_t value) {
@@ -226,8 +302,9 @@ void Application::HandleCameraInput(renderer::PreviewRenderer& preview, bool ite
     constexpr DirectX::XMFLOAT3 kMeshCenter{0.0f, 0.0f, 0.0f};
 
     if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+        // 選択中のパスの点、無ければ選択中のメッシュ、それも無ければ原点。
         DirectX::XMFLOAT3 target = kMeshCenter;
-        if (&preview == &m_renderer) SelectedPathFocusTarget(target);
+        if (&preview == &m_renderer && !SelectedPathFocusTarget(target)) SelectedMeshFocusTarget(target);
         camera.Focus(target);
     } else if (ImGui::IsKeyPressed(ImGuiKey_A, false)) {
         camera.Frame(kMeshCenter, includeReferenceGrid
@@ -429,9 +506,17 @@ void Application::DrawViewportPanel() {
                 m_pathEdit.dragPoint = 0;
             }
 
+            // Path 未選択なら、カーソル直下のメッシュを強調し、クリックで選ぶ。
+            if (pathNode == nullptr && m_renderer.HasMeshScene() && !lightDragging && !io.KeyAlt) {
+                HandleMeshHover(itemHovered, imageOrigin, imageMax);
+            } else {
+                m_meshHighlight.hovered = -1;
+            }
+            m_renderer.SetMeshHighlight(m_meshHighlight.hovered, m_meshHighlight.selected);
+
             // 視点操作は Alt を押している間だけ受ける（Maya と同じ割り当て）。
             //
-            // Alt なしのドラッグは、将来の選択や範囲選択のために空けてある。
+            // Alt なしのドラッグは、将来の範囲選択のために空けてある。
             // Alt を押している間はライトも無効になる（HandleLightDrag が !io.KeyAlt を見る）ので、
             // ここで競合は起きない。
             HandleCameraInput(m_renderer, itemActive, itemHovered, m_settings.Display().showReferenceGrid);

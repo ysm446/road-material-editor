@@ -179,6 +179,9 @@ public:
     void ClearMeshScene(rhi::Device& device);
     bool HasMeshScene() const { return m_meshSceneEnabled; }
     const MeshScene& Scene() const { return m_meshScene; }
+    // ビューポートで強調するメッシュ（Scene().meshes の添字。-1 で無し）。
+    // ホバー中と選択中の外周を、トーンマップ後に深度を無視して重ねる。**毎フレーム呼んでよい。**
+    void SetMeshHighlight(int hovered, int selected) { m_hoveredMesh = hovered; m_selectedMesh = selected; }
     // 材質アセットや画像を編集したときに呼ぶ。シーンの材質を次のフレームで評価し直す
     // （グラフの構造は変わらないので、シーンを作り直す必要はない）。
     void InvalidateSceneMaterials();
@@ -325,6 +328,8 @@ private:
     bool m_showRoadGrid = false;
     bool m_showUvChecker = false;
     bool m_showWireframe = false;
+    int m_hoveredMesh = -1;
+    int m_selectedMesh = -1;
     bool m_skyRebuildRequested = false;
     // Environment がいま持っている HDRI。較正倍率だけを掛け直せるかの判断に使う。
     std::filesystem::path m_loadedHdriPath;

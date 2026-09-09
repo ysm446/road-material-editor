@@ -973,8 +973,8 @@ XMFLOAT3 Application::PathWorldPosition(float u, float v, float y) const {
 }
 
 // カーソルからレイを飛ばし、パスの作業面（水平面 / 道路面）と交わる所を探す。
-bool Application::PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin,
-                                const ImVec2& viewportMax, float& outU, float& outV) const {
+bool Application::ViewportRay(const ImVec2& mouse, const ImVec2& viewportMin, const ImVec2& viewportMax,
+                              XMFLOAT3& outOrigin, XMFLOAT3& outDirection) const {
     const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
     if (size.x <= 0.0f || size.y <= 0.0f) {
         return false;
@@ -991,11 +991,18 @@ bool Application::PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin,
     const XMVECTOR nearPoint = XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 0.0f, 1.0f), inverse);
     const XMVECTOR farPoint = XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 1.0f, 1.0f), inverse);
     const XMVECTOR direction = XMVector3Normalize(XMVectorSubtract(farPoint, nearPoint));
+    XMStoreFloat3(&outOrigin, nearPoint);
+    XMStoreFloat3(&outDirection, direction);
+    return true;
+}
 
+bool Application::PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin,
+                                const ImVec2& viewportMax, float& outU, float& outV) const {
     XMFLOAT3 origin;
     XMFLOAT3 dir;
-    XMStoreFloat3(&origin, nearPoint);
-    XMStoreFloat3(&dir, direction);
+    if (!ViewportRay(mouse, viewportMin, viewportMax, origin, dir)) {
+        return false;
+    }
 
     const graph::Node* node = m_graph.FindNode(m_selectedGraphNode);
     const auto* settings = node ? std::get_if<graph::PathNodeSettings>(&node->settings) : nullptr;

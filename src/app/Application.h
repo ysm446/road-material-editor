@@ -246,6 +246,15 @@ private:
         bool dragging = false;
         double gizmoUntil = 0.0;
     };
+    // Path 未選択時のメッシュのホバーと選択（Scene().meshes の添字。-1 で無し）。
+    // レンダラが外周を重ね描きし、F キーのフォーカス先になる。シーンを作り直したら選択は消える。
+    struct MeshHighlightState {
+        int hovered = -1;
+        int selected = -1;
+    };
+    MeshHighlightState m_meshHighlight;
+    // カーソル直下のメッシュを CPU のレイ交差で探し、クリックで選ぶ。
+    void HandleMeshHover(bool itemHovered, const ImVec2& viewportMin, const ImVec2& viewportMax);
     bool HandleLightDrag(renderer::LightSettings& light, LightInteraction& interaction, bool itemActive);
     // ビューポート上の F / A キーで視点をメッシュへ戻す。
     void HandleCameraInput(renderer::PreviewRenderer& preview, bool itemActive, bool itemHovered,
@@ -274,9 +283,14 @@ private:
     // 面上のパスは道路面との交点（横位置 / 実距離）。当たらなければ偽。
     bool PickTerrainUv(const ImVec2& mouse, const ImVec2& viewportMin, const ImVec2& viewportMax,
                        float& outU, float& outV) const;
+    // カーソル位置からカメラのレイ（ワールド座標、方向は単位長）。ビューポートが潰れていれば偽。
+    bool ViewportRay(const ImVec2& mouse, const ImVec2& viewportMin, const ImVec2& viewportMax,
+                     DirectX::XMFLOAT3& outOrigin, DirectX::XMFLOAT3& outDirection) const;
     // パスの座標（x, z, y）をワールド座標へ。面上のパスは道路面から起こす。
     DirectX::XMFLOAT3 PathWorldPosition(float u, float v, float heightOffsetMeters) const;
     bool SelectedPathFocusTarget(DirectX::XMFLOAT3& target) const;
+    // 選択メッシュの境界ボックスの中心。選択が無ければ偽。
+    bool SelectedMeshFocusTarget(DirectX::XMFLOAT3& target) const;
     // Path ノードのプロパティ（グラフパネルのプロパティ欄から呼ぶ）。変更があれば true。
     bool DrawPathSettings(graph::Node& node);
 

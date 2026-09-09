@@ -16,6 +16,9 @@ bool Mesh::Create(rhi::Device& device, const MeshData& data, const wchar_t* debu
 
     const uint64_t vertexBytes = data.vertices.size() * sizeof(MeshVertex);
     const uint64_t indexBytes = data.indices.size() * sizeof(uint32_t);
+    // 外周の辺。頂点バッファを共有し、インデックスだけ別に持つ。
+    const std::vector<uint32_t> outline = MeshOutlineEdges(data);
+    const uint64_t outlineBytes = outline.size() * sizeof(uint32_t);
 
     rhi::ResourceAllocator& allocator = device.Allocator();
     if (!allocator.CreateDefaultBuffer(vertexBytes, D3D12_RESOURCE_STATE_COMMON, debugName,
@@ -26,10 +29,14 @@ bool Mesh::Create(rhi::Device& device, const MeshData& data, const wchar_t* debu
                                        m_indexBuffer)) {
         return false;
     }
+    if (outlineBytes > 0 && !allocator.CreateDefaultBuffer(outlineBytes, D3D12_RESOURCE_STATE_COMMON,
+                                                           debugName, m_outlineIndexBuffer)) {
+        return false;
+    }
 
     // 初期化時の一度きりの転送なので、専用のステージングバッファを使って即実行する。
     rhi::GpuBuffer staging;
-    if (!allocator.CreateUploadBuffer(vertexBytes + indexBytes, L"MeshStaging", staging)) {
+    if (!allocator.CreateUploadBuffer(vertexBytes + indexBytes + outlineBytes, L"MeshStaging", staging)) {
         return false;
     }
 
@@ -41,6 +48,7 @@ bool Mesh::Create(rhi::Device& device, const MeshData& data, const wchar_t* debu
     auto* bytes = static_cast<uint8_t*>(mapped);
     std::memcpy(bytes, data.vertices.data(), vertexBytes);
     std::memcpy(bytes + vertexBytes, data.indices.data(), indexBytes);
+    if (outlineBytes > 0) std::memcpy(bytes + vertexBytes + indexBytes, outline.data(), outlineBytes);
     staging.resource->Unmap(0, nullptr);
 
     const bool executed = device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
@@ -66,6 +74,16 @@ bool Mesh::Create(rhi::Device& device, const MeshData& data, const wchar_t* debu
                                                  D3D12_RESOURCE_STATE_INDEX_BUFFER),
         };
         commandList->ResourceBarrier(_countof(barriers), barriers);
+        if (outlineBytes > 0) {
+            const auto toCopyOutline = CD3DX12_RESOURCE_BARRIER::Transition(
+                m_outlineIndexBuffer.resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+            commandList->ResourceBarrier(1, &toCopyOutline);
+            commandList->CopyBufferRegion(m_outlineIndexBuffer.resource.Get(), 0, staging.resource.Get(),
+                                          vertexBytes + indexBytes, outlineBytes);
+            const auto toIndex = CD3DX12_RESOURCE_BARRIER::Transition(
+                m_outlineIndexBuffer.resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+            commandList->ResourceBarrier(1, &toIndex);
+        }
         PIXEndEvent(commandList);
     });
     if (!executed) {
@@ -83,8 +101,16 @@ bool Mesh::Create(rhi::Device& device, const MeshData& data, const wchar_t* debu
     m_indexBufferView.SizeInBytes = static_cast<UINT>(indexBytes);
     m_indexBufferView.Format = DXGI_FORMAT_R32_UINT;
 
+    if (outlineBytes > 0) {
+        m_outlineIndexBuffer.state = D3D12_RESOURCE_STATE_INDEX_BUFFER;
+        m_outlineIndexBufferView.BufferLocation = m_outlineIndexBuffer.GpuAddress();
+        m_outlineIndexBufferView.SizeInBytes = static_cast<UINT>(outlineBytes);
+        m_outlineIndexBufferView.Format = DXGI_FORMAT_R32_UINT;
+    }
+
     m_vertexCount = static_cast<uint32_t>(data.vertices.size());
     m_indexCount = static_cast<uint32_t>(data.indices.size());
+    m_outlineIndexCount = static_cast<uint32_t>(outline.size());
     return true;
 }
 
@@ -97,9 +123,15 @@ void Mesh::Release(rhi::Device& device) {
         device.Defer(m_indexBuffer.resource);
         device.Defer(m_indexBuffer.allocation);
     }
+    if (m_outlineIndexBuffer.IsValid()) {
+        device.Defer(m_outlineIndexBuffer.resource);
+        device.Defer(m_outlineIndexBuffer.allocation);
+    }
     m_vertexBuffer = rhi::GpuBuffer{};
     m_indexBuffer = rhi::GpuBuffer{};
+    m_outlineIndexBuffer = rhi::GpuBuffer{};
     m_indexCount = 0;
+    m_outlineIndexCount = 0;
     m_vertexCount = 0;
 }
 
@@ -113,6 +145,16 @@ void Mesh::Draw(ID3D12GraphicsCommandList* commandList, bool asPatches) const {
     commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
     commandList->IASetIndexBuffer(&m_indexBufferView);
     commandList->DrawIndexedInstanced(m_indexCount, 1, 0, 0, 0);
+}
+
+void Mesh::DrawOutline(ID3D12GraphicsCommandList* commandList) const {
+    if (m_outlineIndexCount == 0) {
+        return;
+    }
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+    commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
+    commandList->IASetIndexBuffer(&m_outlineIndexBufferView);
+    commandList->DrawIndexedInstanced(m_outlineIndexCount, 1, 0, 0, 0);
 }
 
 }  // namespace tg::renderer

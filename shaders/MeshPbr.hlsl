@@ -793,6 +793,19 @@ float4 PsWireframe(VsOutput input) : SV_Target0
     return float4(0.55f, 0.85f, 1.0f, 0.85f);
 }
 
+// meshDisplayFlags のビット。C++ の kMeshFlag* と一致させる。
+#define TG_MESH_FLAG_OUTLINE_HOVERED 4u
+#define TG_MESH_FLAG_OUTLINE_SELECTED 8u
+
+// ホバー / 選択メッシュのシルエット枠（外周の辺を LINELIST で描く）。
+// 選択はライトギズモと同じ暖色、ホバーはワイヤーフレームと同じ寒色で区別する。
+float4 PsOutline(VsOutput input) : SV_Target0
+{
+    if ((g_mesh.meshDisplayFlags & TG_MESH_FLAG_OUTLINE_SELECTED) != 0u)
+        return float4(1.0f, 0.74f, 0.30f, 0.95f);
+    return float4(0.55f, 0.85f, 1.0f, 0.9f);
+}
+
 float4 PsMain(VsOutput input) : SV_Target0
 {
     if ((g_mesh.meshDisplayFlags & 2u) != 0u)

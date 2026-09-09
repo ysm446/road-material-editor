@@ -196,6 +196,7 @@ void Application::ResetProject() {
 
     // グラフを既定へ戻す。位置はエディタへ流し込み直す。
     // メッシュシーンは次のフレームの SyncMeshGraph が作り直す（改版を 0 に戻す）。
+    m_meshHighlight = MeshHighlightState{};
     m_graph = graph::NodeGraph::CreateDefault();
     m_surfaceLayouts = {};
     m_layerThumbnailsDirty = true; ++m_layerThumbnailTextureRevision;
@@ -268,6 +269,7 @@ void Application::ProcessPendingFileWork() {
                              m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
         if (io::LoadProject(path, m_device, m_pipelineCache, refs)) {
             m_layerThumbnailsDirty = true; ++m_layerThumbnailTextureRevision;
+            m_meshHighlight = MeshHighlightState{};
             m_recentProjects.Add(path);
             m_projectPath = path;
             m_selectedGraphNode = m_graph.FindNode(m_options.selectNode) ? m_options.selectNode : 0;

@@ -2,6 +2,7 @@
 #include "renderer/AxisProjection.h"
 #include "renderer/MeshData.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -28,6 +29,37 @@ void RunMeshSceneTests() {
     scene.meshes[0].geometry.vertices[0].position.x = std::numeric_limits<float>::quiet_NaN();
     tests::Check(!renderer::ValidateMeshScene(scene), "Nonfinite position rejected");
     tests::Check(renderer::ValidateMeshScene(renderer::MeshScene{}), "Empty scene is valid");
+
+    tests::Section("Mesh outline edges");
+    {
+        // 2 枚の三角形で作る四角形。対角線は共有されるので外周は 4 辺。
+        renderer::MeshData quad;
+        quad.vertices = {
+            {{0, 0, 0}, {0, 1, 0}, {1, 0, 0, -1}, {0, 0}},
+            {{1, 0, 0}, {0, 1, 0}, {1, 0, 0, -1}, {1, 0}},
+            {{1, 0, 1}, {0, 1, 0}, {1, 0, 0, -1}, {1, 1}},
+            {{0, 0, 1}, {0, 1, 0}, {1, 0, 0, -1}, {0, 1}}};
+        quad.indices = {0, 1, 2, 0, 2, 3};
+        const auto outline = renderer::MeshOutlineEdges(quad);
+        tests::Check(outline.size() == 8, "Quad outline has 4 edges");
+        bool diagonal = false;
+        for (size_t i = 0; i + 1 < outline.size(); i += 2) {
+            const auto lo = std::min(outline[i], outline[i + 1]);
+            const auto hi = std::max(outline[i], outline[i + 1]);
+            if (lo == 0 && hi == 2) diagonal = true;
+        }
+        tests::Check(!diagonal, "Shared diagonal is not an outline edge");
+
+        // 対角線の頂点を複製した（UV の継ぎ目のような）四角形でも、位置が同じなら外周は 4 辺のまま。
+        renderer::MeshData split = quad;
+        split.vertices.push_back(quad.vertices[0]);
+        split.vertices.push_back(quad.vertices[2]);
+        split.vertices[4].uv = {0.5f, 0.5f};
+        split.indices = {0, 1, 2, 4, 5, 3};
+        tests::Check(renderer::MeshOutlineEdges(split).size() == 8, "Duplicated seam vertices merge by position");
+
+        tests::Check(renderer::MeshOutlineEdges(renderer::MeshData{}).empty(), "Empty mesh has no outline");
+    }
 
     tests::Section("Move axis projection");
     using namespace DirectX;

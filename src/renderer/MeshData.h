@@ -116,5 +116,9 @@ struct MeshScene {
 bool ValidateMeshScene(const MeshScene& scene);
 // 原点中心の包囲球。カメラとシャドウの既存規約に合わせる。
 float MeshSceneRadius(const MeshScene& scene);
+// メッシュの外周（隣接する三角形が 1 つしかない辺）を LINELIST のインデックス列で返す。
+// 位置が一致する頂点は同じ点として扱うので、UV や法線の継ぎ目は外周にならない。
+// ホバー / 選択のシルエット枠に使う。
+std::vector<uint32_t> MeshOutlineEdges(const MeshData& data);
 
 }  // namespace tg::renderer

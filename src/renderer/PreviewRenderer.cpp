@@ -65,6 +65,11 @@ struct LayerContextConstants {
 };
 static_assert(sizeof(LayerContextConstants) == 192);
 
+// MeshConstants::meshDisplayFlags のビット。**HLSL 側の TG_MESH_FLAG_* と一致させること。**
+constexpr uint32_t kMeshFlagUvChecker = 2u;
+constexpr uint32_t kMeshFlagOutlineHovered = 4u;
+constexpr uint32_t kMeshFlagOutlineSelected = 8u;
+
 struct MeshConstants {
     XMFLOAT4X4 viewProjection;
     // 法線をカメラ空間で見るためのビュー行列。**HLSL 側と同じ並びにすること。**
@@ -874,7 +879,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     constants.useMaterialTextures = 0u;
     constants.displacementScale = 0.0f;
     constants.debugView = static_cast<uint32_t>(m_debugView);
-    constants.meshDisplayFlags = m_showUvChecker ? 2u : 0u;
+    constants.meshDisplayFlags = m_showUvChecker ? kMeshFlagUvChecker : 0u;
     // 分割量はカメラから見た見え方で決める。本描画では viewProjection と同一で、
     // シャドウパスだけが viewProjection 側を上書きして分岐する。
     XMStoreFloat4x4(&constants.tessellationViewProjection, viewProjection);
@@ -900,8 +905,11 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         return m_meshScene.meshes[i].useBlendMode ? kPassDecal : kPassOpaque;
     };
     // シーンが無ければ何も描かない（m_sceneMeshes が空）。背景とグリッドだけが出る。
-    const auto drawMeshes = [&](const MeshConstants& passConstants, uint32_t passMask, bool tessellate, bool onlyWireframe = false) {
+    // outlineMesh が 0 以上なら、そのメッシュの外周だけを LINELIST で描く（ホバー / 選択の枠）。
+    const auto drawMeshes = [&](const MeshConstants& passConstants, uint32_t passMask, bool tessellate,
+                                bool onlyWireframe = false, int outlineMesh = -1) {
         for (size_t i = 0; i < m_sceneMeshes.size(); ++i) {
+            if (outlineMesh >= 0 && i != static_cast<size_t>(outlineMesh)) continue;
             if (m_meshScene.meshes[i].materialOnly || (onlyWireframe && !m_meshScene.meshes[i].showWireframe)) continue;
             MeshConstants drawConstants = passConstants;
             const Mesh& drawMesh = m_sceneMeshes[i];
@@ -1057,6 +1065,11 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             if (drawConstants.connectionContextCount != 0 && probeConstants == 0) {
                 probeConstants = allocation.gpuAddress;
                 probeMesh = i;
+            }
+            if (outlineMesh >= 0) {
+                drawMesh.DrawOutline(commandList);
+                ++m_stats.drawCalls;
+                continue;
             }
             drawMesh.Draw(commandList, tessellate);
             CountMeshDraw(m_stats, drawMesh, tessellate);
@@ -1360,6 +1373,43 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             drawMeshes(constants, kPassOpaque | kPassDecal | kPassTranslucent, wireTessellation, localWireframe);
             PIXEndEvent(commandList);
         }
+    }
+
+    // ホバー / 選択メッシュのシルエット枠。外周の辺を、本描画と同じ変位で押し出して重ねる。
+    // 深度は見ない（手前の物に隠れても輪郭が分かるようにする）。選択を先に描き、ホバーを上に重ねる。
+    if (m_meshSceneEnabled) {
+        rhi::GraphicsPipelineDesc outlineDesc;
+        outlineDesc.shaderPath = L"MeshPbr.hlsl";
+        outlineDesc.vertexEntry = L"VsMain";
+        outlineDesc.pixelEntry = L"PsOutline";
+        outlineDesc.rtvFormat = kOutputFormat;
+        outlineDesc.dsvFormat = kDepthFormat;
+        outlineDesc.layout = rhi::VertexLayout::MeshStandard;
+        outlineDesc.cullMode = D3D12_CULL_MODE_NONE;
+        outlineDesc.depthTest = false;
+        outlineDesc.depthWrite = false;
+        outlineDesc.lineTopology = true;
+        outlineDesc.alphaBlend = true;
+        ID3D12PipelineState* outlinePipeline = nullptr;
+        const auto drawOutline = [&](int meshIndex, uint32_t flag) {
+            if (meshIndex < 0 || static_cast<size_t>(meshIndex) >= m_sceneMeshes.size()) return;
+            if (outlinePipeline == nullptr) outlinePipeline = pipelineCache.GetGraphics(outlineDesc);
+            if (outlinePipeline == nullptr) return;
+            PIXBeginEvent(commandList, PIX_COLOR(240, 200, 120), "PreviewMeshOutline");
+            TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            TransitionIfNeeded(commandList, m_depth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            const D3D12_CPU_DESCRIPTOR_HANDLE outputRtv = m_output.rtv.cpu;
+            const D3D12_CPU_DESCRIPTOR_HANDLE depthDsv = m_depth.dsv.cpu;
+            commandList->OMSetRenderTargets(1, &outputRtv, FALSE, &depthDsv);
+            commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
+            commandList->SetPipelineState(outlinePipeline);
+            MeshConstants outlineConstants = constants;
+            outlineConstants.meshDisplayFlags |= flag;
+            drawMeshes(outlineConstants, kPassOpaque | kPassDecal | kPassTranslucent, false, false, meshIndex);
+            PIXEndEvent(commandList);
+        };
+        if (m_selectedMesh != m_hoveredMesh) drawOutline(m_selectedMesh, kMeshFlagOutlineSelected);
+        drawOutline(m_hoveredMesh, m_hoveredMesh == m_selectedMesh ? kMeshFlagOutlineSelected : kMeshFlagOutlineHovered);
     }
 
     // 作業グリッド。シーンの深度でテストするため、ImGui ではなくここで描く。

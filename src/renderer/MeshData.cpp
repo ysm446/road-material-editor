@@ -1,6 +1,7 @@
 #include "renderer/MeshData.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -85,6 +86,66 @@ bool ValidateMeshScene(const MeshScene& scene) {
             for (uint32_t index : seam) if (index >= data.vertices.size()) return false;
     }
     return std::isfinite(MeshSceneRadius(scene));
+}
+
+std::vector<uint32_t> MeshOutlineEdges(const MeshData& data) {
+    // 位置で頂点をまとめる。継ぎ目で複製された頂点を別の点とみなすと内側に線が残るため。
+    const size_t vertexCount = data.vertices.size();
+    std::vector<uint32_t> canonical(vertexCount);
+    {
+        std::vector<uint32_t> order(vertexCount);
+        for (uint32_t i = 0; i < vertexCount; ++i) order[i] = i;
+        const auto key = [&](uint32_t i) {
+            const auto& p = data.vertices[i].position;
+            return std::array<float, 3>{p.x, p.y, p.z};
+        };
+        std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return key(a) < key(b); });
+        constexpr float kMergeDistance = 1e-4f;
+        uint32_t representative = 0;
+        for (size_t n = 0; n < order.size(); ++n) {
+            const uint32_t i = order[n];
+            const auto& p = data.vertices[i].position;
+            const auto& r = data.vertices[representative].position;
+            if (n == 0 || std::abs(p.x - r.x) > kMergeDistance || std::abs(p.y - r.y) > kMergeDistance ||
+                std::abs(p.z - r.z) > kMergeDistance) {
+                representative = i;
+            }
+            canonical[i] = representative;
+        }
+    }
+
+    // 辺ごとの出現回数を数える。1 回だけ現れる辺が外周。
+    struct Edge { uint32_t lo, hi, first; };
+    std::vector<Edge> edges;
+    edges.reserve(data.indices.size());
+    for (size_t t = 0; t + 2 < data.indices.size(); t += 3) {
+        for (size_t k = 0; k < 3; ++k) {
+            const uint32_t a = data.indices[t + k];
+            const uint32_t b = data.indices[t + (k + 1) % 3];
+            if (a >= vertexCount || b >= vertexCount) continue;
+            const uint32_t ca = canonical[a];
+            const uint32_t cb = canonical[b];
+            if (ca == cb) continue;  // 縮退した辺
+            edges.push_back({std::min(ca, cb), std::max(ca, cb), static_cast<uint32_t>(t + k)});
+        }
+    }
+    std::sort(edges.begin(), edges.end(), [](const Edge& x, const Edge& y) {
+        return x.lo != y.lo ? x.lo < y.lo : x.hi < y.hi;
+    });
+    std::vector<uint32_t> outline;
+    for (size_t n = 0; n < edges.size();) {
+        size_t m = n + 1;
+        while (m < edges.size() && edges[m].lo == edges[n].lo && edges[m].hi == edges[n].hi) ++m;
+        if (m - n == 1) {
+            // 描画には元の頂点を使う（位置は同じ）。
+            const size_t t = edges[n].first;
+            const size_t base = t - (t % 3);
+            outline.push_back(data.indices[t]);
+            outline.push_back(data.indices[base + (t - base + 1) % 3]);
+        }
+        n = m;
+    }
+    return outline;
 }
 
 float MeshSceneRadius(const MeshScene& scene) {

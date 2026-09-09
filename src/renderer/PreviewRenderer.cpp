@@ -1408,8 +1408,10 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             drawMeshes(outlineConstants, kPassOpaque | kPassDecal | kPassTranslucent, false, false, meshIndex);
             PIXEndEvent(commandList);
         };
-        if (m_selectedMesh != m_hoveredMesh) drawOutline(m_selectedMesh, kMeshFlagOutlineSelected);
-        drawOutline(m_hoveredMesh, m_hoveredMesh == m_selectedMesh ? kMeshFlagOutlineSelected : kMeshFlagOutlineHovered);
+        for (const int selected : m_selectedMeshes) drawOutline(selected, kMeshFlagOutlineSelected);
+        const bool hoveredIsSelected =
+            std::find(m_selectedMeshes.begin(), m_selectedMeshes.end(), m_hoveredMesh) != m_selectedMeshes.end();
+        if (!hoveredIsSelected) drawOutline(m_hoveredMesh, kMeshFlagOutlineHovered);
     }
 
     // 作業グリッド。シーンの深度でテストするため、ImGui ではなくここで描く。

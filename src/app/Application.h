@@ -246,14 +246,21 @@ private:
         bool dragging = false;
         double gizmoUntil = 0.0;
     };
-    // Path 未選択時のメッシュのホバーと選択（Scene().meshes の添字。-1 で無し）。
+    // Path 未選択時のメッシュのホバーと選択（Scene().meshes の添字。hovered は -1 で無し）。
     // レンダラが外周を重ね描きし、F キーのフォーカス先になる。シーンを作り直したら選択は消える。
+    // 空からのドラッグは画面上の矩形で複数選択。Shift で追加、Esc で開始前へ戻す。
     struct MeshHighlightState {
         int hovered = -1;
-        int selected = -1;
+        std::vector<int> selected;
+        bool boxPending = false;
+        bool boxSelecting = false;
+        bool boxAdditive = false;
+        ImVec2 boxStart{};
+        ImVec2 boxEnd{};
+        std::vector<int> boxPrevious;
     };
     MeshHighlightState m_meshHighlight;
-    // カーソル直下のメッシュを CPU のレイ交差で探し、クリックで選ぶ。
+    // カーソル直下のメッシュを CPU のレイ交差で探し、クリックか矩形で選ぶ。
     void HandleMeshHover(bool itemHovered, const ImVec2& viewportMin, const ImVec2& viewportMax);
     bool HandleLightDrag(renderer::LightSettings& light, LightInteraction& interaction, bool itemActive);
     // ビューポート上の F / A キーで視点をメッシュへ戻す。

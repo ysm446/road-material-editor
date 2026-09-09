@@ -49,9 +49,53 @@ void Application::HandleMeshHover(bool itemHovered, const ImVec2& viewportMin, c
     using namespace DirectX;
     auto& state = m_meshHighlight;
     const auto& meshes = m_renderer.Scene().meshes;
-    if (state.selected >= 0 && static_cast<size_t>(state.selected) >= meshes.size()) state.selected = -1;
+    std::erase_if(state.selected, [&](int index) { return index < 0 || static_cast<size_t>(index) >= meshes.size(); });
     state.hovered = -1;
     const ImGuiIO& io = ImGui::GetIO();
+    const auto contains = [](const std::vector<int>& list, int index) {
+        return std::find(list.begin(), list.end(), index) != list.end();
+    };
+
+    // 空からのドラッグは画面上の矩形で複数選択。頂点が 1 つでも矩形に入れば選ぶ。
+    // 形状とアンドゥ履歴は変更しない。
+    if (state.boxPending) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            state.selected = state.boxPrevious;
+            state.boxPending = state.boxSelecting = false;
+            return;
+        }
+        state.boxEnd = {std::clamp(io.MousePos.x, viewportMin.x, viewportMax.x),
+                        std::clamp(io.MousePos.y, viewportMin.y, viewportMax.y)};
+        state.boxSelecting |= ImGui::IsMouseDragging(ImGuiMouseButton_Left, ui::Scaled(3.0f));
+        if (state.boxSelecting) {
+            state.selected = state.boxAdditive ? state.boxPrevious : std::vector<int>{};
+            const ImVec2 lo(std::min(state.boxStart.x, state.boxEnd.x), std::min(state.boxStart.y, state.boxEnd.y));
+            const ImVec2 hi(std::max(state.boxStart.x, state.boxEnd.x), std::max(state.boxStart.y, state.boxEnd.y));
+            const auto& camera = m_renderer.GetCamera();
+            const XMMATRIX viewProjection = camera.ViewMatrix() * camera.ProjectionMatrix();
+            const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
+            for (size_t index = 0; index < meshes.size(); ++index) {
+                const auto& mesh = meshes[index];
+                if (mesh.materialOnly || contains(state.selected, static_cast<int>(index))) continue;
+                for (const auto& vertex : mesh.geometry.vertices) {
+                    const auto point = ProjectToViewport(viewProjection, vertex.position, viewportMin, size);
+                    if (point.visible && point.screen.x >= lo.x && point.screen.x <= hi.x &&
+                        point.screen.y >= lo.y && point.screen.y <= hi.y) {
+                        state.selected.push_back(static_cast<int>(index));
+                        break;
+                    }
+                }
+            }
+            auto* draw = ImGui::GetWindowDrawList();
+            draw->PushClipRect(viewportMin, viewportMax, true);
+            draw->AddRectFilled(lo, hi, ImGui::GetColorU32(ImGuiCol_TextSelectedBg, 0.4f));
+            draw->AddRect(lo, hi, ImGui::GetColorU32(ImGuiCol_PlotLinesHovered));
+            draw->PopClipRect();
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) state.boxPending = state.boxSelecting = false;
+        if (state.boxSelecting) return;  // 矩形の最中はホバーもクリックも見ない
+    }
+
     if (!itemHovered) return;
 
     XMFLOAT3 origin;
@@ -84,18 +128,40 @@ void Application::HandleMeshHover(bool itemHovered, const ImVec2& viewportMin, c
         }
     }
 
-    // クリックで選ぶ。空を押せば解除。Esc でも解除。選択は文書を変えない。
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) state.selected = state.hovered;
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) state.selected = -1;
+    // 押した瞬間に矩形選択の待機へ入る。動かさずに離せばクリック選択（Shift で切り替え）。
+    // 空を押せば解除。Esc でも解除。選択は文書を変えない。
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        state.boxPending = true;
+        state.boxSelecting = false;
+        state.boxAdditive = io.KeyShift;
+        state.boxStart = state.boxEnd = io.MousePos;
+        state.boxPrevious = state.selected;
+        if (state.hovered < 0) {
+            if (!io.KeyShift) state.selected.clear();
+        } else if (io.KeyShift) {
+            if (contains(state.selected, state.hovered)) std::erase(state.selected, state.hovered);
+            else state.selected.push_back(state.hovered);
+        } else {
+            state.selected = {state.hovered};
+        }
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) state.selected.clear();
 }
 
 bool Application::SelectedMeshFocusTarget(DirectX::XMFLOAT3& target) const {
+    using namespace DirectX;
     const auto& meshes = m_renderer.Scene().meshes;
-    const int selected = m_meshHighlight.selected;
-    if (selected < 0 || static_cast<size_t>(selected) >= meshes.size()) return false;
-    DirectX::BoundingBox bounds;
-    if (!MeshBounds(meshes[static_cast<size_t>(selected)].geometry, bounds)) return false;
-    target = bounds.Center;
+    BoundingBox total;
+    bool found = false;
+    for (const int selected : m_meshHighlight.selected) {
+        if (selected < 0 || static_cast<size_t>(selected) >= meshes.size()) continue;
+        BoundingBox bounds;
+        if (!MeshBounds(meshes[static_cast<size_t>(selected)].geometry, bounds)) continue;
+        if (!found) { total = bounds; found = true; }
+        else BoundingBox::CreateMerged(total, total, bounds);
+    }
+    if (!found) return false;
+    target = total.Center;
     return true;
 }
 
@@ -511,12 +577,13 @@ void Application::DrawViewportPanel() {
                 HandleMeshHover(itemHovered, imageOrigin, imageMax);
             } else {
                 m_meshHighlight.hovered = -1;
+                m_meshHighlight.boxPending = m_meshHighlight.boxSelecting = false;
             }
             m_renderer.SetMeshHighlight(m_meshHighlight.hovered, m_meshHighlight.selected);
 
             // 視点操作は Alt を押している間だけ受ける（Maya と同じ割り当て）。
             //
-            // Alt なしのドラッグは、将来の範囲選択のために空けてある。
+            // Alt なしのドラッグはメッシュの矩形選択（Path 選択中は制御点の矩形選択）。
             // Alt を押している間はライトも無効になる（HandleLightDrag が !io.KeyAlt を見る）ので、
             // ここで競合は起きない。
             HandleCameraInput(m_renderer, itemActive, itemHovered, m_settings.Display().showReferenceGrid);

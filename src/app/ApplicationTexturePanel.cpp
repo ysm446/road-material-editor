@@ -222,7 +222,9 @@ void Application::DrawTextureLibraryPanel() {
                 m_scrollToSelectedTexture = false;
                 ImGui::SetScrollHereY(1.0f);
             }
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoHoldToOpenOthers)) {
+            // hold-to-open は残す。テクスチャとマテリアルは帯の同じ枠のタブなので、
+            // ドラッグ中に「マテリアル」のタブへ重ねて待つとタブが切り替わり、マップ欄へ落とせる。
+            if (ImGui::BeginDragDropSource()) {
                 // マテリアルのマップ欄へ落とすと、そのスロットに割り当たる。
                 ImGui::SetDragDropPayload(kTextureDragDropType, &entry.id,
                                           sizeof(compositor::TextureId));

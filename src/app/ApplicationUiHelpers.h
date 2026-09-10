@@ -15,6 +15,7 @@
 #include "ui/UiStyle.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <DirectXMath.h>
 
@@ -105,6 +106,27 @@ inline constexpr const char* kTextureDragDropType = "TG_TEXTURE";
 // マテリアル一覧から Surface のマテリアル欄（プロパティの行 / ノードのサムネイル）へ
 // ドラッグ＆ドロップで割り当てるときのペイロードの種別。中身は MaterialAssetId。
 inline constexpr const char* kMaterialDragDropType = "TG_MATERIAL";
+// アセットの帯のレイヤーマテリアル / 境界マテリアルのサムネイルをドラッグしたときのペイロード
+//（どちらも graph::SurfaceId）。Road の沿道欄の該当行へ落とすと、その区間に割り当たる。
+inline constexpr const char* kLayerMaterialDragDropType = "TG_LAYER_MATERIAL";
+inline constexpr const char* kBoundaryMaterialDragDropType = "TG_BOUNDARY_MATERIAL";
+
+// 直前の ui::PropertyCombo の値の矩形（サムネイル＋コンボ）を受け口にして、type のペイロードを受ける。
+// 落とされた ID を outId に入れて真。コンボ本体だけでなくサムネイルにも落とせるようにするための部品。
+template <typename Id>
+inline bool AcceptComboDrop(const char* type, Id& outId) {
+    ImVec2 min, max;
+    ui::LastPropertyComboRect(min, max);
+    bool accepted = false;
+    if (ImGui::BeginDragDropTargetCustom(ImRect(min, max), ImGui::GetID(type))) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(type); payload != nullptr) {
+            outId = *static_cast<const Id*>(payload->Data);
+            accepted = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+    return accepted;
+}
 inline constexpr const char* kTextureRemoveModalTitle = "テクスチャを削除";
 
 // テクスチャの一覧に出すフォーマット名。DXGI の名前は長いので短く言い換える。

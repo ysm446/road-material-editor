@@ -40,7 +40,7 @@ bool CreateRoadLayout(SurfaceLayoutDocument& document, const NodeGraph& graph, G
     if (length < 0.1f || length > 50) { error = "区間編集は長さ0.1〜50 mの道路に対応します"; return false; }
     auto next = document;
     SurfacePreset preset;
-    preset.id = next.AllocateId(); preset.name = "道路材質"; preset.role = SurfaceRole::Road;
+    preset.id = next.AllocateId(); preset.name = "道路マテリアル"; preset.role = SurfaceRole::Road;
     preset.displacementMeters = road.settings.displacementMeters;
     preset.layerBlendRange = road.settings.layerBlendRange;
     preset.section = {{next.AllocateId(), 0, 0}, {next.AllocateId(), road.settings.widthMeters, 0}};
@@ -64,7 +64,7 @@ bool CreateRoadLayout(SurfaceLayoutDocument& document, const NodeGraph& graph, G
             if (upstream) {
                 const auto layers = graph.CompileLayersTo(upstream->id).layers;
                 if (layers.size() > 1 || (!layers.empty() && layers.back().channelMask != compositor::kAllChannelBits)) {
-                    error = "材質の取込は各スロット1層・全チャンネルに対応します"; return false;
+                    error = "マテリアルの取込は各スロット1層・全チャンネルに対応します"; return false;
                 }
                 if (!layers.empty()) {
                     const auto& layer = layers.back();

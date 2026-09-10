@@ -802,6 +802,16 @@ bool PropertyColorLinear(const char* label, float* linearRgb, const float* defau
     return PropertyColorImpl(label, linearRgb, defaultLinearRgb, tooltip, true);
 }
 
+namespace {
+ImVec2 g_lastComboMin;
+ImVec2 g_lastComboMax;
+}  // namespace
+
+void LastPropertyComboRect(ImVec2& outMin, ImVec2& outMax) {
+    outMin = g_lastComboMin;
+    outMax = g_lastComboMax;
+}
+
 bool PropertyCombo(const char* label, int* value, const char* const items[], int itemCount,
                    int defaultValue, const char* tooltip, const ImTextureID* thumbnails) {
     if (itemCount <= 0) {
@@ -811,6 +821,7 @@ bool PropertyCombo(const char* label, int* value, const char* const items[], int
 
     PropertyLabel(label, tooltip);
     const float thumbnailSize = Scaled(40);
+    g_lastComboMin = ImGui::GetCursorScreenPos();
     if (thumbnails) {
         const float rowY = ImGui::GetCursorPosY();
         ThumbnailImage(thumbnails[*value], thumbnailSize);
@@ -821,6 +832,7 @@ bool PropertyCombo(const char* label, int* value, const char* const items[], int
     bool changed = false;
     if (!thumbnails) {
         changed = ImGui::Combo("##value", value, items, itemCount);
+        g_lastComboMax = ImGui::GetItemRectMax();
     } else if (ImGui::BeginCombo("##value", items[*value])) {
         for (int i = 0; i < itemCount; ++i) {
             ImGui::PushID(i);
@@ -835,6 +847,11 @@ bool PropertyCombo(const char* label, int* value, const char* const items[], int
             ImGui::PopID();
         }
         ImGui::EndCombo();
+    }
+    if (thumbnails) {
+        // 閉じたコンボ本体の矩形。サムネイルの下端まで含める。
+        g_lastComboMax = ImGui::GetItemRectMax();
+        g_lastComboMax.y = std::max(g_lastComboMax.y, g_lastComboMin.y + thumbnailSize);
     }
 
     if (ResetDot(*value == defaultValue, items[std::clamp(defaultValue, 0, itemCount - 1)])) {

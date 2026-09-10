@@ -310,7 +310,7 @@ CompiledMeshGraph CompileSurfaceBandPreview(const NodeGraph& graph, const Surfac
     for (const auto& span : band->spans) {
         if (std::any_of(presets.begin(), presets.end(), [&](const auto* p) { return p->id == span.preset; })) continue;
         const auto found = std::find_if(document.presets.begin(), document.presets.end(), [&](const auto& p) { return p.id == span.preset; });
-        if (presets.size() == 3) { result.error = "沿道材質の試作は1帯につき最大3プリセットに対応します"; return result; }
+        if (presets.size() == 3) { result.error = "沿道マテリアルの試作は1帯につき最大3プリセットに対応します"; return result; }
         presets.push_back(&*found);
         float arc = 0;
         for (size_t i = 1; i < found->section.size(); ++i)
@@ -423,7 +423,7 @@ bool ConnectSurfaceBandMaterials(CompiledMeshGraph& scene, const NodeGraph& grap
             sourceRoad.connectionSources[0] != sourceRoad.connectionSources[2])
             return fail("横接続の試作は道路側1種類のプリセットに対応します");
         const size_t index = static_cast<size_t>(sourceRoad.connectionSources[0]);
-        if (index >= scene.scene.meshes.size()) return fail("道路材質の参照が不正です");
+        if (index >= scene.scene.meshes.size()) return fail("道路マテリアルの参照が不正です");
         roadContext = scene.scene.meshes[index];
     } else roadContext = sourceRoad;
     roadContext.geometry = {}; roadContext.materialOnly = true;

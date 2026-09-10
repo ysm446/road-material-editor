@@ -171,7 +171,7 @@ bool Application::DrawMaterialSlotRows(const graph::Node& node, bool* layerWorld
                                        uint32_t* layerHeightGate, float* layerHeightGateThreshold, float* layerHeightGateSoftness,
                                        uint32_t* layerBlendMode) {
     bool changed = false;
-    ui::SectionHeader("材質スロット");
+    ui::SectionHeader("マテリアルスロット");
     if (!ui::BeginPropertyTable("layerRows")) return false;
     static const char* const kUvSpaceLabels[] = {"面に沿う", "ワールド XZ"};
     std::vector<const graph::Pin*> materialPins;
@@ -187,7 +187,7 @@ bool Application::DrawMaterialSlotRows(const graph::Node& node, bool* layerWorld
                                  m_graph.FindUpstreamNodeForPin(materialPins[slot]->id) != nullptr;
         const bool hasMask = slot == 0 || (slot - 1 < static_cast<int>(maskPins.size()) &&
                                           m_graph.FindUpstreamNodeForPin(maskPins[slot - 1]->id) != nullptr);
-        ui::PropertyValue(label, "%s", !hasMaterial ? "材質なし" : (hasMask ? "有効" : "マスクなし（無効）"));
+        ui::PropertyValue(label, "%s", !hasMaterial ? "マテリアルなし" : (hasMask ? "有効" : "マスクなし（無効）"));
         if (!hasMaterial) continue;
         char spaceId[32];
         std::snprintf(spaceId, sizeof(spaceId), "  座標##slot%d", slot);
@@ -201,7 +201,7 @@ bool Application::DrawMaterialSlotRows(const graph::Node& node, bool* layerWorld
             char repeatId[32];
             std::snprintf(repeatId, sizeof(repeatId), "  UV反復長##slot%d", slot);
             changed |= ui::PropertyFloat(repeatId, &layerUvRepeatMeters[slot], 0.1f, 100.0f, 1.0f,
-                                         "このスロットの材質で UV が 1 増える実距離", "%.2f m");
+                                         "このスロットのマテリアルで UV が 1 増える実距離", "%.2f m");
             // 混ぜ方。マスクどおりが既定で、マスクを塗った所にそのまま出る。
             static const char* const kBlendModeLabels[] = {"マスクどおり", "ハイトで競合"};
             char modeId[32];
@@ -910,7 +910,7 @@ void Application::DrawGraphEditor() {
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Path, "Path — 実寸の3次元カーブを編集");
-        addNodeMenuItem(graph::NodeKind::Surface, "Surface — 材質を Road / Shoulder のスロットへ渡す");
+        addNodeMenuItem(graph::NodeKind::Surface, "Surface — マテリアルを Road / Shoulder のスロットへ渡す");
         // 旧地形ノード（Heightmap / Shape / Liquid / 侵食系 / Mask 系 / Output）はメニューから外した。
         // 旧ファイルの読込のためにノードの種類は残っている。
         ImGui::EndPopup();
@@ -1102,7 +1102,7 @@ void Application::DrawGraphPanel() {
                                         road->layerBlendRange, defaults.layerBlendRange,
                                         road->layerHeightGate, road->layerHeightGateThreshold, road->layerHeightGateSoftness,
                                         road->layerBlendMode);
-        if (!hasLayout) ui::HintText("Material にSurfaceなどのResultを接続して材質を適用。Material 2〜4 は Road Mask を Mask 2〜4 へ繋いだ所に出る。"
+        if (!hasLayout) ui::HintText("Material にSurfaceなどのResultを接続してマテリアルを適用。Material 2〜4 は Road Mask を Mask 2〜4 へ繋いだ所に出る。"
                      "RoadSurfaceはMesh Outputへ、Left / Rightは進行方向に向かって左右の境界Path。走行側はプレビュー設定の「道路」で切り替える。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (auto* decal = std::get_if<graph::DecalNodeSettings>(&selected->settings)) {
@@ -1111,7 +1111,7 @@ void Application::DrawGraphPanel() {
         if (ui::BeginPropertyTable("decalRows")) {
             changed |= DrawMeshMaterialSlotRow("マテリアル", decal->material, m_materialLibrary);
             changed |= ui::PropertyFloat("凹凸量", &decal->heightMeters, 0.0f, 1.0f, defaults.heightMeters,
-                                         "材質のHeightを路面の凹凸に加算。黒は0、白は指定の高さ。細かな凹凸にはプレビュー設定のテセレーションを使う", "%.3f m");
+                                         "マテリアルのHeightを路面の凹凸に加算。黒は0、白は指定の高さ。細かな凹凸にはプレビュー設定のテセレーションを使う", "%.3f m");
             changed |= ui::PropertyBool("帯ワイヤー", &decal->showWireframe, defaults.showWireframe, "この帯の分割前メッシュを重ねて表示する");
             changed |= ui::PropertyFloat("画像幅倍率", &decal->imageWidthScale, 0.01f, 100.0f, defaults.imageWidthScale,
                                          "帯の中心を基準に画像を幅方向へ拡大縮小。2で画像が2倍の大きさ。帯幅は変えない", "%.2f 倍");
@@ -1164,7 +1164,7 @@ void Application::DrawGraphPanel() {
             }
             changed |= ui::PropertyFloat("変位量", &shoulder->displacementMeters, 0.0f, 1.0f, defaults.displacementMeters,
                                          "Materialのハイトで路肩を法線方向へ押し出す量。ハイト0〜1の全幅がこの高さ（m）。"
-                                         "境界で道路と同じ材質・同じ量にすると段が出ない", "%.3f m", 0, 0.005f);
+                                         "境界で道路と同じマテリアル・同じ量にすると段が出ない", "%.3f m", 0, 0.005f);
             ui::EndPropertyTable();
         }
         changed |= DrawMaterialSlotRows(*selected, shoulder->layerWorldUv, shoulder->layerUvRepeatMeters,
@@ -1172,7 +1172,7 @@ void Application::DrawGraphPanel() {
                                         shoulder->layerHeightGate, shoulder->layerHeightGateThreshold, shoulder->layerHeightGateSoftness,
                                         shoulder->layerBlendMode);
         ui::HintText("PathにRoadのLeft / Right（または別のShoulderのOuter）を接続する。境界の頂点を共有するので道路と水密。"
-                     "材質スロットとMask 2〜4はRoadと同じ。Road Maskの「側」は路肩では 右＝境界側、左＝外側。"
+                     "マテリアルスロットとMask 2〜4はRoadと同じ。Road Maskの「側」は路肩では 右＝境界側、左＝外側。"
                      "出力のRoadSurfaceをMesh Outputへ、Outerは次の路肩や縁石へ。走行側には依存しない。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (auto* crack = std::get_if<graph::CrackNodeSettings>(&selected->settings)) {
@@ -1250,7 +1250,7 @@ void Application::DrawGraphPanel() {
             }
             ui::EndPropertyTable();
         }
-        ui::HintText("RoadのRoadSurfaceを接続すると、3〜6 m の枝分かれしたひび割れを乱数で置く。プロパティで割れ目の材質（マスク抜き）を選ぶ。"
+        ui::HintText("RoadのRoadSurfaceを接続すると、3〜6 m の枝分かれしたひび割れを乱数で置く。プロパティで割れ目のマテリアル（マスク抜き）を選ぶ。"
                      "個別に置きたいものは面上のPath＋Decalで描く。出力のRoadSurfaceをMergeかMesh Outputへ。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (selected->kind == graph::NodeKind::Merge) {
@@ -1275,7 +1275,7 @@ void Application::DrawGraphPanel() {
             changed |= ui::PropertyBool("中央線", &marking->centerLine, defaults.centerLine,
                 "進行方向と対向の境に1本引く。Road の車線数で位置が決まる。一方通行なら出ない");
             if (marking->centerLine) {
-                changed |= DrawMeshMaterialSlotRow("中央線の材質", marking->materials[0], m_materialLibrary);
+                changed |= DrawMeshMaterialSlotRow("中央線のマテリアル", marking->materials[0], m_materialLibrary);
                 changed |= ui::PropertyFloat("中央線の幅", &marking->centerLineWidthMeters, 0.05f, 1.0f,
                     defaults.centerLineWidthMeters, "中央線の帯の幅。実線・破線の両方に適用", "%.2f m");
                 static const char* const labels[] = {"実線", "破線"};
@@ -1289,14 +1289,14 @@ void Application::DrawGraphPanel() {
             changed |= ui::PropertyBool("外側線", &marking->edgeLines, defaults.edgeLines,
                 "左右の道路端の手前に1本ずつ引く");
             if (marking->edgeLines) {
-                changed |= DrawMeshMaterialSlotRow("外側線の材質", marking->materials[1], m_materialLibrary);
+                changed |= DrawMeshMaterialSlotRow("外側線のマテリアル", marking->materials[1], m_materialLibrary);
                 changed |= ui::PropertyFloat("外側線の幅", &marking->edgeLineWidthMeters, 0.05f, 1.0f,
                     defaults.edgeLineWidthMeters, "左右の外側線に共通する帯の幅", "%.2f m");
             }
             changed |= ui::PropertyBool("車線境界線", &marking->laneLines, defaults.laneLines,
                 "同方向の車線の間に破線で引く。Road の車線数が片側 2 以上のときに出る");
             if (marking->laneLines) {
-                changed |= DrawMeshMaterialSlotRow("車線境界線の材質", marking->materials[2], m_materialLibrary);
+                changed |= DrawMeshMaterialSlotRow("車線境界線のマテリアル", marking->materials[2], m_materialLibrary);
                 changed |= ui::PropertyFloat("車線境界線の幅", &marking->laneLineWidthMeters, 0.05f, 1.0f,
                     defaults.laneLineWidthMeters, "同方向の車線を分ける帯の幅", "%.2f m");
             }
@@ -1309,7 +1309,7 @@ void Application::DrawGraphPanel() {
             changed |= ui::PropertyBool("停止線", &marking->stopLines, defaults.stopLines,
                 "Path の点に付けた停止線を、その向きの車線の幅いっぱいに引く");
             if (marking->stopLines) {
-                changed |= DrawMeshMaterialSlotRow("停止線の材質", marking->materials[3], m_materialLibrary);
+                changed |= DrawMeshMaterialSlotRow("停止線のマテリアル", marking->materials[3], m_materialLibrary);
                 changed |= ui::PropertyFloat("停止線の幅", &marking->stopLineWidthMeters, 0.1f, 2.0f,
                     defaults.stopLineWidthMeters, "停止線の道路の長さ方向の幅", "%.2f m");
             }
@@ -1331,7 +1331,7 @@ void Application::DrawGraphPanel() {
             changed |= ui::PropertyBool("進行方向の矢印", &marking->arrows, defaults.arrows,
                 "各車線の中央に矢印を置く。進行方向の車線は線形の向き、対向車線は逆向き");
             if (marking->arrows) {
-                changed |= DrawMeshMaterialSlotRow("矢印の材質", marking->materials[4], m_materialLibrary);
+                changed |= DrawMeshMaterialSlotRow("矢印のマテリアル", marking->materials[4], m_materialLibrary);
                 changed |= ui::PropertyFloat("矢印の間隔", &marking->arrowIntervalMeters, 1.0f, 200.0f,
                     defaults.arrowIntervalMeters, "矢印を置く間隔", "%.0f m");
                 changed |= ui::PropertyFloat("矢印の長さ", &marking->arrowLengthMeters, 0.5f, 20.0f,
@@ -1340,7 +1340,7 @@ void Application::DrawGraphPanel() {
             ui::PropertyValue("走行側", "%s", m_graph.RoadNetwork().leftHandTraffic ? "左側通行" : "右側通行");
             ui::EndPropertyTable();
         }
-        ui::HintText("RoadのRoadSurfaceを接続し、出力のRoadSurfaceをMesh Outputへ。各線の材質はプロパティで選択する。「なし」は白。走行側はプレビュー設定の「道路」で切り替える。");
+        ui::HintText("RoadのRoadSurfaceを接続し、出力のRoadSurfaceをMesh Outputへ。各線のマテリアルはプロパティで選択する。「なし」は白。走行側はプレビュー設定の「道路」で切り替える。");
         if (changed) { m_graph.MarkDirty(); MarkDocumentChanged(); }
     } else if (selected->kind == graph::NodeKind::MeshOutput) {
         ui::HintText("RoadSurfaceを接続すると道路を表示する。複数のMesh Outputを同時に表示できる。");

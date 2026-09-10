@@ -28,6 +28,12 @@ void Application::DrawBoundaryMaterialLibrary() {
             if (clicked.clicked) m_selectedBoundaryMaterial = material.id;
             if (clicked.doubleClicked) m_editBoundaryMaterial = material.id;
             if (clicked.hovered) ImGui::SetTooltip("%s\nダブルクリックで編集", material.name.c_str());
+            // Road の沿道欄の境界マテリアル行へ落とすと、その区間に割り当たる。
+            if (ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(kBoundaryMaterialDragDropType, &material.id, sizeof(material.id));
+                ImGui::TextUnformatted(material.name.c_str());
+                ImGui::EndDragDropSource();
+            }
             if (ImGui::BeginPopupContextItem("boundaryMenu")) {
                 m_selectedBoundaryMaterial = material.id; menu(true); ImGui::EndPopup();
             }

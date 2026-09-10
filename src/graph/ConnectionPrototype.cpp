@@ -228,7 +228,7 @@ CompiledMeshGraph CompileConnectionPrototype(const NodeGraph& graph, GraphId roa
     if (!readContext(roadId, 0.015f, contexts[0]) ||
         !readContext(gravelSurfaceId, 0.08f, contexts[1]) ||
         !readContext(sidewalkSurfaceId, 0.005f, contexts[2])) {
-        compiled.error = "接続試作には有効な材質を持つRoadと、Surface / Road / Shoulderの接続先が必要です";
+        compiled.error = "接続試作には有効なマテリアルを持つRoadと、Surface / Road / Shoulderの接続先が必要です";
         return compiled;
     }
     renderer::SceneMesh mesh;

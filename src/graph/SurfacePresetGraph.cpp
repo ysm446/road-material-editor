@@ -73,7 +73,7 @@ bool ValidatePresetGraph(const PresetGraph& graph, std::string& error) {
     // 未出力の枝も、接続する前から4層の制限を検査する。
     for (const auto& node : graph.nodes) if (node.kind == PresetNodeKind::Blend || node.kind == PresetNodeKind::Output) {
         std::vector<PresetMaterial> result;
-        if (!Compile(graph, node.id, result)) return fail("合成できる材質は下地を含めて最大4層です");
+        if (!Compile(graph, node.id, result)) return fail("合成できるマテリアルは下地を含めて最大4層です");
     }
     return true;
 }

@@ -21,7 +21,7 @@ bool ExtractLayerMaterials(SurfaceLayoutDocument& document, std::string& error) 
         if (preset.layerMaterial) continue;
         LayerMaterial material;
         material.id = next.AllocateId();
-        if (!material.id) { error = "材質IDを確保できません"; return false; }
+        if (!material.id) { error = "マテリアルIDを確保できません"; return false; }
         material.name = preset.name;
         material.materials = std::move(preset.materials); material.materialGraph = std::move(preset.materialGraph);
         material.displacementMeters = preset.displacementMeters; material.layerBlendRange = preset.layerBlendRange;
@@ -97,8 +97,8 @@ bool ValidatePresetMaterial(const PresetMaterial& material, std::string& error) 
     if (!range(material.uvRepeatMeters, 0.01f, 100) || !range(material.roughness, 0, 1) ||
         !range(material.metallic, 0, 1) || !range(material.ambientOcclusion, 0, 1) ||
         material.blendMode > 1 || material.heightGate > 2 || !range(material.heightGateThreshold, 0, 1) ||
-        !range(material.heightGateSoftness, 0.001f, 1)) return fail("材質の寸法・PBR値・合成条件が不正です");
-    for (float channel : material.baseColor) if (!range(channel, 0, 1)) return fail("材質色が不正です");
+        !range(material.heightGateSoftness, 0.001f, 1)) return fail("マテリアルの寸法・PBR値・合成条件が不正です");
+    for (float channel : material.baseColor) if (!range(channel, 0, 1)) return fail("マテリアル色が不正です");
     if (material.mask) {
         const auto& mask = *material.mask;
         if (static_cast<uint32_t>(mask.shape) > 4 || static_cast<uint32_t>(mask.edgeSide) > 2 ||
@@ -140,7 +140,7 @@ bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& sourceDocument, std::st
         if (!idValid(preset.id) || preset.version != 1 || preset.name.empty() || static_cast<uint32_t>(preset.role) > 2)
             return fail("プリセットのID・版・名前・役割が不正です");
         if (!range(preset.displacementMeters, 0, 10) || preset.section.size() < 2 || preset.materials.empty() || preset.materials.size() > 4)
-            return fail("プリセットの断面・材質数・変位量が不正です");
+            return fail("プリセットの断面・マテリアル数・変位量が不正です");
         for (size_t i = 0; i < preset.section.size(); ++i) {
             const auto& point = preset.section[i];
             if (!idValid(point.id) || !range(point.across, 0, 100) || !range(point.height, -100, 100))
@@ -152,7 +152,7 @@ bool ValidateSurfaceLayouts(const SurfaceLayoutDocument& sourceDocument, std::st
         for (const auto& boundary : preset.boundaries)
             if (static_cast<uint32_t>(boundary.mode) > 2 || !range(boundary.transitionMeters, 0, 50) ||
                 !range(boundary.maxHeightAdjustment, 0, 100)) return fail("境界条件が不正です");
-        if (!range(preset.layerBlendRange, 0, 1)) return fail("材質のハイト合成幅が不正です");
+        if (!range(preset.layerBlendRange, 0, 1)) return fail("マテリアルのハイト合成幅が不正です");
         for (const auto& material : preset.materials)
             if (!ValidatePresetMaterial(material, error)) return false;
         if (preset.materialGraph && !ValidatePresetGraph(*preset.materialGraph, error)) return false;

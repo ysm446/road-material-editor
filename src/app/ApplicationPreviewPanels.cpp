@@ -60,7 +60,7 @@ void Application::DrawMaterialPanel() {
             int resolution = ResolutionIndex(m_renderer.MaterialResolution());
             if (ui::PropertyCombo("合成解像度", &resolution, kResolutionLabels, IM_ARRAYSIZE(kResolutionLabels),
                                   ResolutionIndex(renderer::kPreviewDefaults.materialResolution),
-                                  "道路の材質を合成する解像度（タイル 1 枚ぶん）。上げるほど細部が出るが重くなる")) {
+                                  "道路のマテリアルを合成する解像度（タイル 1 枚ぶん）。上げるほど細部が出るが重くなる")) {
                 m_renderer.RequestMaterialResolution(kResolutionValues[resolution]);
             }
             ui::EndPropertyTable();
@@ -124,7 +124,7 @@ void Application::DrawMaterialPanel() {
         const renderer::DofSettings kDefaultDof;
         if (ui::BeginPropertyTable("dofRows")) {
             ui::PropertyBool("有効", &dof.enabled, kDefaultDof.enabled,
-                             "ビューポートの見え方だけに掛かる。材質の合成には効かない");
+                             "ビューポートの見え方だけに掛かる。マテリアルの合成には効かない");
 
             ImGui::BeginDisabled(!dof.enabled);
 

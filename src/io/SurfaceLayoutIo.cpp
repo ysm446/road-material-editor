@@ -195,7 +195,7 @@ bool ReadSurfaceLayouts(const json& value, graph::SurfaceLayoutDocument& documen
         }
         for (auto& p : legacy["presets"]) {
             for (const auto* key : {"materials", "displacement", "layerBlendRange", "materialGraph"}) {
-                if (p.contains(key)) { error = "形状と材質の設定が重複しています"; return false; }
+                if (p.contains(key)) { error = "形状とマテリアルの設定が重複しています"; return false; }
             }
             Reader reader;
             const auto id = reader.UInt(p, "layerMaterial");

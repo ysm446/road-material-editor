@@ -716,7 +716,7 @@ void Application::DrawStatusBar() {
             }
             // 材質の評価はコンピュートキューで走る。見えている絵が古い間はここで分かる。
             if (m_renderer.IsEvaluating()) {
-                ImGui::TextDisabled("材質を評価中…");
+                ImGui::TextDisabled("マテリアルを評価中…");
                 ImGui::TextDisabled("|");
             }
 

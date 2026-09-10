@@ -122,7 +122,7 @@ bool Application::DrawSurfacePresetGraph(graph::LayerMaterial& preset) {
             const auto* asset = m_materialLibrary.Find(node.settings.material);
             ui::ThumbnailImage(static_cast<ImTextureID>(m_materialLibrary.ThumbnailHandle(node.settings.material).ptr),
                 ui::Scaled(ui::kNodeThumbnail));
-            const char* name = asset ? asset->name.c_str() : "定数材質";
+            const char* name = asset ? asset->name.c_str() : "定数マテリアル";
             std::string label = name;
             while (!label.empty() && ImGui::CalcTextSize(label.c_str()).x > ui::TextScaled(130)) {
                 size_t end = label.size() - 1;
@@ -139,7 +139,7 @@ bool Application::DrawSurfacePresetGraph(graph::LayerMaterial& preset) {
             ImGui::TextUnformatted(node.settings.blendMode ? "ハイトで競合" : "マスクどおり");
         }
         if (node.kind != graph::PresetNodeKind::Output)
-            PresetPin(node.id * 8 + 4, node.kind == graph::PresetNodeKind::Mask ? "マスク出力" : "材質出力", true,
+            PresetPin(node.id * 8 + 4, node.kind == graph::PresetNodeKind::Mask ? "マスク出力" : "マテリアル出力", true,
                 node.kind == graph::PresetNodeKind::Mask);
         ed::EndNode(); ed::PopStyleColor(2);
     }
@@ -461,6 +461,12 @@ void Application::DrawLayerMaterialLibrary() {
                 ImGui::SetWindowFocus("レイヤーマテリアル編集");
             }
             if (thumbnail.hovered) ImGui::SetTooltip("%s\nダブルクリックで編集 / DELで削除", preset.name.c_str());
+            // Road の沿道欄のマテリアル行へ落とすと、その区間に割り当たる。
+            if (ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(kLayerMaterialDragDropType, &preset.id, sizeof(preset.id));
+                ImGui::TextUnformatted(preset.name.c_str());
+                ImGui::EndDragDropSource();
+            }
             if (ImGui::BeginPopupContextItem("##layerMaterialMenu")) {
                 m_selectedLayerMaterial = preset.id;
                 menu(true);
@@ -531,8 +537,8 @@ void Application::DrawSurfacePresetEditor() {
     if (ui::BeginPropertyTable("layerPreviewSettings")) {
         if (ui::PropertyFloat("表示範囲", &m_layerPreviewMeters, 1, 16, 4, "正方形の一辺の実寸", "%.1f m")) m_layerPreviewDirty = true;
         if (ui::PropertyBool("変位を表示", &m_layerPreviewDisplacement, true, "合成後のハイトで平面を変位する")) m_layerPreviewDirty = true;
-        const char* views[] = {"材質", "ハイト"};
-        ui::PropertyCombo("表示", &m_layerPreviewView, views, 2, 0, "材質の陰影または合成ハイト");
+        const char* views[] = {"マテリアル", "ハイト"};
+        ui::PropertyCombo("表示", &m_layerPreviewView, views, 2, 0, "マテリアルの陰影または合成ハイト");
         ui::EndPropertyTable();
     }
     if (ui::Button("視点を戻す", 120)) m_layerPreviewPreset = 0;
@@ -557,7 +563,7 @@ void Application::DrawSurfacePresetEditor() {
     ImGui::EndChild(); ImGui::SameLine();
     ImGui::BeginChild("layerEditor", ImVec2(0, 0));
     if (preset.materialGraph) {
-        ui::HintText("ノード形式の材質です。変換すると出力につながる層を取り込みます。未使用ノードは除かれます（Undo可能）");
+        ui::HintText("ノード形式のマテリアルです。変換すると出力につながる層を取り込みます。未使用ノードは除かれます（Undo可能）");
         if (ui::Button("レイヤー形式に変換", ui::kWideButtonWidth)) {
             std::vector<graph::PresetMaterial> layers; std::string error;
             if (graph::CompilePresetMaterials(preset, layers, error)) {
@@ -566,7 +572,7 @@ void Application::DrawSurfacePresetEditor() {
         }
         if (!changed) DrawSurfacePresetGraphEditor();
     } else {
-        ui::HintText("上の行ほど上に重なります。この材質を使う全区間へ反映します");
+        ui::HintText("上の行ほど上に重なります。このマテリアルを使う全区間へ反映します");
         auto& layers = preset.materials;
         m_selectedPresetLayer = std::clamp(m_selectedPresetLayer, 0, static_cast<int>(layers.size()) - 1);
         ImGui::BeginDisabled(layers.size() >= 4);
@@ -592,7 +598,7 @@ void Application::DrawSurfacePresetEditor() {
             if (ui::ThumbnailButton("material", static_cast<ImTextureID>(m_materialLibrary.ThumbnailHandle(material.material).ptr), ui::Scaled(64), i == m_selectedPresetLayer && !m_selectedPresetMask).clicked) {
                 m_selectedPresetLayer = i; m_selectedPresetMask = false;
             }
-            if (ImGui::BeginDragDropSource()) { ImGui::SetDragDropPayload("TG_PRESET_LAYER", &i, sizeof(i)); ImGui::TextUnformatted(asset ? asset->name.c_str() : "定数材質"); ImGui::EndDragDropSource(); }
+            if (ImGui::BeginDragDropSource()) { ImGui::SetDragDropPayload("TG_PRESET_LAYER", &i, sizeof(i)); ImGui::TextUnformatted(asset ? asset->name.c_str() : "定数マテリアル"); ImGui::EndDragDropSource(); }
             // 行のサムネイルと名前は、レイヤーの並べ替えとマテリアル一覧からのドロップの両方を受ける。
             // 落とした先のレイヤーへ入れ、そのレイヤーを選ぶ（選択中のレイヤーではない）。
             const auto acceptLayerDrops = [&]() {
@@ -630,7 +636,7 @@ void Application::DrawSurfacePresetEditor() {
             }
             draw->AddRect(pos, ImVec2(pos.x + side, pos.y + side), ImGui::GetColorU32(i == m_selectedPresetLayer && m_selectedPresetMask ? ImGuiCol_HeaderActive : ImGuiCol_Border));
             ImGui::SameLine();
-            if (ImGui::Selectable(asset ? asset->name.c_str() : "定数材質", i == m_selectedPresetLayer, 0, ImVec2(0, side))) m_selectedPresetLayer = i;
+            if (ImGui::Selectable(asset ? asset->name.c_str() : "定数マテリアル", i == m_selectedPresetLayer, 0, ImVec2(0, side))) m_selectedPresetLayer = i;
             acceptLayerDrops();
             ImGui::PopID();
         }
@@ -642,7 +648,7 @@ void Application::DrawSurfacePresetEditor() {
             changed |= ui::PropertyFloat("凹凸の高さ", &preset.displacementMeters, 0, 10, defaults.displacementMeters, "合成ハイトで押し出す実寸", "%.3f m");
             changed |= ui::PropertyFloat("ブレンド幅", &preset.layerBlendRange, 0, 1, defaults.layerBlendRange, "ハイト境界の柔らかさ");
             auto& material = layers[m_selectedPresetLayer];
-            changed |= ui::PropertyBool("レイヤーを表示", &material.enabled, true, "下地を隠すと定数材質を表示する");
+            changed |= ui::PropertyBool("レイヤーを表示", &material.enabled, true, "下地を隠すと定数マテリアルを表示する");
             const graph::PresetMaterial materialDefaults;
             if (!m_selectedPresetMask) {
                 changed |= DrawMaterialSlotRow("素材", material.material, m_materialLibrary, true);

@@ -105,6 +105,9 @@ bool PropertyColorLinear(const char* label, float* linearRgb, const float* defau
 // items は要素数 itemCount の配列。ImGui の "A\0B\0" 形式ではなく配列で受ける。
 bool PropertyCombo(const char* label, int* value, const char* const items[], int itemCount,
                    int defaultValue, const char* tooltip = nullptr, const ImTextureID* thumbnails = nullptr);
+// 直前の PropertyCombo が描いた値の矩形（サムネイルとコンボを合わせた範囲。min / max）。
+// アセットのドラッグを行全体で受けたいときに ImGui::BeginDragDropTargetCustom() へ渡す。
+void LastPropertyComboRect(ImVec2& outMin, ImVec2& outMax);
 bool PropertyTextInput(const char* label, char* buffer, size_t bufferSize,
                        const char* tooltip = nullptr);
 // 表示専用の値。

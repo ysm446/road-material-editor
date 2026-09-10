@@ -29,6 +29,12 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 
 ## 完了した作業
 
+### 2026-09-10 11:28 — Road プロパティを路面・左右沿道と区間のタブへ
+
+`DrawSurfaceLayoutSettings` を共通切り替え＋タブバーに分け、`DrawRoadsideTab` / `DrawRoadSpanTab` へ切り出した。区間タブは ID を区間 ID で固定し、開いているタブを `m_surfaceBandSide` / `m_surfaceBandSpan` / `m_surfaceLayoutSpan` に写す。沿道の範囲編集とマテリアル編集を同じ区間タブへまとめ、検証は範囲変更なら形状生成、マテリアル変更ならプリセット共有の確認を通す。
+
+Debug ビルドと全 CPU テスト成功。`--select-node` で Road を選んだ `--screenshot-ui` でタブの見た目を確認。
+
 ### 2026-09-10 09:42 — 沿道欄の境界マテリアルにサムネール、帯からのドロップ、文言統一
 
 `PropertyCombo` に境界マスクの R チャンネルを渡してサムネールを表示。`PropertyCombo` が値の矩形（サムネール＋コンボ）を `ui::LastPropertyComboRect()` で返すようにし、`AcceptComboDrop()` で行全体を受け口にした。レイヤーマテリアルと境界マテリアルの一覧をドラッグ元に追加。UI 文字列の「材質」を「マテリアル」へ一括置換（62 箇所、コメントは対象外）。

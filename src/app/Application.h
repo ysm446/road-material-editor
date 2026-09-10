@@ -114,8 +114,10 @@ private:
     // グラフのノード 1 枚。カード・ピン・リンクの当たり判定を描く。
     void DrawGraphNode(const graph::Node& node);
     bool IsGraphPinVisible(const graph::Pin& pin) const;
-    // グラフノードのレイヤー設定のプロパティ行。変更があれば true。
+    // Road ノードの区間と沿道（路面 / 左沿道 / 右沿道のタブ、その中に区間のタブ）。変更があれば true。
     bool DrawSurfaceLayoutSettings(graph::GraphId roadId);
+    bool DrawRoadsideTab(graph::GraphId roadId, graph::SurfaceSide side);
+    bool DrawRoadSpanTab(graph::GraphId roadId);
     void DrawSurfacePresetEditor();
     void DrawSurfacePresetGraphEditor();
     bool DrawSurfacePresetGraph(graph::LayerMaterial& preset);

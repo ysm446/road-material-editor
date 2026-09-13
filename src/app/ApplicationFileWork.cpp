@@ -7,12 +7,15 @@
 #include "core/FileDialog.h"
 #include "core/Log.h"
 #include "io/ProjectIo.h"
+#include "io/ThumbnailStore.h"
 #include "ui/UiStyle.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
 
 #include <DirectXMath.h>
+
+#include <cwchar>
 
 #include <algorithm>
 #include <cmath>
@@ -27,23 +30,53 @@ namespace tg {
 // ProcessPendingFileWork がフレームの外で行う（GPU 待機を伴うため）。
 void Application::RequestOpenProject() {
     const std::filesystem::path path =
-        ShowOpenFileDialog(L"プロジェクトを開く", ProjectFileFilters());
+        ShowPickFolderDialog(L"プロジェクトのルートフォルダを開く", m_workspace.Root());
     if (!path.empty()) {
-        m_pendingProjectOpen = path;
+        m_pendingRoot = path;
     }
 }
 
 // saveAs が偽でも、まだ一度も保存していなければ保存先を聞く。
+// 保存先は常にルート内の .tgscene。旧 .tgproj を開いていても別名の .tgscene へ書く（移行元は残る）。
 void Application::RequestSaveProject(bool saveAs) {
-    if (!saveAs && !m_projectPath.empty()) {
+    const bool isScene = _wcsicmp(m_projectPath.extension().c_str(), L".tgscene") == 0;
+    if (!saveAs && isScene && m_workspace.Contains(m_projectPath)) {
         m_pendingProjectSave = m_projectPath;
         return;
     }
-    const std::filesystem::path path = ShowSaveFileDialog(
-        L"プロジェクトを保存", ProjectFileFilters(), L"tgproj", m_projectPath);
-    if (!path.empty()) {
-        m_pendingProjectSave = path;
+    const std::filesystem::path initial =
+        isScene ? m_projectPath
+                : m_workspace.Root() / L"Scenes" /
+                      (m_projectPath.empty() ? std::wstring(L"Untitled.tgscene")
+                                             : m_projectPath.stem().wstring() + L".tgscene");
+    std::filesystem::path path = ShowSaveFileDialog(
+        L"シーンを保存", {{L"Road Editor シーン", L"*.tgscene"}}, L"tgscene", initial);
+    if (path.empty()) {
+        return;
     }
+    path.replace_extension(L".tgscene");
+    if (!m_workspace.Contains(path)) {
+        TG_LOG_ERROR("シーンはプロジェクトルート内に保存してください: %s", ToUtf8Display(path).c_str());
+        return;
+    }
+    m_pendingProjectSave = path;
+}
+
+// 保存したシーンのプレビュー画像。ビューポートを縦横比を保って最大 256px へ縮小する。
+// 失敗してもシーン本体の保存は成功扱い。
+void Application::SaveSceneThumbnail(const std::filesystem::path& path) {
+    if (_wcsicmp(path.extension().c_str(), L".tgscene") != 0 || !m_renderer.HasOutput()) return;
+    const std::filesystem::path thumbnail = io::SceneThumbnailPath(m_workspace, path);
+    if (thumbnail.empty()) {
+        TG_LOG_WARN("シーンのサムネイルの保存先がルート外です");
+        return;
+    }
+    std::error_code error;
+    std::filesystem::create_directories(thumbnail.parent_path(), error);
+    if (error || !m_renderer.SaveOutputToPng(m_device, thumbnail, 256)) {
+        TG_LOG_WARN("シーンは保存しましたが、サムネイルを保存できませんでした");
+    }
+    m_assetThumbnails.Invalidate();
 }
 
 // キーボードショートカット。メニューと同じ入口（Request*）を通す。
@@ -94,11 +127,37 @@ void Application::HandleShortcuts() {
     }
 }
 
-// 最近使ったプロジェクト。名前を項目に、置き場所を右の列に出す。
-// 同じ名前のプロジェクトが別の場所にあっても見分けられるようにするため。
+// 最近使ったルートフォルダ（ルートごとのシーン付き）と、現在のルートのシーン。
+// シーンは名前を項目に、置き場所を右の列に出す。同じ名前が別の場所にあっても見分けられるように。
 void Application::DrawRecentMenu() {
-    const std::vector<std::filesystem::path>& entries = m_recentProjects.Entries();
-    if (!ImGui::BeginMenu("最近使ったプロジェクト", !entries.empty())) {
+    const auto& roots = m_recentProjects.Roots();
+    if (ImGui::BeginMenu("最近使ったルートフォルダ", !roots.empty())) {
+        for (size_t i = 0; i < roots.size(); ++i) {
+            const auto& root = roots[i];
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::BeginMenu(ToUtf8Display(root.path).c_str())) {
+                if (ImGui::MenuItem("このルートを開く")) m_pendingRoot = root.path;
+                ImGui::Separator();
+                if (root.scenes.empty()) ImGui::MenuItem("最近使ったシーンはありません", nullptr, false, false);
+                for (const auto& scene : root.scenes) {
+                    ImGui::PushID(ToUtf8Portable(scene).c_str());
+                    if (ImGui::MenuItem(ToUtf8Display(scene.filename()).c_str(),
+                                        ToUtf8Display(scene.parent_path()).c_str())) {
+                        m_pendingRoot = root.path;
+                        m_pendingProjectOpen = scene;
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::PopID();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("ルートとシーンの履歴を消す")) m_recentProjects.ClearRoots();
+        ImGui::EndMenu();
+    }
+    const std::vector<std::filesystem::path>& entries = m_recentProjects.Entries(m_workspace.Root());
+    if (!ImGui::BeginMenu("最近使ったシーン", !entries.empty())) {
         return;
     }
 
@@ -120,7 +179,7 @@ void Application::DrawRecentMenu() {
 
     ImGui::Separator();
     if (ImGui::MenuItem("履歴を消す")) {
-        m_recentProjects.Clear();
+        m_recentProjects.Clear(m_workspace.Root());
     }
     ImGui::EndMenu();
 }
@@ -130,11 +189,19 @@ void Application::DrawFileMenu() {
         return;
     }
 
-    if (ImGui::MenuItem("新規", "Ctrl+N")) {
+    if (ImGui::MenuItem("新規シーン", "Ctrl+N")) {
         m_pendingProjectNew = true;
     }
-    if (ImGui::MenuItem("開く…", "Ctrl+O")) {
+    if (ImGui::MenuItem("ルートフォルダを開く…", "Ctrl+O")) {
         RequestOpenProject();
+    }
+    if (ImGui::MenuItem("シーンを開く…")) {
+        // 旧 .tgproj もここから開ける（保存は .tgscene へ）。
+        const std::filesystem::path path = ShowOpenFileDialog(
+            L"シーンを開く", {{L"シーン / 旧プロジェクト", L"*.tgscene;*.tgproj;*.mmproj"}});
+        if (!path.empty()) {
+            m_pendingProjectOpen = path;
+        }
     }
     DrawRecentMenu();
     if (ImGui::MenuItem("保存", "Ctrl+S")) {
@@ -160,10 +227,13 @@ void Application::HandleDroppedFiles(const std::vector<std::filesystem::path>& p
 
         // 拡張子で行き先を決める。読み込み自体はどれも保留し、フレームの外で処理する。
         // 旧拡張子 (.mmproj / .mmmat) は material-mixer 時代のファイル。読み込みだけ受け付ける。
-        if (extension == ".tgproj" || extension == ".mmproj") {
+        if (extension == ".tgscene" || extension == ".tgproj" || extension == ".mmproj") {
             m_pendingProjectOpen = path;
+        } else if (extension == ".tgsky") {
+            m_pendingAssetOpen = path;
         } else if (extension == ".tgmat" || extension == ".mmmat") {
-            m_pendingMaterialImport = path;
+            // 共有アセットか持ち出し用かは ProcessAssetWork が中身を見て振り分ける。
+            m_pendingAssetOpen = path;
         } else if (extension == ".hdr") {
             // 選択中の天球へ入れる。天球は必ず 1 つあるので、行き先は常に決まる。
             m_skyLibrary.EnsureDefault();
@@ -219,6 +289,7 @@ void Application::ResetProject() {
     m_selectedMaterial = 0;
     m_selectedTexture = 0;
     m_ordTexture = compositor::kNoTexture;
+    m_assetRefresh = true;
 
     // 別の文書になるので履歴は捨てる。戻せてしまうと中身が混ざる。
     m_undoHistory.Clear();
@@ -238,6 +309,21 @@ void Application::UpdateWindowTitle() {
 
 void Application::ProcessPendingFileWork() {
     // どれもリソースの生成・破棄と GPU 待機を伴う。フレームの外で処理すること。
+
+    // 対話中のシーン / ルートの切り替えは、保存の機会を設けてから実行する。
+    // 起動直後（--project）と開発用オプションの経路は聞かずに進める。
+    if ((!m_pendingRoot.empty() || !m_pendingProjectOpen.empty() || m_pendingProjectNew) &&
+        m_frameCounter > 1 && !Headless() && !m_allowSceneSwitch) {
+        m_deferredRoot = std::move(m_pendingRoot);
+        m_pendingRoot.clear();
+        m_deferredScene = std::move(m_pendingProjectOpen);
+        m_pendingProjectOpen.clear();
+        m_deferredNew = m_pendingProjectNew;
+        m_pendingProjectNew = false;
+        m_sceneSwitchDialog = true;
+    }
+    m_allowSceneSwitch = false;
+    ProcessAssetWork();
 
     // アンドゥ / リドゥ。マテリアルの破棄を伴うのでここで処理する。
     if (m_pendingHistoryStep != 0) {
@@ -267,11 +353,14 @@ void Application::ProcessPendingFileWork() {
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
                              m_renderer, m_graph, m_surfaceLayouts,
                              m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
-        if (io::LoadProject(path, m_device, m_pipelineCache, refs)) {
+        // .tgscene はルートの共有アセットを参照する。旧 .tgproj は従来の埋め込み形式のまま読む。
+        const bool isScene = _wcsicmp(path.extension().c_str(), L".tgscene") == 0;
+        if (io::LoadProject(path, m_device, m_pipelineCache, refs, isScene ? &m_workspace : nullptr)) {
             m_layerThumbnailsDirty = true; ++m_layerThumbnailTextureRevision;
             m_meshHighlight = MeshHighlightState{};
-            m_recentProjects.Add(path);
+            if (isScene) m_recentProjects.Add(m_workspace.Root(), path);
             m_projectPath = path;
+            m_assetRefresh = true;
             m_selectedGraphNode = m_graph.FindNode(m_options.selectNode) ? m_options.selectNode : 0;
             m_options.selectNode = 0;
             m_editSurfacePreset = graph::PresetLayerMaterial(m_surfaceLayouts, m_options.editPreset);
@@ -307,8 +396,8 @@ void Application::ProcessPendingFileWork() {
             m_committed = CaptureDocument();
             UpdateWindowTitle();
         } else {
-            // 消えた / 壊れたプロジェクトを履歴に残しても、選べるだけで意味がない。
-            m_recentProjects.Remove(path);
+            // 消えた / 壊れたシーンを履歴に残しても、選べるだけで意味がない。
+            m_recentProjects.Remove(m_workspace.Root(), path);
         }
     }
 
@@ -319,10 +408,22 @@ void Application::ProcessPendingFileWork() {
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
                              m_renderer, m_graph, m_surfaceLayouts,
                              m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
-        if (io::SaveProject(path, refs)) {
-            m_recentProjects.Add(path);
+        if (io::SaveProject(path, refs, &m_workspace)) {
+            SaveSceneThumbnail(path);
+            m_assetRefresh = true;
+            m_recentProjects.Add(m_workspace.Root(), path);
             m_projectPath = path;
             UpdateWindowTitle();
+            if (m_saveThenSwitch) {
+                m_saveThenSwitch = false;
+                ResumeSceneSwitch();
+            }
+        } else {
+            m_saveThenSwitch = false;
+            m_deferredRoot.clear();
+            m_deferredScene.clear();
+            m_deferredNew = false;
+            TG_LOG_ERROR("シーンの保存に失敗しました。現在の作業を保持しています");
         }
     }
 
@@ -346,6 +447,8 @@ void Application::ProcessPendingFileWork() {
             path, m_device, m_pipelineCache, m_textureLibrary, m_materialLibrary);
         if (id != compositor::kNoMaterialAsset) {
             m_selectedMaterial = static_cast<int>(m_materialLibrary.Entries().size()) - 1;
+            m_scrollToSelectedMaterial = true;
+            MarkDocumentChanged();
         }
     }
 

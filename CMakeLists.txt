@@ -88,6 +88,7 @@ set(tg_sources
     src/app/ApplicationGraphPanel.cpp
     src/app/ApplicationSurfaceLayout.cpp
     src/app/ApplicationSurfacePreset.cpp
+    src/app/ApplicationAssetBrowser.cpp
     src/app/ApplicationBoundaryMaterial.cpp
     src/app/ApplicationLayerPanel.cpp
     src/app/ApplicationMaterialPanel.cpp
@@ -97,6 +98,8 @@ set(tg_sources
     src/app/ApplicationTexturePanel.cpp
     src/app/ApplicationUiHelpers.h
     src/app/ApplicationViewport.cpp
+    src/app/AssetThumbnailCache.cpp
+    src/app/AssetThumbnailCache.h
     src/app/UndoHistory.cpp
     src/app/UndoHistory.h
     src/core/Log.cpp
@@ -146,10 +149,16 @@ set(tg_sources
     src/core/Window.h
     src/io/AppSettings.cpp
     src/io/AppSettings.h
+    src/io/AssetRelations.cpp
+    src/io/AssetRelations.h
     src/io/ProjectIo.cpp
     src/io/ProjectIo.h
+    src/io/ProjectWorkspace.cpp
+    src/io/ProjectWorkspace.h
     src/io/RecentFiles.cpp
     src/io/RecentFiles.h
+    src/io/ThumbnailStore.cpp
+    src/io/ThumbnailStore.h
     src/rhi/Common.cpp
     src/rhi/Common.h
     src/rhi/ComputeQueue.cpp
@@ -166,6 +175,8 @@ set(tg_sources
     src/rhi/PipelineCache.h
     src/rhi/ShaderCompiler.cpp
     src/rhi/ShaderCompiler.h
+    src/rhi/TextureReadback.cpp
+    src/rhi/TextureReadback.h
     src/rhi/UploadRing.cpp
     src/rhi/UploadRing.h
     src/renderer/ShadowCascades.cpp
@@ -313,6 +324,17 @@ add_executable(road_editor_tests
     tests/NodeGraphTests.cpp
     tests/UiInteractionTests.cpp
     tests/UndoHistoryTests.cpp
+    tests/ProjectWorkspaceTests.cpp
+    src/io/ProjectWorkspace.cpp
+    src/io/ProjectWorkspace.h
+    src/io/ThumbnailStore.cpp
+    src/io/ThumbnailStore.h
+    src/io/AssetRelations.cpp
+    src/io/AssetRelations.h
+    src/io/RecentFiles.cpp
+    src/io/RecentFiles.h
+    src/core/Log.cpp
+    src/core/Log.h
     src/app/UndoHistory.cpp
     src/app/UndoHistory.h
     src/core/FrameLimiter.cpp
@@ -329,7 +351,8 @@ add_executable(road_editor_tests
 
 target_include_directories(road_editor_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(road_editor_tests PRIVATE /W4 /permissive- /utf-8 /Zc:preprocessor)
-target_link_libraries(road_editor_tests PRIVATE imgui::imgui nlohmann_json::nlohmann_json)
+# ole32 は ProjectWorkspace の永続 ID（CoCreateGuid）に要る。
+target_link_libraries(road_editor_tests PRIVATE imgui::imgui nlohmann_json::nlohmann_json ole32)
 
 add_test(NAME ui-interaction COMMAND road_editor_tests)
 

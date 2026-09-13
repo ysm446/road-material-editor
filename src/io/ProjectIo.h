@@ -4,6 +4,7 @@
 #include "compositor/TextureLibrary.h"
 #include "graph/NodeGraph.h"
 #include "graph/SurfaceLayout.h"
+#include "io/ProjectWorkspace.h"
 #include "renderer/PreviewRenderer.h"
 #include "renderer/SkyLibrary.h"
 #include "rhi/Device.h"
@@ -37,9 +38,26 @@ struct ProjectRefs {
 //
 // 読み込みは GPU 待機を伴うため、**フレームの外で呼ぶこと。**
 
-bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs);
+// workspace を渡すとシーン (.tgscene) として扱う。マテリアルと天球は共有アセット
+// （`.tgmat` / `.tgsky`）へ分離し、画像はルート内へ取り込んで ID で参照する。
+// 渡さなければ従来の `.tgproj`（埋め込み・相対パス）をそのまま読み書きする。
+bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs,
+                 ProjectWorkspace* workspace = nullptr);
 bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
-                 rhi::PipelineCache& pipelineCache, const ProjectRefs& refs);
+                 rhi::PipelineCache& pipelineCache, const ProjectRefs& refs,
+                 ProjectWorkspace* workspace = nullptr);
+
+// --- 共有アセット（ルート内の .tgmat / .tgsky） ----------------------------
+//
+// 読み込み済みのマテリアルと天球をそれぞれのファイルへ書く。置き場所が未定のものは
+// `Materials/` / `Skies/` に名前から作る。シーンの保存はこれを先に行う。
+bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs);
+// 共有アセット 1 つを現在のライブラリへ足す。同じ ID がすでにあれば足さずにそれを使う
+// （天球は適用する）。参照している画像もその場で読み込む。
+bool LoadSharedAsset(ProjectWorkspace& workspace, const std::filesystem::path& path,
+                     rhi::Device& device, rhi::PipelineCache& pipelineCache,
+                     compositor::TextureLibrary& textures, compositor::MaterialLibrary& materials,
+                     renderer::SkyLibrary& skies);
 
 // --- マテリアル単体 (.tgmat) ----------------------------------------------
 //

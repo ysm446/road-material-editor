@@ -8,7 +8,10 @@
 #include "core/Window.h"
 #include "graph/NodeGraph.h"
 #include "graph/Road.h"
+#include "app/AssetThumbnailCache.h"
 #include "app/UndoHistory.h"
+#include "io/AssetRelations.h"
+#include "io/ProjectWorkspace.h"
 #include "graph/SurfaceLayout.h"
 #include "io/AppSettings.h"
 #include "io/RecentFiles.h"
@@ -42,8 +45,13 @@ struct StartupOptions {
     std::filesystem::path hdriPath;
     // 起動時にテクスチャライブラリへ読み込む画像。--texture を繰り返し指定できる。
     std::vector<std::filesystem::path> texturePaths;
-    // 起動時に開くプロジェクト (.tgproj)。空なら既定のスタックで始める。
+    // 起動時に開くシーン (.tgscene) または旧プロジェクト (.tgproj)。ルートのフォルダや
+    // project.tgproj を渡すとルートだけを開く。空なら新規シーンで始める。
     std::filesystem::path projectPath;
+    // プロジェクトのルートフォルダ（--root）。空なら最近使ったルート、無ければ data/。
+    std::filesystem::path projectRoot;
+    // 削除確認画面のスクリーンショット検証用。削除そのものは実行しない。
+    std::filesystem::path inspectAssetDelete;
     // 指定すると、数フレーム描いてからプロジェクトを保存して終了する。
     // 保存と読み込みを対話なしで確かめるための開発用オプション。
     std::filesystem::path saveProjectPath;
@@ -163,6 +171,17 @@ private:
     // 一覧のサムネイルをダブルクリックするか、ウィンドウメニューから開く。
     void DrawSkyPreviewWindow();
     void DrawTextureLibraryPanel();
+    // アセットの帯（ルートのフォルダ階層とフォルダの中身）。ApplicationAssetBrowser.cpp。
+    void DrawAssetBrowser();
+    void RefreshAssetBrowser();
+    void ProcessAssetWork();
+    void DrawSceneSwitchDialog();
+    void DrawAssetDeleteDialog();
+    // 現在のシーンがそのファイルを使っているか（削除の可否）。
+    bool IsAssetLoaded(const std::filesystem::path& path) const;
+    void ResumeSceneSwitch();
+    // 保存したシーンのプレビュー画像（ビューポートの縮小）を .terrain-graph/scene-thumbnails へ残す。
+    void SaveSceneThumbnail(const std::filesystem::path& path);
     // テクスチャ一覧の右クリックメニュー（読み込む / 削除）。
     // target が kNoTexture なら、対象の要る項目は出さない。
     void DrawTextureContextMenu(compositor::TextureId target);
@@ -545,7 +564,35 @@ private:
     // --- ファイル操作の保留 -------------------------------------------------
     // ダイアログはフレームの中で出すが、読み書きは GPU 待機を伴うので、
     // 選ばれたパスをここへ積んでおき、次のフレームの頭で処理する。
-    std::filesystem::path m_projectPath;  // 現在のプロジェクト。未保存なら空
+    // プロジェクトのルートフォルダと共有アセット。常に 1 つ開いている。
+    io::ProjectWorkspace m_workspace;
+    // アセットの帯の状態。表示中のフォルダとその中身、選択、未読み込みのサムネイル。
+    AssetThumbnailCache m_assetThumbnails;
+    std::filesystem::path m_assetDirectory;
+    std::vector<std::filesystem::directory_entry> m_assetEntries;
+    std::filesystem::path m_selectedAssetPath;
+    bool m_assetRefresh = true;
+    // ファイルの削除（退避）。検査 → 確認 → 実行の順で、実行はフレームの外。
+    std::filesystem::path m_pendingAssetDeleteInspect;
+    io::AssetRelations m_assetDeleteRelations;
+    bool m_assetDeleteDialog = false;
+    bool m_pendingAssetDelete = false;
+    // ルートの切り替え、共有アセットの保存、ファイルを開く要求。フレームの外で処理する。
+    std::filesystem::path m_pendingRoot;
+    std::filesystem::path m_pendingAssetOpen;
+    bool m_pendingAssetsSave = false;
+    // シーン / ルートの切り替え前の確認（保存して切り替え / 保存せず / キャンセル）。
+    std::filesystem::path m_deferredRoot;
+    std::filesystem::path m_deferredScene;
+    bool m_deferredNew = false;
+    bool m_sceneSwitchDialog = false;
+    bool m_allowSceneSwitch = false;
+    bool m_saveThenSwitch = false;
+    // 旧「テクスチャ / マテリアル / 天球」の一覧。ウィンドウメニューから出す補助ウィンドウ。
+    bool m_showTextureList = false;
+    bool m_showMaterialList = false;
+    bool m_showSkyList = false;
+    std::filesystem::path m_projectPath;  // 現在のシーン (.tgscene)。未保存なら空
     io::RecentFiles m_recentProjects;
     io::AppSettings m_settings;
     // 設定ウィンドウを出しているか。ドックへは収めない補助ウィンドウ。

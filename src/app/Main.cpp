@@ -18,7 +18,7 @@ __declspec(dllexport) extern const char* D3D12SDKPath = ".\\D3D12\\";
 namespace {
 
 // 使い方:
-//   road_editor.exe [--project <path>] [--save-project <path>]
+//   road_editor.exe [--root <dir>] [--project <path>] [--save-project <path>]
 //                       [--hdri <path>] [--texture <path>]...
 //                       [--screenshot <path>] [--screenshot-ui <path>]
 //                       [--screenshot-frame <n>]
@@ -36,6 +36,10 @@ tg::StartupOptions ParseCommandLine() {
         if (argument == L"--project" && (i + 1) < argc) {
             options.projectPath = argv[i + 1];
             ++i;
+        } else if (argument == L"--root" && (i + 1) < argc) {
+            options.projectRoot = argv[++i];
+        } else if (argument == L"--inspect-asset-delete" && (i + 1) < argc) {
+            options.inspectAssetDelete = argv[++i];
         } else if (argument == L"--connection-prototype" && (i + 3) < argc) {
             options.prototypeRoad = ::_wtoi(argv[++i]);
             options.prototypeGravel = ::_wtoi(argv[++i]);

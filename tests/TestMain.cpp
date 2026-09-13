@@ -15,6 +15,7 @@ void RunFrameLimiterTests();
 void RunNodeGraphTests();
 void RunUiInteractionTests();
 void RunUndoHistoryTests();
+void RunProjectWorkspaceTests();
 
 int main() {
     RunRoadTests();
@@ -24,6 +25,7 @@ int main() {
     RunMeshSceneTests();
     RunUiInteractionTests();
     RunUndoHistoryTests();
+    RunProjectWorkspaceTests();
     RunFrameLimiterTests();
     RunNodeGraphTests();
 

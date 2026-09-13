@@ -1,7 +1,7 @@
 # plan — Road Editor の実装方針と優先順位
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-08 01:44
+更新日時: 2026-09-13 23:45
 
 利用者が触って評価できる状態を優先し、P4の最小区間UIを先行実装した。作成・分割・境界移動・プリセット複製と素材変更・解除を通常描画、保存、Undoへ接続。手順は [道路本体の区間材質](../reference/road-surface-editor.md)。
 
@@ -26,7 +26,7 @@ terrain-graph の地形・材質編集基盤を引き継ぎ、道路・道路付
 | UI | Dear ImGui docking + imgui-node-editor。既存の Property* とテーマを使用 |
 | 描画 | 既存フォワード PBR を維持。白線は照明前の路面マテリアル合成から始める |
 | 単位 | 道路の3D座標・幅・高さ・距離・間隔は m。地形の正規化 Height / UV に依存しない |
-| 保存 | 初期段階は .tgproj / .tgmat と terrain-graph.* の形式識別子を継続。旧 .mmproj / .mmmat の読込も維持 |
+| 保存 | プロジェクトのルートフォルダを基準にし、シーンは `.tgscene`、マテリアル / 天球はルート内の `.tgmat` / `.tgsky` に分ける（terrain-graph と同じ仕組み、識別子は terrain-graph.* を継続）。旧 .tgproj / .mmproj / .mmmat の読込は維持。設計は [project-workspace.md](../design/project-workspace.md) |
 | アプリ設定 | %LOCALAPPDATA%/road-editor/。レイアウトは road_editor_imgui.ini。派生元とは別管理 |
 | 内部識別子 | 名前空間 tg、TG_* を継続。アイコンは Road Editor 専用。名称変更だけの全面的なコード置換は行わない |
 

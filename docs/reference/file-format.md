@@ -1,11 +1,18 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-08 04:45
+更新日時: 2026-09-13 23:45
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
-Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は24。
+Road Editor への移行初期は、この既存形式を継続利用する。現在のプロジェクト版は26。
+
+**2026-09-13 からはプロジェクトのルートフォルダを基準にし、シーンは `.tgscene`、マテリアルと天球は
+ルート内の `.tgmat` / `.tgsky`（共有アセット）に分けて保存する。** 埋め込み形式の `.tgproj` は読み込みだけ受け付け、
+保存は常に `.tgscene` へ行う。`.tgscene` の中身は下の `.tgproj` と同じ節を持ち、`textures` / `materials` / `skies` の
+各項目が `{"uid", "path"}` の参照になる（元の版は `projectVersion` に退避）。
+ルートの目印 `project.tgproj`（`terrain-graph.workspace` 版 1）、共有アセットの形式、`.meta`、参照の解決規則は
+[プロジェクトルートと共有アセット](../design/project-workspace.md) を参照する。
 版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンク、版12で Road の材質スロットと Road Mask、版13で面上の Path と Decal を追加した（「Road Editor で追加した版」）。
 版14でShoulder、版15でMerge、版16でCrack、版17で埋込プリセットと配置記述、版18でプリセット内部の多層材質を追加した。
 道路専用の拡張子は後続で設計する。
@@ -39,8 +46,13 @@ Road Editor への移行初期は、この既存形式を継続利用する。�
 
 | 拡張子 | 内容 | 用途 |
 | --- | --- | --- |
-| `.tgproj` | プロジェクト全体（グラフ / マテリアル / テクスチャの参照 / プレビュー設定） | 作業の保存と再開 |
-| `.tgmat` | マテリアル 1 つ | プロジェクト間で持ち回る（書き出し / 読み込み） |
+| `.tgscene` | シーン（グラフ / 配置 / プレビュー設定 / 共有アセットへの参照） | 作業の保存と再開。ルート内に置く |
+| `.tgmat`（`terrain-graph.material-asset`） | 共有マテリアル 1 つ | ルート内でシーン間に共有する |
+| `.tgsky` | 共有天球 1 つ | 同上 |
+| `<画像>.meta` | 画像・HDRI の固定 ID | 元ファイルの隣に置くサイドカー |
+| `project.tgproj` | ルートの目印（プロジェクト ID） | ルート直下に 1 つ |
+| `.tgproj`（`terrain-graph.project`） | 旧プロジェクト全体（埋め込み） | 読み込みのみ。保存は `.tgscene` へ |
+| `.tgmat`（`terrain-graph.material`） | マテリアル 1 つ（持ち出し用） | プロジェクト間で持ち回る（書き出し / 読み込み） |
 | `<名前>.assets/paint_NNNN.png` | ペイントマスク | `.tgproj` のサイドカー |
 
 material-mixer 時代の `.mmproj` / `.mmmat` も**読み込みだけ**受け付ける

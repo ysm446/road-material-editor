@@ -27,6 +27,8 @@ struct UiSettings {
     // 境界のドラッグで変わる。**拡大率を掛ける前の値で持つ**ので、
     // 表示スケールを変えても区画の見た目の高さが保たれる。
     float layerListHeight = 260.0f;
+    // アセットの帯のフォルダ階層（左の区画）の幅。同じく拡大率を掛ける前の値。
+    float assetFolderWidth = 190.0f;
 };
 
 // 表示に関する設定（設定ウィンドウの「表示」節）。
@@ -45,7 +47,7 @@ struct DisplaySettings {
     bool showUvChecker = false;
     // メッシュシーンにワイヤーフレームを重ねるか。
     bool showWireframe = false;
-    // アセットの帯（テクスチャ / マテリアル / 天球）を出すか。畳むとビューポートが縦に広がる。
+    // アセットの帯（アセット / レイヤーマテリアル / 境界マテリアル）を出すか。畳むとビューポートが縦に広がる。
     bool showAssetBand = true;
     // 前面にあるときの FPS 上限。0 で上限なし。
     int frameRateLimit = 0;

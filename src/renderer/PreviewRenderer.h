@@ -255,7 +255,8 @@ public:
     void RequestMaterialResolution(uint32_t resolution) { m_requestedMaterialResolution = resolution; }
 
     // 表示用テクスチャを PNG に書き出す。フレームの外で呼ぶこと。
-    bool SaveOutputToPng(rhi::Device& device, const std::filesystem::path& path);
+    // maxSize を指定すると縦横比を保ってその大きさ以下へ縮小する（シーンのサムネイル用）。
+    bool SaveOutputToPng(rhi::Device& device, const std::filesystem::path& path, uint32_t maxSize = 0);
 
     bool HasOutput() const { return m_output.IsValid(); }
     // 同寸法・同形式のキャッシュへコピー。呼出側はフレーム外で宛先を確保する。

@@ -73,22 +73,24 @@ $exe = Join-Path $PWD 'build/bin/Debug/road_editor.exe'
 
 ## 保存と互換性
 
-移行初期は `.tgproj` / `.tgmat` と JSON の `terrain-graph.*` 識別子を継続する。
-`.mmproj` / `.mmmat` の読み込みも維持する。現在の版は13。版5で scene 節の明示的なメッシュ入力、版6〜7で実寸 Path、版8〜9で Road ノードの設定と Material 入力、版10で白線ノード、版11で縦断・バンク、版12で材質スロットと Road Mask、版13で面上の Path と Decal を保存する。
+プロジェクトはルートフォルダで管理する（「ファイル > ルートフォルダを開く…」）。ルート直下に `project.tgproj` ができ、
+シーンは `.tgscene`、マテリアル / 天球はルート内の `.tgmat` / `.tgsky` として共有する（[設計](docs/design/project-workspace.md)）。
+旧 `.tgproj` / `.mmproj` / `.mmmat` の読み込みは維持し、保存は `.tgscene` へ行う。JSON の `terrain-graph.*` 識別子は継続する。現在の版は13。版5で scene 節の明示的なメッシュ入力、版6〜7で実寸 Path、版8〜9で Road ノードの設定と Material 入力、版10で白線ノード、版11で縦断・バンク、版12で材質スロットと Road Mask、版13で面上の Path と Decal を保存する。
 生成した道路メッシュは保存せず、再読込時に再構築する。道路専用の拡張子は後続で設計する。
 旧地形ノードを削除する段階では、未対応ノードを黙って捨てず、明示的な移行か読込拒否にする。
 
 ## 開発用コマンドライン
 
 ```text
-road_editor.exe [--project <path>] [--save-project <path>]
+road_editor.exe [--root <dir>] [--project <path>] [--save-project <path>]
                 [--hdri <path>] [--texture <path>]...
                 [--export <dir>]
                 [--screenshot <path>] [--screenshot-ui <path>]
                 [--screenshot-frame <n>]
 ```
 
-`--save-project` は指定フレーム後に保存して終了する。
+`--root` はプロジェクトのルートフォルダ（省略時は最近使ったルート、無ければ `data/`）。`--project` にはシーン / 旧プロジェクト / ルートのフォルダを渡せる。
+`--save-project` は指定フレーム後に保存して終了する（`.tgscene` ならルートへ分離保存、`.tgproj` なら旧形式）。
 `--screenshot` はビュー、`--screenshot-ui` は UI を含む PNG を出力して終了する。
 `--export` は現在の材質合成結果の画像を書き出す（メッシュ書き出しは未実装。scene 表示中はテクスチャ書き出しも未対応）。
 検証素材・プロジェクト・スクリーンショットは Git 対象外の `data/` に置く。
@@ -104,7 +106,7 @@ road_editor.exe [--project <path>] [--save-project <path>]
 - [保存形式](docs/reference/file-format.md)
 - [変更履歴](docs/changelog.md)
 
-検証用のメッシュシーンは `data/mesh-scene-check/scene.tgproj` を「ファイル > 開く」で確認できる。
+検証用のメッシュシーンは `data/mesh-scene-check/scene.tgproj` を「ファイル > シーンを開く…」で確認できる。
 3枚の異なる高さの面を表示する描画基盤の検証データで、道路生成の完成例ではない。
 
 ## 道路メッシュの作成

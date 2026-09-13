@@ -1,0 +1,66 @@
+#pragma once
+
+#include "compositor/MaterialLibrary.h"
+#include "compositor/TextureLibrary.h"
+#include "io/ProjectWorkspace.h"
+#include "io/ThumbnailStore.h"
+#include "renderer/SkyLibrary.h"
+#include "rhi/Device.h"
+#include "rhi/PipelineCache.h"
+
+#include <filesystem>
+#include <unordered_map>
+#include <vector>
+
+namespace tg {
+
+// アセットの帯に出す、**まだシーンへ読み込んでいない**ファイルのサムネイル。
+//
+// 画像は CPU で縮小して転送する。マテリアルと天球は、シーンのライブラリとは別の
+// 読み込み領域（m_textures / m_materials / m_skies）へ一時的に読み、既存の球の
+// サムネイルを取り出して使う。シーン側の一覧・ID・アンドゥには一切触れない。
+//
+// 生成はフレームの外で 1 フレームに 1 件だけ（GPU 待機と画像の読み込みを伴う）。
+// 生成したものは `<ルート>/.terrain-graph/thumbnails/` へ PNG で残し、
+// 次回はそれを読む（io/ThumbnailStore）。メモリには最大 MaxEntries 件を保持する。
+class AssetThumbnailCache {
+public:
+    // 毎フレームの頭で呼ぶ。このフレームの要求を空にする。
+    void BeginRequests();
+    // 表示したいファイルを申告し、あれば SRV を返す（無ければ ptr が 0）。
+    D3D12_GPU_DESCRIPTOR_HANDLE Request(const std::filesystem::path& path);
+    bool Failed(const std::filesystem::path& path) const;
+    // 申告されたのにまだ無いものがあるか。UI スクリーンショットの撮り時の判定に使う。
+    bool HasPendingWork() const;
+    // 次の Process で全部捨てて作り直す（「更新」・アセットの保存・削除のあと）。
+    void Invalidate() { m_invalidate = true; }
+    // フレームの外で呼ぶ。表示中のフォルダの要求から 1 件だけ作る。
+    void Process(rhi::Device& device, rhi::PipelineCache& pipelines, io::ProjectWorkspace& workspace,
+                 const std::filesystem::path& directory);
+    void Destroy(rhi::Device& device);
+    static bool Supports(const std::filesystem::path& path);
+
+private:
+    struct Entry {
+        rhi::GpuTexture texture;
+        uint64_t lastUsed = 0;
+        bool failed = false;
+    };
+    void ClearScratch(rhi::Device& device);
+    bool BuildImage(rhi::Device& device, const std::filesystem::path& path, rhi::GpuTexture& output);
+    void Store(rhi::Device& device, const std::filesystem::path& path, rhi::GpuTexture texture, bool persist = true);
+
+    std::unordered_map<std::filesystem::path, Entry> m_entries;
+    std::vector<std::filesystem::path> m_requests;
+    std::filesystem::path m_root;
+    std::filesystem::path m_directory;
+    io::ThumbnailRecord m_diskRecord;
+    uint64_t m_frame = 0;
+    bool m_invalidate = false;
+    // 一覧専用の読み込み領域。シーンのライブラリとは別に持つ。
+    compositor::TextureLibrary m_textures;
+    compositor::MaterialLibrary m_materials;
+    renderer::SkyLibrary m_skies;
+};
+
+}  // namespace tg

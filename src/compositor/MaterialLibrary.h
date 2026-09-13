@@ -5,6 +5,7 @@
 #include "rhi/Device.h"
 #include "rhi/PipelineCache.h"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,10 @@ enum class BlendMode : uint32_t {
 
 struct MaterialAsset {
     MaterialAssetId id = kNoMaterialAsset;
+    // 共有アセットの置き場所と永続 ID（`.tgmat`）。未保存なら空。
+    // 実行中の id とは別物。id は GPU 用の通し番号で、ファイルには書かない。
+    std::filesystem::path assetPath;
+    std::string assetUid;
     std::string name;
 
     // 未指定のスロットは下の定数を使う。

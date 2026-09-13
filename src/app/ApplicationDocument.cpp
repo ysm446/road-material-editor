@@ -41,6 +41,8 @@ DocumentSnapshot Application::CaptureDocument() const {
         MaterialSnapshot material;
         material.id = asset.id;
         material.name = asset.name;
+        material.assetPath = asset.assetPath;
+        material.assetUid = asset.assetUid;
         material.baseColor = asset.baseColor;
         material.normal = asset.normal;
         material.roughness = asset.roughness;
@@ -90,6 +92,11 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
         compositor::MaterialAsset& asset =
             m_materialLibrary.RestoreAsset(material.id, material.name);
         asset.name = material.name;
+        // 初回保存で付いた永続 ID は、保存前に作った段へ戻っても保持する。
+        if (!material.assetUid.empty() || asset.assetUid.empty()) {
+            asset.assetPath = material.assetPath;
+            asset.assetUid = material.assetUid;
+        }
         asset.baseColor = ValidTexture(material.baseColor);
         asset.normal = ValidTexture(material.normal);
         asset.roughness = material.roughness;

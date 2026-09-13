@@ -199,6 +199,11 @@ void HintText(const char* format, ...);
 bool HorizontalSplitter(const char* id, float* height, float minHeight, float maxHeight,
                         float width);
 
+// 左右に並べた 2 つの区画の境界。ドラッグで左の区画の幅を変える。
+// width は実ピクセル、height には区画の高さを渡す。作法は HorizontalSplitter と同じ。
+// 呼び出し側が SameLine で左の区画の直後に置く（余白は kSplitterMargin を SameLine の間隔に使う）。
+bool VerticalSplitter(const char* id, float* width, float minWidth, float maxWidth, float height);
+
 // 一覧のサムネイルの下に置く名前。**幅はサムネイルに合わせて渡すこと。**
 // **常に 2 行**で描く（行数が変わると升目の高さが揃わない）。
 // 収まらないぶんは中央を省略し、先頭と末尾の両方を残す。

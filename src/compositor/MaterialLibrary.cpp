@@ -103,6 +103,9 @@ MaterialAssetId MaterialLibrary::Duplicate(const MaterialAsset& source) {
     MaterialAsset asset = source;
     asset.id = m_nextId++;
     asset.name = source.name + " のコピー";
+    // 複製は別の共有アセットになる。同じ ID を持ち回ると保存で同じファイルへ書いてしまう。
+    asset.assetPath.clear();
+    asset.assetUid.clear();
     // サムネイルは共有しない。作り直させる。
     asset.thumbnail = rhi::GpuTexture{};
     asset.thumbnailDirty = true;

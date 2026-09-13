@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,8 @@ namespace tg {
 struct MaterialSnapshot {
     compositor::MaterialAssetId id = compositor::kNoMaterialAsset;
     std::string name;
+    std::filesystem::path assetPath;
+    std::string assetUid;
     compositor::TextureId baseColor = compositor::kNoTexture;
     compositor::TextureId normal = compositor::kNoTexture;
     compositor::MapSlot roughness;

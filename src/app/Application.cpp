@@ -139,6 +139,26 @@ bool Application::Initialize(const StartupOptions& options) {
         HandleDroppedFiles(paths);
     });
 
+    m_settings.Load();
+    m_recentProjects.Load();
+
+    // ルートフォルダは常に 1 つ開いておく。--root > 最近使ったルート > data/ の順。
+    {
+        std::filesystem::path root = options.projectRoot;
+        std::error_code error;
+        if (root.empty() && !m_recentProjects.Roots().empty() &&
+            std::filesystem::is_directory(m_recentProjects.Roots().front().path, error)) {
+            root = m_recentProjects.Roots().front().path;
+        }
+        if (root.empty()) root = ResolveScreenshotDirectory().parent_path();
+        if (!m_workspace.Open(root)) {
+            TG_LOG_ERROR("プロジェクトのルートフォルダを開けません: %s", ToUtf8Display(root).c_str());
+            return false;
+        }
+        m_assetDirectory = m_workspace.Root();
+        if (!Headless()) m_recentProjects.AddRoot(m_workspace.Root());
+    }
+    m_pendingAssetDeleteInspect = options.inspectAssetDelete;
     m_pendingTexturePaths = options.texturePaths;
 
     // 天球は必ず 1 つある状態にする。--hdri が来ていれば、その既定の天球へ入れる。
@@ -157,8 +177,6 @@ bool Application::Initialize(const StartupOptions& options) {
     }
     UpdateWindowTitle();
 
-    m_settings.Load();
-    m_recentProjects.Load();
     // 表示設定は写し取らない。使うところで m_settings.Display() を直接読む。
     // 設定に拡大率が残っていれば、ウィンドウの大きさもそれに合わせる。
     ApplyUiScale();
@@ -179,6 +197,7 @@ void Application::Shutdown() {
 
     m_device.WaitForGpu();
     // ImGui のコンテキストより先に破棄する（エディタが ImGui に依存している）。
+    m_assetThumbnails.Destroy(m_device);
     DestroyGraphEditor();
     m_materialSphere.Destroy(m_device);
     m_skySphere.Destroy(m_device);
@@ -298,7 +317,10 @@ int Application::Run() {
             const io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
                                        m_renderer, m_graph, m_surfaceLayouts,
                              m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
-            io::SaveProject(m_options.saveProjectPath, refs);
+            const bool scene = _wcsicmp(m_options.saveProjectPath.extension().c_str(), L".tgscene") == 0;
+            if (io::SaveProject(m_options.saveProjectPath, refs, scene ? &m_workspace : nullptr) && scene) {
+                SaveSceneThumbnail(m_options.saveProjectPath);
+            }
             break;
         }
 
@@ -319,12 +341,16 @@ int Application::Run() {
             paths.swap(m_pendingTexturePaths);
             bool loaded = false;
             for (const std::filesystem::path& path : paths) {
+                // ルート外の画像は表示中のフォルダへ取り込む（アセットはプロジェクトに属する）。
+                std::filesystem::path imported = m_workspace.Import(path, m_assetDirectory);
+                if (imported.empty()) imported = path;
                 const compositor::TextureId id =
-                    m_textureLibrary.Load(m_device, m_pipelineCache, path);
+                    m_textureLibrary.Load(m_device, m_pipelineCache, imported);
                 if (id == compositor::kNoTexture) {
                     continue;
                 }
                 loaded = true;
+                m_assetRefresh = true;
                 // 読み込んだものを選択して一覧に見せる。
                 m_selectedTexture =
                     static_cast<int>(m_textureLibrary.Entries().size()) - 1;
@@ -461,7 +487,8 @@ int Application::Run() {
             (!m_editSurfacePreset || !m_layerPreviewInitialized || !m_layerPreview.IsEvaluating()) &&
             !m_layerThumbnailActive && std::none_of(m_layerThumbnails.begin(), m_layerThumbnails.end(), [](const auto& t) { return t.dirty; });
         const bool captureUi = !m_options.uiScreenshotPath.empty() &&
-                               (m_frameCounter + 1) >= m_options.screenshotFrame && evaluationIdle;
+                               (m_frameCounter + 1) >= m_options.screenshotFrame && evaluationIdle &&
+                               !m_assetThumbnails.HasPendingWork();
         if (captureUi) {
             m_device.RequestBackBufferCapture(m_options.uiScreenshotPath);
         } else if (m_screenshotPending) {
@@ -530,6 +557,11 @@ void Application::DrawUi() {
                 m_settings.Save();
             }
             ImGui::Separator();
+            // 読み込み済みのものだけの一覧。帯はファイルの一覧なので、こちらは補助扱い。
+            ImGui::MenuItem("テクスチャ（読み込み済み）", nullptr, &m_showTextureList);
+            ImGui::MenuItem("マテリアル（読み込み済み）", nullptr, &m_showMaterialList);
+            ImGui::MenuItem("天球（読み込み済み）", nullptr, &m_showSkyList);
+            ImGui::Separator();
             ImGui::MenuItem("マテリアルプレビュー", nullptr, &m_showMaterialSphere);
             ImGui::MenuItem("テクスチャプレビュー", nullptr, &m_showTexturePreview);
             ImGui::MenuItem("天球プレビュー", nullptr, &m_showSkyPreview);
@@ -545,7 +577,7 @@ void Application::DrawUi() {
     // ドックスペースの ID には版を付ける。**パネルを増減したら版を上げること。**
     // ID が変われば ini に配置が無い状態になり、既定レイアウトが組み直される。
     // 上げないと、新しいパネルがどこにも入らず浮いたままになる。
-    const ImGuiID dockspaceId = ImGui::GetID("TerrainGraphDockSpace_v17");
+    const ImGuiID dockspaceId = ImGui::GetID("TerrainGraphDockSpace_v18");
 
     // ステータスバーもメニューバーと同じく、先に作って作業領域を狭めておく。
     DrawStatusBar();
@@ -570,14 +602,16 @@ void Application::DrawUi() {
     DrawGraphPanel();
     // アセットの帯は畳める。出さなければドックノードが空になり、中央（ビューポート）が
     // その高さをもらう。ウィンドウはドック先を覚えているので、戻せば同じ所へ入る。
-    // 帯のタブは submit 順に並ぶ。テクスチャを先頭にする。
+    // 帯のタブは submit 順に並ぶ。アセット（フォルダ）を先頭にする。
+    m_assetThumbnails.BeginRequests();
     if (m_settings.Display().showAssetBand) {
-        DrawTextureLibraryPanel();
-        DrawMaterialLibraryPanel();
+        DrawAssetBrowser();
         DrawLayerMaterialLibrary();
         DrawBoundaryMaterialLibrary();
-        DrawSkyLibraryPanel();
     }
+    if (m_showTextureList) DrawTextureLibraryPanel();
+    if (m_showMaterialList) DrawMaterialLibraryPanel();
+    if (m_showSkyList) DrawSkyLibraryPanel();
     DrawMaterialPanel();
     if (m_editSurfacePreset) DrawSurfacePresetEditor();
     DrawLightingPanel();
@@ -585,6 +619,8 @@ void Application::DrawUi() {
     DrawMaterialSphereWindow();
     DrawTexturePreviewWindow();
     DrawSkyPreviewWindow();
+    DrawSceneSwitchDialog();
+    DrawAssetDeleteDialog();
     DrawInfoWindow();
     DrawSettingsWindow();
 
@@ -631,7 +667,7 @@ void Application::DrawUi() {
 //   |                                | プレビュー設定     |
 //   |                                | ライティング         |
 //   +---------------+----------------+                  |
-//   | テクスチャ     | マテリアル / 天球 |                  |
+//   | アセット（フォルダ階層 | 中身）           |                  |
 //   +---------------+----------------+------------------+
 //
 // 比率で組むので、ウィンドウの大きさが変わってもパネルははみ出さない。
@@ -660,11 +696,11 @@ void Application::BuildDefaultLayout(ImGuiID dockspaceId) {
     // （ImGui の hold-to-switch。テクスチャのドラッグ元で SourceNoHoldToOpenOthers を付けない）。
     // **前面にしたい「テクスチャ」を最後にドックする。** 同じ枠では最後にドックしたものが
     // 選ばれる。タブの並びは submit した順（テクスチャ → マテリアル → … → 天球）。
-    ImGui::DockBuilderDockWindow("天球", bottom);
+    // 帯は「アセット（ルートのフォルダ階層とその中身）/ レイヤーマテリアル / 境界マテリアル」。
+    // **前面にしたい「アセット」を最後にドックする。**
     ImGui::DockBuilderDockWindow("境界マテリアル", bottom);
     ImGui::DockBuilderDockWindow("レイヤーマテリアル", bottom);
-    ImGui::DockBuilderDockWindow("マテリアル", bottom);
-    ImGui::DockBuilderDockWindow("テクスチャ", bottom);
+    ImGui::DockBuilderDockWindow("アセット", bottom);
     // 右カラムへタブで重ねる。縦に積むと 1 枚あたりが短くなり、
     // どれもスクロールしないと全体が見えなくなる。
     // **グラフは右カラムに置く。** 中央のタブにするとビューポートと排他になり、

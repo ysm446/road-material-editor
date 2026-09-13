@@ -21,6 +21,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cwctype>
+#include <unordered_map>
 #include <functional>
 
 namespace tg {
@@ -37,11 +39,21 @@ bool IsImage(const std::string& ext) {
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".exr" || ext == ".tga" || ext == ".bmp";
 }
 
+// 比較用のキー。**ファイルシステムには触らない。** 帯は毎フレーム全ファイル × 読み込み済み全件を
+// 突き合わせるので、weakly_canonical のような問い合わせを挟むとシーンを開いた途端に描画が落ちる。
+// ライブラリとルートのパスはどちらも絶対パスなので、正規化と大文字小文字の同一視で足りる。
+std::wstring PathKey(const fs::path& path) {
+    std::wstring key = path.lexically_normal().wstring();
+    for (wchar_t& c : key) {
+        if (c == L'/') c = L'\\';
+        else c = static_cast<wchar_t>(std::towlower(c));
+    }
+    return key;
+}
+
 bool SameFile(const fs::path& a, const fs::path& b) {
     if (a.empty() || b.empty()) return false;
-    std::error_code ea, eb;
-    const auto ca = fs::weakly_canonical(a, ea), cb = fs::weakly_canonical(b, eb);
-    return !ea && !eb && _wcsicmp(ca.c_str(), cb.c_str()) == 0;
+    return PathKey(a) == PathKey(b);
 }
 
 // サムネイル枠の中央へ、タブ付きフォルダの輪郭だけを描く（字形ではなく図形で描く）。
@@ -363,6 +375,20 @@ void Application::DrawAssetBrowser() {
         if (m_assetEntries.empty()) ui::HintText("右クリックでアセットを作成、またはファイルを読み込みます");
         const float size = ui::Scaled(84);
         const int columns = std::max(1, int(ImGui::GetContentRegionAvail().x / (size + ImGui::GetStyle().ItemSpacing.x)));
+        // 読み込み済みのものをパスで引く表。ファイルごとにライブラリを総なめしない。
+        struct Loaded {
+            ImTextureID handle = 0;
+            compositor::TextureId texture = compositor::kNoTexture;
+            compositor::MaterialAssetId material = compositor::kNoMaterialAsset;
+            bool missing = false;
+        };
+        std::unordered_map<std::wstring, Loaded> loaded;
+        for (const auto& a : m_textureLibrary.Entries()) if (!a.path.empty())
+            loaded[PathKey(a.path)] = {static_cast<ImTextureID>(a.PreviewHandle().ptr), a.id, compositor::kNoMaterialAsset, a.missing};
+        for (const auto& a : m_materialLibrary.Entries()) if (!a.assetPath.empty())
+            loaded[PathKey(a.assetPath)] = {static_cast<ImTextureID>(a.thumbnail.srv.gpu.ptr), compositor::kNoTexture, a.id, MaterialHasMissingTexture(a)};
+        for (const auto& a : m_skyLibrary.Entries()) if (!a.assetPath.empty())
+            loaded[PathKey(a.assetPath)] = {static_cast<ImTextureID>(a.thumbnail.srv.gpu.ptr)};
         int index = 0;
         for (const auto& entry : m_assetEntries) {
             const auto path = entry.path();
@@ -373,21 +399,11 @@ void Application::DrawAssetBrowser() {
             compositor::TextureId textureId = compositor::kNoTexture;
             compositor::MaterialAssetId materialId = compositor::kNoMaterialAsset;
             bool missing = false;
-            for (const auto& a : m_textureLibrary.Entries()) if (SameFile(a.path, path)) {
-                handle = static_cast<ImTextureID>(a.PreviewHandle().ptr);
-                textureId = a.id;
-                missing = a.missing;
-                break;
-            }
-            for (const auto& a : m_materialLibrary.Entries()) if (SameFile(a.assetPath, path)) {
-                handle = static_cast<ImTextureID>(a.thumbnail.srv.gpu.ptr);
-                materialId = a.id;
-                missing = MaterialHasMissingTexture(a);
-                break;
-            }
-            for (const auto& a : m_skyLibrary.Entries()) if (SameFile(a.assetPath, path)) {
-                handle = static_cast<ImTextureID>(a.thumbnail.srv.gpu.ptr);
-                break;
+            if (const auto found = loaded.find(PathKey(path)); found != loaded.end()) {
+                handle = found->second.handle;
+                textureId = found->second.texture;
+                materialId = found->second.material;
+                missing = found->second.missing;
             }
             if (!handle && !folder && ImGui::IsRectVisible(ImVec2(size, size)))
                 handle = static_cast<ImTextureID>(m_assetThumbnails.Request(path).ptr);

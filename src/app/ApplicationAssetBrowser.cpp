@@ -192,6 +192,20 @@ void Application::RefreshAssetBrowser() {
         if (directoryA != directoryB) return directoryA;
         return a.path().filename() < b.path().filename();
     });
+    // フォルダ階層。ドット始まりと symlink は出さない。深さは 32 まで。
+    m_assetFolders.clear();
+    const auto collect = [&](auto&& self, const fs::path& directory, int depth) -> void {
+        if (depth > 32) return;
+        auto& children = m_assetFolders[directory.wstring()];
+        std::error_code scanError;
+        fs::directory_iterator child(directory, fs::directory_options::skip_permission_denied, scanError), childEnd;
+        for (; child != childEnd && !scanError; child.increment(scanError))
+            if (child->is_directory(scanError) && !child->is_symlink(scanError) &&
+                !child->path().filename().wstring().starts_with(L".")) children.push_back(child->path());
+        std::sort(children.begin(), children.end());
+        for (const auto& path : children) self(self, path, depth + 1);
+    };
+    collect(collect, m_workspace.Root(), 0);
     m_assetRefresh = false;
 }
 
@@ -348,11 +362,8 @@ void Application::DrawAssetBrowser() {
                 m_assetRefresh = true;
             }
             if (open) {
-                std::error_code error;
-                fs::directory_iterator it(directory, fs::directory_options::skip_permission_denied, error), end;
-                for (; it != end && !error; it.increment(error))
-                    if (it->is_directory(error) && !it->is_symlink(error) &&
-                        !it->path().filename().wstring().starts_with(L".")) self(self, it->path(), depth + 1);
+                if (const auto found = m_assetFolders.find(directory.wstring()); found != m_assetFolders.end())
+                    for (const auto& child : found->second) self(self, child, depth + 1);
                 ImGui::TreePop();
             }
             ImGui::PopID();

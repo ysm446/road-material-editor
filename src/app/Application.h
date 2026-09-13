@@ -30,6 +30,7 @@
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // imgui-node-editor のコンテキスト。ヘッダを丸ごと引き込まないための前方宣言。
@@ -570,6 +571,8 @@ private:
     AssetThumbnailCache m_assetThumbnails;
     std::filesystem::path m_assetDirectory;
     std::vector<std::filesystem::directory_entry> m_assetEntries;
+    // フォルダ階層（親 → 子フォルダの一覧）。毎フレーム列挙せず、更新のときに作り直す。
+    std::unordered_map<std::wstring, std::vector<std::filesystem::path>> m_assetFolders;
     std::filesystem::path m_selectedAssetPath;
     bool m_assetRefresh = true;
     // ファイルの削除（退避）。検査 → 確認 → 実行の順で、実行はフレームの外。

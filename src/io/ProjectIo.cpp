@@ -17,6 +17,7 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tg::io {
@@ -1806,36 +1807,56 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
         const compositor::LibraryTexture* entry = refs.textures.Find(id);
         return (entry != nullptr) ? source(entry->path) : json();
     };
+    // この保存で ID を持つアセットが使う ID。ID の無いものを既存のファイルへ寄せるときに奪わない。
+    std::unordered_set<std::string> claimedUids;
+    for (const compositor::MaterialAsset& entry : refs.materials.Entries()) {
+        if (!entry.assetUid.empty()) claimedUids.insert(entry.assetUid);
+    }
+    for (const renderer::SkyAsset& entry : refs.skies.Entries()) {
+        if (!entry.assetUid.empty()) claimedUids.insert(entry.assetUid);
+    }
+    // 置き場所が未定のものの保存先。ID の無いもの（旧 .tgproj・単体 .tgmat から来たもの）は、
+    // 同じ中身の既存アセットがあればそれを使う。無ければ名前から連番で作る。
+    const auto placement = [&](json& body, const fs::path& current, const char* kind, const wchar_t* folder,
+                               const std::string& name, const char* extension) -> fs::path {
+        if (!current.empty() && workspace.Contains(current)) {
+            return current;
+        }
+        if (ReadString(body, "uid").empty()) {
+            const std::string uid = workspace.FindIdenticalAsset(kind, body, claimedUids);
+            if (!uid.empty()) {
+                body["uid"] = uid;
+                return workspace.Resolve({{"uid", uid}});
+            }
+        }
+        return workspace.UniquePath(workspace.Root() / folder, name, extension);
+    };
     for (const compositor::MaterialAsset& entry : refs.materials.Entries()) {
         compositor::MaterialAsset* asset = refs.materials.FindMutable(entry.id);
         json body = WriteMaterialBody(*asset, writeTexture);
         body["uid"] = asset->assetUid;
-        fs::path assetPath = asset->assetPath;
-        if (assetPath.empty() || !workspace.Contains(assetPath)) {
-            assetPath = workspace.UniquePath(workspace.Root() / L"Materials", asset->name, ".tgmat");
-        }
+        fs::path assetPath = placement(body, asset->assetPath, "material-asset", L"Materials", asset->name, ".tgmat");
         if (!valid || !workspace.SaveAsset(assetPath, "material-asset", body)) {
             TG_LOG_ERROR("マテリアルを保存できません: %s", asset->name.c_str());
             return false;
         }
         asset->assetPath = assetPath;
         asset->assetUid = ReadString(body, "uid");
+        claimedUids.insert(asset->assetUid);
     }
     for (const renderer::SkyAsset& entry : refs.skies.Entries()) {
         renderer::SkyAsset* asset = refs.skies.FindMutable(entry.id);
         json body = WriteSky(*asset, workspace.Root());
         body["hdri"] = source(asset->sky.hdriPath);
         body["uid"] = asset->assetUid;
-        fs::path assetPath = asset->assetPath;
-        if (assetPath.empty() || !workspace.Contains(assetPath)) {
-            assetPath = workspace.UniquePath(workspace.Root() / L"Skies", asset->name, ".tgsky");
-        }
+        fs::path assetPath = placement(body, asset->assetPath, "sky-asset", L"Skies", asset->name, ".tgsky");
         if (!valid || !workspace.SaveAsset(assetPath, "sky-asset", body)) {
             TG_LOG_ERROR("天球を保存できません: %s", asset->name.c_str());
             return false;
         }
         asset->assetPath = assetPath;
         asset->assetUid = ReadString(body, "uid");
+        claimedUids.insert(asset->assetUid);
     }
     return valid;
 }
@@ -1843,8 +1864,8 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
 bool LoadSharedAsset(ProjectWorkspace& workspace, const std::filesystem::path& path,
                      rhi::Device& device, rhi::PipelineCache& pipelineCache,
                      compositor::TextureLibrary& textures, compositor::MaterialLibrary& materials,
-                     renderer::SkyLibrary& skies) {
-    if (!workspace.Scan()) {
+                     renderer::SkyLibrary& skies, bool rescan) {
+    if (rescan && !workspace.Scan()) {
         return false;
     }
     // 読み込みではアセットの原本を書き換えない（Reference は .meta を作ることがある）。

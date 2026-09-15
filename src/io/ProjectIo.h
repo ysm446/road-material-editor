@@ -50,14 +50,17 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
 // --- 共有アセット（ルート内の .tgmat / .tgsky） ----------------------------
 //
 // 読み込み済みのマテリアルと天球をそれぞれのファイルへ書く。置き場所が未定のものは
-// `Materials/` / `Skies/` に名前から作る。シーンの保存はこれを先に行う。
+// `Materials/` / `Skies/` に名前から作る。ただし ID を持たないもの（旧 .tgproj の埋め込みなど）は、
+// 同じ中身の既存アセットがあればそれへ書く（保存し直すたびに連番の複製を作らない）。
+// シーンの保存はこれを先に行う。
 bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs);
 // 共有アセット 1 つを現在のライブラリへ足す。同じ ID がすでにあれば足さずにそれを使う
 // （天球は適用する）。参照している画像もその場で読み込む。
+// rescan を false にすると、ルートを走査し直さず手持ちの ID 表で解決する（サムネイルの連続生成用）。
 bool LoadSharedAsset(ProjectWorkspace& workspace, const std::filesystem::path& path,
                      rhi::Device& device, rhi::PipelineCache& pipelineCache,
                      compositor::TextureLibrary& textures, compositor::MaterialLibrary& materials,
-                     renderer::SkyLibrary& skies);
+                     renderer::SkyLibrary& skies, bool rescan = true);
 
 // --- マテリアル単体 (.tgmat) ----------------------------------------------
 //

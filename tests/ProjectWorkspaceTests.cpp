@@ -32,9 +32,11 @@ namespace {
 using tg::tests::Check;
 using tg::tests::Section;
 
+// 検証用のファイルは data/test/ に作る（AGENTS.md）。各ケースのルートは project.tgproj を持つ
+// 入れ子のルートなので、data/ をルートに開いたときの走査には入らない。
 fs::path FreshDirectory(const char* name) {
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    const fs::path directory = fs::temp_directory_path() / ("road-editor-" + std::string(name) + "-" + std::to_string(stamp));
+    const fs::path directory = fs::path(TG_DATA_DIR) / "test" / ("road-editor-" + std::string(name) + "-" + std::to_string(stamp));
     std::error_code error;
     fs::create_directories(directory, error);
     return directory;
@@ -84,6 +86,11 @@ void TestWorkspace() {
     changed["roughness"] = 0.75;
     fs::path target = moved;
     Check(workspace.SaveAsset(target, "material-asset", changed), "共有マテリアルを更新する");
+    const auto writtenAt = fs::last_write_time(target, error);
+    json same = changed;
+    fs::path sameTarget = target;
+    Check(workspace.SaveAsset(sameTarget, "material-asset", same) && fs::last_write_time(target, error) == writtenAt,
+          "中身が同じなら書き直さない（サムネイルのキャッシュを無効にしない）");
     json second = {{"materials", json::array({{{"id", 2}, {"asset", materialRef}}})}};
     Check(workspace.Expand(second) && second["materials"][0]["roughness"] == 0.75, "別のシーンから編集後の値が見える");
 
@@ -99,6 +106,7 @@ void TestWorkspace() {
                    {"materials", json::array({{{"id", 1}, {"name", "embedded"}, {"maps", {{"baseColor", 2}}}}})},
                    {"skies", json::array({{{"id", 1}, {"name", "sky"}, {"hdri", nullptr}}})},
                    {"graph", {{"nodes", json::array()}}}};
+    const json legacyCopy = legacy;
     Check(workspace.SaveScene(scene, legacy), "シーンを保存する");
     Check(fs::exists(root / "Materials" / "embedded.tgmat") && fs::exists(root / "Skies" / "sky.tgsky"), "埋め込みを .tgmat / .tgsky へ分ける");
     Check(fs::exists(root / "Imported" / "external.png"), "ルート外の画像を Imported/ へ取り込む");
@@ -110,6 +118,16 @@ void TestWorkspace() {
     Check(loaded["textures"][2]["path"] == tg::ToUtf8Portable(missing), "リンク切れの画像はパスのまま残る");
     Check(loaded["materials"][0]["maps"]["baseColor"] == 2 && loaded["materials"][0]["name"] == "embedded", "マテリアルの画像参照を番号へ戻す");
     Check(workspace.StartupScene() == scene, "開始シーンを覚える");
+    json resaved = legacyCopy;
+    Check(workspace.SaveScene(workspace.UniquePath(root / "Scenes", "resaved", ".tgscene"), resaved), "同じ旧文書をもう一度シーンへ保存する");
+    Check(!fs::exists(root / "Materials" / "embedded_1.tgmat") && !fs::exists(root / "Skies" / "sky_1.tgsky"),
+          "同じ中身の埋め込みは連番の複製を作らない");
+    Check(resaved["materials"][0]["asset"]["uid"] == legacy["materials"][0]["asset"]["uid"], "既存のマテリアルの ID を指す");
+    json edited = legacyCopy;
+    edited["materials"][0]["roughness"] = 0.5;
+    Check(workspace.SaveScene(workspace.UniquePath(root / "Scenes", "edited", ".tgscene"), edited) &&
+              fs::exists(root / "Materials" / "embedded_1.tgmat"),
+          "中身が違えば別のアセットにする");
     const std::string uid = loaded["sceneUid"];
     json again = loaded;
     Check(workspace.SaveScene(scene, again) && again["sceneUid"] == uid, "同じ保存先はシーン ID を保つ");
@@ -123,6 +141,13 @@ void TestWorkspace() {
     Check(!workspace.Scan(), "ID の重複を検出する");
     fs::remove(duplicate, error);
     Check(workspace.Scan(), "重複を消せば戻る");
+    const fs::path nestedRoot = root / "test" / "nested";
+    fs::create_directories(nestedRoot, error);
+    ProjectWorkspace nested;
+    Check(nested.Open(nestedRoot), "入れ子の検証用ルートを開く");
+    fs::copy_file(moved, nestedRoot / "copy.tgmat", error);
+    Check(!error && workspace.Scan(), "入れ子のルートの中は親の走査に含めない");
+    fs::remove_all(root / "test", error);
     json malformed = {{"materials", json::array({42})}};
     Check(!workspace.Expand(malformed), "壊れたアセット表を拒否する");
 

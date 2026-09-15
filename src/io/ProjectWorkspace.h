@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <nlohmann/json.hpp>
 
@@ -30,7 +31,12 @@ public:
                                      const std::string& name, const char* extension) const;
     std::filesystem::path Resolve(const nlohmann::json& reference) const;
     nlohmann::json Reference(const std::filesystem::path& path);
+    // 中身が変わらなければ書き込まない（更新日時を保ち、サムネイルのキャッシュを無効にしない）。
     bool SaveAsset(std::filesystem::path& path, const char* kind, nlohmann::json& body);
+    // ID を持たない本文（旧 .tgproj の埋め込みなど）と同じ中身の既存アセットの ID を探す。
+    // 無ければ空。claimedUids の ID は、同じ保存で別のアセットが使うので対象にしない。
+    std::string FindIdenticalAsset(const char* kind, const nlohmann::json& body,
+                                   const std::unordered_set<std::string>& claimedUids) const;
     bool ReadAsset(const std::filesystem::path& path, const char* kind, nlohmann::json& body) const;
     // 既存の保存器が作った文書（埋め込みのマテリアル・天球、相対パスの画像）を
     // 共有アセットへ分離してシーンを書く。

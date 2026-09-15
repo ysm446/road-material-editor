@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <fstream>
 #include <functional>
+#include <unordered_set>
 
 namespace tg::io {
 namespace fs = std::filesystem;
@@ -139,7 +140,10 @@ bool ProjectWorkspace::Scan() {
     for (; it != end && !error; it.increment(error)) {
         if (it->is_symlink(error)) { it.disable_recursion_pending(); continue; }
         if (it->is_directory(error)) {
-            if (it->path().filename().wstring().starts_with(L".")) it.disable_recursion_pending();
+            // ドット始まりの内部フォルダと、入れ子の別ルート（data/test/ の検証用ルートなど）には入らない。
+            std::error_code nestedError;
+            if (it->path().filename().wstring().starts_with(L".") ||
+                fs::exists(it->path() / kWorkspaceFile, nestedError)) it.disable_recursion_pending();
             continue;
         }
         const auto path = it->path();
@@ -269,11 +273,36 @@ bool ProjectWorkspace::SaveAsset(fs::path& path, const char* kind, json& body) {
     body["uid"] = uid;
     body.erase("id");
     body.erase("_assetPath");
-    if (!WriteJson(path, body)) return false;
+    json current;
+    std::error_code error;
+    const bool unchanged = fs::is_regular_file(path, error) && ReadJson(path, current) && current == body;
+    if (!unchanged && !WriteJson(path, body)) return false;
     path = Absolute(path);
     m_paths[uid] = path;
     m_knownUids[ToUtf8Portable(path)] = uid;
     return true;
+}
+
+std::string ProjectWorkspace::FindIdenticalAsset(const char* kind, const json& body,
+                                                 const std::unordered_set<std::string>& claimedUids) const {
+    const auto comparable = [](json value) {
+        for (const char* key : {"uid", "format", "version", "id", "_assetPath"}) value.erase(key);
+        return value;
+    };
+    const json wanted = comparable(body);
+    // 同じ中身が複数あれば、パスの若いもの（連番の付かない元）を選んで結果を安定させる。
+    std::string match;
+    fs::path matchPath;
+    for (const auto& [uid, path] : m_paths) {
+        if (!IsNative(path) || claimedUids.contains(uid)) continue;
+        json existing;
+        if (!ReadAsset(path, kind, existing) || comparable(std::move(existing)) != wanted) continue;
+        if (match.empty() || path < matchPath) {
+            match = uid;
+            matchPath = path;
+        }
+    }
+    return match;
 }
 
 bool ProjectWorkspace::ReadAsset(const fs::path& path, const char* kind, json& body) const {
@@ -303,12 +332,24 @@ bool ProjectWorkspace::SaveScene(const fs::path& path, json& document) {
         entry["source"] = ref;
         entry.erase("path");
     }
+    std::unordered_set<std::string> claimedUids;
+    for (const char* key : {"materials", "skies"})
+        for (const auto& entry : document[key])
+            if (const auto uid = String(entry, "uid"); !uid.empty()) claimedUids.insert(uid);
     const auto save = [&](json& entry, const char* kind, const char* folder, const char* ext) {
         const json id = entry.contains("id") ? entry["id"] : json();
         fs::path assetPath = FromUtf8(String(entry, "_assetPath"));
-        if (assetPath.empty() || !Contains(assetPath))
-            assetPath = UniquePath(m_root / folder, String(entry, "name"), ext);
+        if (assetPath.empty() || !Contains(assetPath)) {
+            // ID の無い埋め込み（旧 .tgproj）を保存し直すたびに連番の複製を作らない。
+            if (String(entry, "uid").empty()) {
+                if (const auto uid = FindIdenticalAsset(kind, entry, claimedUids); !uid.empty()) entry["uid"] = uid;
+            }
+            assetPath = String(entry, "uid").empty() ? UniquePath(m_root / folder, String(entry, "name"), ext)
+                                                     : Resolve({{"uid", String(entry, "uid")}});
+            if (assetPath.empty()) assetPath = UniquePath(m_root / folder, String(entry, "name"), ext);
+        }
         if (!SaveAsset(assetPath, kind, entry)) return false;
+        claimedUids.insert(String(entry, "uid"));
         entry = {{"asset", Reference(assetPath)}};
         if (!id.is_null()) entry["id"] = id;  // 天球は順番で参照するので番号を持たない
         return !entry["asset"].is_null();

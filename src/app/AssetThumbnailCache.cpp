@@ -21,6 +21,8 @@ namespace {
 
 constexpr uint32_t ThumbnailSize = 128;
 constexpr size_t MaxEntries = 128;
+// 使い回す画像の上限。2K の EXR はミップ込みで 1 枚約 21MB、4K は約 85MB。
+constexpr size_t MaxScratchTextures = 12;
 
 std::string Extension(const fs::path& path) {
     auto extension = ToUtf8Portable(path.extension());
@@ -61,10 +63,10 @@ bool AssetThumbnailCache::HasPendingWork() const {
                        [&](const auto& path) { return !m_entries.contains(path); });
 }
 
-void AssetThumbnailCache::ClearScratch(rhi::Device& device) {
+void AssetThumbnailCache::ClearScratch(rhi::Device& device, bool textures) {
     m_materials.Destroy(device);
     m_skies.Destroy(device);
-    m_textures.Destroy(device);
+    if (textures) m_textures.Destroy(device);
 }
 
 void AssetThumbnailCache::Destroy(rhi::Device& device) {
@@ -171,14 +173,21 @@ bool AssetThumbnailCache::BuildImage(rhi::Device& device, const fs::path& path, 
 void AssetThumbnailCache::Process(rhi::Device& device, rhi::PipelineCache& pipelines,
                                   io::ProjectWorkspace& workspace, const fs::path& directory) {
     if (m_invalidate || m_root != workspace.Root() || m_directory != directory) {
+        // 走査はルートの切り替えと「更新」などの Invalidate のときだけ。フォルダの移動では手持ちの ID 表を使う。
+        const bool rescan = m_invalidate || m_root != workspace.Root();
         Destroy(device);
         m_root = workspace.Root();
         m_directory = directory;
+        if (rescan) workspace.Scan();
     }
     const auto request = std::find_if(m_requests.begin(), m_requests.end(), [&](const auto& path) {
         return path.parent_path() == directory && !m_entries.contains(path);
     });
-    if (request == m_requests.end()) return;
+    if (request == m_requests.end()) {
+        // 表示中の要求を作り終えたら、使い回していた画像を返す。
+        if (!m_textures.Entries().empty()) ClearScratch(device);
+        return;
+    }
     const auto path = *request;
     const auto extension = Extension(path);
     rhi::GpuTexture thumbnail;
@@ -205,7 +214,7 @@ void AssetThumbnailCache::Process(rhi::Device& device, rhi::PipelineCache& pipel
         Store(device, path, std::move(thumbnail));
         return;
     }
-    ClearScratch(device);
+    ClearScratch(device, m_textures.Entries().size() >= MaxScratchTextures);
     bool loaded = false;
     nlohmann::json header;
     const auto format = io::ProjectWorkspace::ReadJson(path, header) ? io::ProjectWorkspace::String(header, "format") : "";
@@ -213,7 +222,7 @@ void AssetThumbnailCache::Process(rhi::Device& device, rhi::PipelineCache& pipel
         // 持ち出し用の旧 .tgmat。相対パスの画像を読んでそのまま球を作る。
         loaded = io::LoadMaterial(path, device, pipelines, m_textures, m_materials) != compositor::kNoMaterialAsset;
     } else {
-        loaded = io::LoadSharedAsset(workspace, path, device, pipelines, m_textures, m_materials, m_skies);
+        loaded = io::LoadSharedAsset(workspace, path, device, pipelines, m_textures, m_materials, m_skies, false);
     }
     if (loaded && !m_materials.Entries().empty()) {
         m_materials.ProcessPendingWork(device, pipelines, m_textures);
@@ -224,7 +233,7 @@ void AssetThumbnailCache::Process(rhi::Device& device, rhi::PipelineCache& pipel
         thumbnail = std::exchange(m_skies.ActiveMutable()->thumbnail, {});
     }
     Store(device, path, std::move(thumbnail));
-    ClearScratch(device);
+    ClearScratch(device, false);
 }
 
 }  // namespace tg

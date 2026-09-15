@@ -21,6 +21,9 @@ namespace tg {
 // サムネイルを取り出して使う。シーン側の一覧・ID・アンドゥには一切触れない。
 //
 // 生成はフレームの外で 1 フレームに 1 件だけ（GPU 待機と画像の読み込みを伴う）。
+// ルートの走査はマテリアルごとには行わない（ルートの切り替えと Invalidate のときだけ）。
+// 読み込んだ画像は、同じフォルダの続くマテリアルで使い回す（共有の _ORD や複製は同じ画像を指す）。
+// 要求を作り終えたとき、または MaxScratchTextures 枚を超えたときに返す。
 // 生成したものは `<ルート>/.terrain-graph/thumbnails/` へ PNG で残し、
 // 次回はそれを読む（io/ThumbnailStore）。メモリには最大 MaxEntries 件を保持する。
 class AssetThumbnailCache {
@@ -46,7 +49,7 @@ private:
         uint64_t lastUsed = 0;
         bool failed = false;
     };
-    void ClearScratch(rhi::Device& device);
+    void ClearScratch(rhi::Device& device, bool textures = true);
     bool BuildImage(rhi::Device& device, const std::filesystem::path& path, rhi::GpuTexture& output);
     void Store(rhi::Device& device, const std::filesystem::path& path, rhi::GpuTexture texture, bool persist = true);
 

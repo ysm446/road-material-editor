@@ -578,7 +578,11 @@ private:
     std::vector<std::filesystem::directory_entry> m_assetEntries;
     // フォルダ階層（親 → 子フォルダの一覧）。毎フレーム列挙せず、更新のときに作り直す。
     std::unordered_map<std::wstring, std::vector<std::filesystem::path>> m_assetFolders;
-    std::filesystem::path m_selectedAssetPath;
+    // 一覧で選んでいるファイル・フォルダ。クリックで単独、Ctrl+クリックで追加 / 除外、Shift+クリックで起点からの範囲。
+    std::vector<std::filesystem::path> m_selectedAssets;
+    std::filesystem::path m_assetSelectionAnchor;
+    bool IsAssetSelected(const std::filesystem::path& path) const;
+    void SelectAsset(const std::filesystem::path& path, bool toggle, bool range);
     bool m_assetRefresh = true;
     // 名前の変更。一覧のサムネイルの下（またはフォルダ階層の行）でその場で入力し、確定分をフレームの外で処理する。
     // m_assetRenameTarget が空でなければ編集中。m_assetRenameFocus は入力欄が掴むまで立てておく。
@@ -596,7 +600,7 @@ private:
     std::string m_pendingAssetRenameName;
     // 一覧のフォルダ・左のフォルダ階層に置くドロップ先。サムネイルが落とされたらそのフォルダへの移動を予約する。
     void AssetFolderDropTarget(const std::filesystem::path& directory);
-    std::filesystem::path m_pendingAssetMove;
+    std::vector<std::filesystem::path> m_pendingAssetMoves;
     std::filesystem::path m_pendingAssetMoveTarget;
     // ファイルの削除（退避）。検査 → 確認 → 実行の順で、実行はフレームの外。
     std::filesystem::path m_pendingAssetDeleteInspect;

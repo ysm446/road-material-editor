@@ -7,7 +7,8 @@
 // 配置データへ足して編集ウィンドウ、.tgscene → シーン）。
 // 読み込み済みのものはライブラリのサムネイルとドラッグ元（TG_TEXTURE / TG_MATERIAL /
 // TG_LAYER_MATERIAL / TG_BOUNDARY_MATERIAL）を使い、未読み込みのものは AssetThumbnailCache が
-// 別領域で作ったサムネイルを出す。ファイルはフォルダへドラッグで移動、F2 か右クリックでその場で改名する。
+// 別領域で作ったサムネイルを出す。クリック / Ctrl / Shift で複数選択し、フォルダへドラッグで移動、
+// F2 か右クリックでその場で改名する。
 
 #include "app/Application.h"
 
@@ -62,6 +63,11 @@ bool SameFile(const fs::path& a, const fs::path& b) {
     return PathKey(a) == PathKey(b);
 }
 
+// inner が outer の配下（outer 自身は含まない）か。
+bool IsInside(const fs::path& inner, const fs::path& outer) {
+    return !outer.empty() && PathKey(inner).starts_with(PathKey(outer) + L"\\");
+}
+
 // サムネイル枠の中央へ、タブ付きフォルダの輪郭だけを描く（字形ではなく図形で描く）。
 void DrawFolderIcon(const ImVec2& min, const ImVec2& max) {
     const float size = std::min(max.x - min.x, max.y - min.y);
@@ -97,6 +103,33 @@ bool Application::IsAssetLoaded(const fs::path& path) const {
     for (const auto& a : m_surfaceLayouts.layerMaterials) if (SameFile(a.assetPath, path)) return true;
     for (const auto& a : m_surfaceLayouts.boundaryMaterials) if (SameFile(a.assetPath, path)) return true;
     return false;
+}
+
+bool Application::IsAssetSelected(const fs::path& path) const {
+    return std::find(m_selectedAssets.begin(), m_selectedAssets.end(), path) != m_selectedAssets.end();
+}
+
+// toggle（Ctrl）なら追加 / 除外、range（Shift）なら起点から path までを並び順で選ぶ。どちらも無ければ単独。
+void Application::SelectAsset(const fs::path& path, bool toggle, bool range) {
+    const auto indexOf = [&](const fs::path& target) -> int {
+        for (size_t i = 0; i < m_assetEntries.size(); ++i) if (m_assetEntries[i].path() == target) return int(i);
+        return -1;
+    };
+    const int anchor = indexOf(m_assetSelectionAnchor), current = indexOf(path);
+    if (range && anchor >= 0 && current >= 0) {
+        if (!toggle) m_selectedAssets.clear();
+        for (int i = std::min(anchor, current); i <= std::max(anchor, current); ++i)
+            if (!IsAssetSelected(m_assetEntries[i].path())) m_selectedAssets.push_back(m_assetEntries[i].path());
+        return;
+    }
+    if (toggle) {
+        const auto found = std::find(m_selectedAssets.begin(), m_selectedAssets.end(), path);
+        if (found != m_selectedAssets.end()) m_selectedAssets.erase(found);
+        else m_selectedAssets.push_back(path);
+    } else {
+        m_selectedAssets.assign(1, path);
+    }
+    m_assetSelectionAnchor = path;
 }
 
 void Application::OpenAssetRename(const fs::path& path) {
@@ -150,41 +183,51 @@ void Application::RelinkAssetPaths(const fs::path& from, const fs::path& to) {
         m_recentProjects.Add(m_workspace.Root(), m_projectPath);
         UpdateWindowTitle();
     }
-    remap(m_selectedAssetPath);
+    for (auto& path : m_selectedAssets) remap(path);
+    remap(m_assetSelectionAnchor);
     remap(m_assetDirectory);
     m_assetThumbnails.Invalidate();
 }
 
 void Application::AssetFolderDropTarget(const fs::path& directory) {
     if (!ImGui::BeginDragDropTarget()) return;
-    // 読み込み済みのものはライブラリの ID で運ばれてくるので、パスへ引き直す。
-    fs::path source;
+    // パスは改行区切りで複数運ばれてくる（複数選択）。読み込み済みのものを 1 つ運ぶときは
+    // ライブラリの ID で運ばれてくるので、パスへ引き直す。
+    std::vector<fs::path> sources;
     if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kAssetPathDragDropType);
         payload != nullptr && payload->DataSize >= int(sizeof(wchar_t))) {
-        source = fs::path(static_cast<const wchar_t*>(payload->Data));
+        const std::wstring text(static_cast<const wchar_t*>(payload->Data));
+        for (size_t begin = 0; begin < text.size();) {
+            const size_t end = std::min(text.find(L'\n', begin), text.size());
+            if (end > begin) sources.emplace_back(text.substr(begin, end - begin));
+            begin = end + 1;
+        }
     } else if (const ImGuiPayload* texture = ImGui::AcceptDragDropPayload(kTextureDragDropType);
                texture != nullptr && texture->DataSize == sizeof(compositor::TextureId)) {
         if (const auto* entry = m_textureLibrary.Find(*static_cast<const compositor::TextureId*>(texture->Data)))
-            source = entry->path;
+            sources.push_back(entry->path);
     } else if (const ImGuiPayload* material = ImGui::AcceptDragDropPayload(kMaterialDragDropType);
                material != nullptr && material->DataSize == sizeof(compositor::MaterialAssetId)) {
         if (const auto* asset = m_materialLibrary.Find(*static_cast<const compositor::MaterialAssetId*>(material->Data)))
-            source = asset->assetPath;
+            sources.push_back(asset->assetPath);
     } else if (const ImGuiPayload* layer = ImGui::AcceptDragDropPayload(kLayerMaterialDragDropType);
                layer != nullptr && layer->DataSize == sizeof(graph::SurfaceId)) {
         const auto id = *static_cast<const graph::SurfaceId*>(layer->Data);
-        for (const auto& entry : m_surfaceLayouts.layerMaterials) if (entry.id == id) source = entry.assetPath;
+        for (const auto& entry : m_surfaceLayouts.layerMaterials) if (entry.id == id) sources.push_back(entry.assetPath);
     } else if (const ImGuiPayload* boundary = ImGui::AcceptDragDropPayload(kBoundaryMaterialDragDropType);
                boundary != nullptr && boundary->DataSize == sizeof(graph::SurfaceId)) {
         const auto id = *static_cast<const graph::SurfaceId*>(boundary->Data);
-        for (const auto& entry : m_surfaceLayouts.boundaryMaterials) if (entry.id == id) source = entry.assetPath;
+        for (const auto& entry : m_surfaceLayouts.boundaryMaterials) if (entry.id == id) sources.push_back(entry.assetPath);
     }
-    // 今と同じフォルダ、フォルダ自身とその配下へは落とさない。
-    const bool intoItself = SameFile(source, directory) || PathKey(directory).starts_with(PathKey(source) + L"\\");
-    if (!source.empty() && m_workspace.Contains(source) && !SameFile(source.parent_path(), directory) && !intoItself) {
-        m_pendingAssetMove = source;
-        m_pendingAssetMoveTarget = directory;
+    bool accepted = false;
+    for (const auto& source : sources) {
+        // 今と同じフォルダ、フォルダ自身とその配下へは落とさない（その 1 件だけ外す）。
+        if (source.empty() || !m_workspace.Contains(source) || SameFile(source.parent_path(), directory) ||
+            SameFile(source, directory) || IsInside(directory, source)) continue;
+        m_pendingAssetMoves.push_back(source);
+        accepted = true;
     }
+    if (accepted) m_pendingAssetMoveTarget = directory;
     ImGui::EndDragDropTarget();
 }
 
@@ -332,14 +375,27 @@ void Application::PersistLayerThumbnails() {
 // フレームの外で処理するアセット関連の作業（移動・改名、ルートの切り替え、共有アセットの保存、
 // ファイルを開く、削除、サムネイルの生成）。ProcessPendingFileWork から呼ぶ。
 void Application::ProcessAssetWork() {
-    if (!m_pendingAssetMove.empty()) {
-        const auto source = std::exchange(m_pendingAssetMove, {});
+    if (!m_pendingAssetMoves.empty()) {
+        const auto requested = std::exchange(m_pendingAssetMoves, {});
         const auto directory = std::exchange(m_pendingAssetMoveTarget, {});
-        const auto moved = io::MoveAsset(m_workspace, source, directory);
-        if (!moved.empty() && moved != source) {
+        // フォルダと一緒にその中身も選ばれていたら、中身はフォルダごと運ばれるので個別には動かさない。
+        std::vector<fs::path> sources;
+        for (const auto& source : requested) {
+            const bool nested = std::any_of(requested.begin(), requested.end(),
+                                            [&](const fs::path& other) { return IsInside(source, other); });
+            if (!nested && std::none_of(sources.begin(), sources.end(), [&](const fs::path& p) { return SameFile(p, source); }))
+                sources.push_back(source);
+        }
+        size_t count = 0;
+        for (const auto& source : sources) {
+            const auto moved = io::MoveAsset(m_workspace, source, directory);
+            if (moved.empty() || moved == source) continue;
             // 読み込み済みのアセットは絶対パスを持つので、移動先へ付け替える。
             RelinkAssetPaths(source, moved);
-            TG_LOG_INFO("移動しました: %s → %s", ToUtf8Display(source.filename()).c_str(),
+            ++count;
+        }
+        if (count > 0) {
+            TG_LOG_INFO("%zu 件を移動しました → %s", count,
                         ToUtf8Display(directory.lexically_relative(m_workspace.Root())).c_str());
         }
         m_assetRefresh = true;
@@ -359,7 +415,7 @@ void Application::ProcessAssetWork() {
         const auto path = m_assetDeleteRelations.target;
         if (!IsAssetLoaded(path) && io::RetireAsset(m_workspace, m_assetDeleteRelations)) {
             m_recentProjects.Remove(m_workspace.Root(), path);
-            m_selectedAssetPath.clear();
+            std::erase_if(m_selectedAssets, [&](const fs::path& selected) { return SameFile(selected, path); });
             m_assetRefresh = true;
             m_assetThumbnails.Invalidate();
         } else {
@@ -399,7 +455,8 @@ void Application::ProcessAssetWork() {
             }
             m_workspace = std::move(next);
             m_assetDirectory = m_workspace.Root();
-            m_selectedAssetPath.clear();
+            m_selectedAssets.clear();
+            m_assetSelectionAnchor.clear();
             m_assetRenameTarget.clear();
             m_assetRefresh = true;
             m_assetThumbnails.Invalidate();
@@ -521,7 +578,8 @@ void Application::DrawAssetBrowser() {
         }
         m_assetDirectory = parent;
         m_assetRefresh = true;
-        m_selectedAssetPath = path;
+        m_selectedAssets.assign(1, path);
+        m_assetSelectionAnchor = path;
         OpenAssetRename(path);
     };
 
@@ -595,16 +653,25 @@ void Application::DrawAssetBrowser() {
     ImGui::SameLine(0.0f, margin);
     // --- 右: フォルダの中身 ----------------------------------------------
     if (ImGui::BeginChild("contents", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
+        const ImGuiIO& io = ImGui::GetIO();
         if (m_assetDirectory != m_workspace.Root() && ImGui::Button("上のフォルダ")) {
             m_assetDirectory = m_assetDirectory.parent_path();
             m_assetRefresh = true;
         }
         if (m_assetEntries.empty()) ui::HintText("右クリックでアセットを作成、またはファイルを読み込みます");
-        // F2 で選択中のものをその場で改名する。テキスト入力中やダイアログ表示中は効かせない。
-        if ((ImGui::IsWindowFocused() || ImGui::IsWindowHovered()) && !ImGui::GetIO().WantTextInput &&
-            !m_assetDeleteDialog && m_assetRenameTarget.empty() && !m_selectedAssetPath.empty() &&
-            m_selectedAssetPath.parent_path() == m_assetDirectory && ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
-            OpenAssetRename(m_selectedAssetPath);
+        // 選択は表示中のフォルダの中だけ。別のフォルダへ移ったら、そこに無いものは外す。
+        std::erase_if(m_selectedAssets, [&](const fs::path& path) { return path.parent_path() != m_assetDirectory; });
+        // 一覧のキー操作。テキスト入力中・ダイアログ表示中・改名中は効かせない。
+        if ((ImGui::IsWindowFocused() || ImGui::IsWindowHovered()) && !io.WantTextInput && !m_assetDeleteDialog &&
+            m_assetRenameTarget.empty()) {
+            if (m_selectedAssets.size() == 1 && ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
+                OpenAssetRename(m_selectedAssets.front());
+            } else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+                m_selectedAssets.clear();
+                for (const auto& entry : m_assetEntries) m_selectedAssets.push_back(entry.path());
+            } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                m_selectedAssets.clear();
+            }
         }
         // 一覧で改名中に別のフォルダへ移ったら、入力欄が描かれなくなるので取り消す。
         if (!m_assetRenameTarget.empty() && !m_assetRenameInTree && m_assetRenameTarget.parent_path() != m_assetDirectory)
@@ -673,7 +740,8 @@ void Application::DrawAssetBrowser() {
                 handle = static_cast<ImTextureID>(m_assetThumbnails.Request(path).ptr);
             ImGui::PushID(ToUtf8Portable(path).c_str());
             ImGui::BeginGroup();
-            const auto thumb = ui::ThumbnailButton("##asset", handle, size, m_selectedAssetPath == path);
+            const bool selected = IsAssetSelected(path);
+            const auto thumb = ui::ThumbnailButton("##asset", handle, size, selected);
             if (folder) {
                 DrawFolderIcon(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
             } else if (!handle) {
@@ -688,20 +756,30 @@ void Application::DrawAssetBrowser() {
             }
             if (missing || (!handle && m_assetThumbnails.Failed(path)))
                 ui::MissingBadge(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+            // 押した時点で選ぶ（ドラッグの前に選択を決める）。複数選択のうちの 1 つを修飾キーなしで押したときは、
+            // 全部をそのままドラッグできるよう選択を残し、ドラッグせずに離したら単独へ絞る。
+            const bool plain = !io.KeyCtrl && !io.KeyShift;
             if (thumb.clicked) {
-                m_selectedAssetPath = path;
-                // 読み込み済みのものは、一覧での選択もそれへ合わせる（プレビューの窓が追従する）。
-                if (textureId != compositor::kNoTexture) {
-                    const auto& entries = m_textureLibrary.Entries();
-                    for (size_t i = 0; i < entries.size(); ++i) if (entries[i].id == textureId) m_selectedTexture = int(i);
+                if (!(plain && selected && m_selectedAssets.size() > 1)) SelectAsset(path, io.KeyCtrl, io.KeyShift);
+                if (plain) {
+                    // 読み込み済みのものは、一覧での選択もそれへ合わせる（プレビューの窓が追従する）。
+                    if (textureId != compositor::kNoTexture) {
+                        const auto& entries = m_textureLibrary.Entries();
+                        for (size_t i = 0; i < entries.size(); ++i) if (entries[i].id == textureId) m_selectedTexture = int(i);
+                    }
+                    if (materialId != compositor::kNoMaterialAsset) {
+                        const auto& entries = m_materialLibrary.Entries();
+                        for (size_t i = 0; i < entries.size(); ++i) if (entries[i].id == materialId) m_selectedMaterial = int(i);
+                    }
+                    // 編集ウィンドウが開いていれば、選んだものへ内容を切り替える（フォーカスは移さない）。
+                    if (layerId && m_editSurfacePreset && m_editSurfacePreset != layerId) editLayer(layerId);
+                    if (boundaryId && m_editBoundaryMaterial) m_editBoundaryMaterial = boundaryId;
                 }
-                if (materialId != compositor::kNoMaterialAsset) {
-                    const auto& entries = m_materialLibrary.Entries();
-                    for (size_t i = 0; i < entries.size(); ++i) if (entries[i].id == materialId) m_selectedMaterial = int(i);
-                }
-                // 編集ウィンドウが開いていれば、選んだものへ内容を切り替える（フォーカスは移さない）。
-                if (layerId && m_editSurfacePreset && m_editSurfacePreset != layerId) editLayer(layerId);
-                if (boundaryId && m_editBoundaryMaterial) m_editBoundaryMaterial = boundaryId;
+            }
+            if (plain && thumb.hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+                !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left) && IsAssetSelected(path) && m_selectedAssets.size() > 1) {
+                m_selectedAssets.assign(1, path);
+                m_assetSelectionAnchor = path;
             }
             if (thumb.doubleClicked) {
                 if (folder) {
@@ -721,25 +799,40 @@ void Application::DrawAssetBrowser() {
                     m_pendingAssetOpen = path;
                 }
             }
-            // ドラッグ元。読み込み済みのものは従来と同じ ID のペイロード（割り当ての欄が受ける）で、
-            // それ以外のファイルはパスを運ぶ。どちらもフォルダへ落とせば移動する（AssetFolderDropTarget）。
+            // ドラッグ元。複数選んでいるうちの 1 つを掴んだら、選択全部のパスを改行区切りで運ぶ（フォルダへの移動だけ）。
+            // 1 つだけなら、読み込み済みのものは従来と同じ ID のペイロード（割り当ての欄が受ける）で、
+            // それ以外のファイル・フォルダはパスを運ぶ。どちらもフォルダへ落とせば移動する（AssetFolderDropTarget）。
             // テクスチャは hold-to-switch を残すため SourceNoHoldToOpenOthers を付けない。
-            // フォルダも中身ごと運べる（パスのペイロード）。
             const bool movable = path.filename() != L"project.tgproj";
             if (movable && ImGui::BeginDragDropSource()) {
-                if (materialId != compositor::kNoMaterialAsset) {
-                    ImGui::SetDragDropPayload(kMaterialDragDropType, &materialId, sizeof(materialId));
-                } else if (layerId) {
-                    ImGui::SetDragDropPayload(kLayerMaterialDragDropType, &layerId, sizeof(layerId));
-                } else if (boundaryId) {
-                    ImGui::SetDragDropPayload(kBoundaryMaterialDragDropType, &boundaryId, sizeof(boundaryId));
-                } else if (textureId != compositor::kNoTexture) {
-                    ImGui::SetDragDropPayload(kTextureDragDropType, &textureId, sizeof(textureId));
-                } else {
-                    const std::wstring text = path.wstring();
-                    ImGui::SetDragDropPayload(kAssetPathDragDropType, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+                std::wstring list;
+                size_t count = 0;
+                if (IsAssetSelected(path) && m_selectedAssets.size() > 1) {
+                    for (const auto& item : m_selectedAssets) {
+                        if (item.filename() == L"project.tgproj") continue;
+                        if (!list.empty()) list += L'\n';
+                        list += item.wstring();
+                        ++count;
+                    }
                 }
-                ImGui::TextUnformatted(ToUtf8Display(path.filename()).c_str());
+                if (count > 1) {
+                    ImGui::SetDragDropPayload(kAssetPathDragDropType, list.c_str(), (list.size() + 1) * sizeof(wchar_t));
+                    ImGui::Text("%zu 件", count);
+                } else {
+                    if (materialId != compositor::kNoMaterialAsset) {
+                        ImGui::SetDragDropPayload(kMaterialDragDropType, &materialId, sizeof(materialId));
+                    } else if (layerId) {
+                        ImGui::SetDragDropPayload(kLayerMaterialDragDropType, &layerId, sizeof(layerId));
+                    } else if (boundaryId) {
+                        ImGui::SetDragDropPayload(kBoundaryMaterialDragDropType, &boundaryId, sizeof(boundaryId));
+                    } else if (textureId != compositor::kNoTexture) {
+                        ImGui::SetDragDropPayload(kTextureDragDropType, &textureId, sizeof(textureId));
+                    } else {
+                        const std::wstring text = path.wstring();
+                        ImGui::SetDragDropPayload(kAssetPathDragDropType, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+                    }
+                    ImGui::TextUnformatted(ToUtf8Display(path.filename()).c_str());
+                }
                 ImGui::EndDragDropSource();
             }
             if (folder) AssetFolderDropTarget(path);
@@ -749,10 +842,10 @@ void Application::DrawAssetBrowser() {
                     : (layerId || boundaryId) ? "ダブルクリックで編集 / Road の区間の行へドラッグで割り当て"
                     : (ext == ".tglayer" || ext == ".tgboundary") ? "ダブルクリックでシーンへ読み込んで編集"
                     : "ダブルクリックで開く";
-                ImGui::SetTooltip("%s\n%s", ToUtf8Display(path).c_str(), hint);
+                ImGui::SetTooltip("%s\n%s\nCtrl / Shift + クリックで複数選択", ToUtf8Display(path).c_str(), hint);
             }
             if (ImGui::BeginPopupContextItem("assetMenu")) {
-                m_selectedAssetPath = path;
+                if (!IsAssetSelected(path)) SelectAsset(path, false, false);
                 if (ImGui::MenuItem("開く")) {
                     if (folder) { m_assetDirectory = path; m_assetRefresh = true; }
                     else m_pendingAssetOpen = path;
@@ -792,6 +885,11 @@ void Application::DrawAssetBrowser() {
             ImGui::EndGroup();
             ImGui::PopID();
             if (++index % columns && index < int(m_assetEntries.size())) ImGui::SameLine();
+        }
+        // 余白をクリックしたら選択を外す（修飾キー付きなら残す）。
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered() &&
+            !io.KeyCtrl && !io.KeyShift) {
+            m_selectedAssets.clear();
         }
         if (ImGui::BeginPopupContextWindow("createAsset", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
             if (ImGui::MenuItem("フォルダを作成")) createFolder(m_assetDirectory);

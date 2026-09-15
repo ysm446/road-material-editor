@@ -165,4 +165,118 @@ bool RetireAsset(ProjectWorkspace& workspace, const AssetRelations& approved) {
     return true;
 }
 
+namespace {
+
+// 本体を destination へ置き換え、.meta も新しい名前へ揃える。
+fs::path RelocateAsset(ProjectWorkspace& workspace, const fs::path& target, const fs::path& destination) {
+    std::error_code error;
+    if (!workspace.Contains(target) || !workspace.Contains(destination) ||
+        SamePath(target, workspace.Root() / L"project.tgproj") ||
+        target.lexically_relative(workspace.Root()).wstring().starts_with(L".") ||
+        destination.filename().wstring().starts_with(L".") ||
+        fs::is_symlink(target, error) || !fs::is_regular_file(target, error) ||
+        !fs::is_directory(destination.parent_path(), error)) {
+        TG_LOG_WARN("名前を変更できないファイルです: %s", ToUtf8Display(target).c_str());
+        return {};
+    }
+    if (SamePath(target, destination)) return target;
+    if (fs::exists(destination, error) || error || fs::exists(destination.wstring() + L".meta", error) || error) {
+        TG_LOG_WARN("同じ名前のファイルがあります: %s", ToUtf8Display(destination).c_str());
+        return {};
+    }
+    // 画像はまだ .meta が無ければ先に ID を確定し、古いパスを持つ参照からも追えるようにする。
+    if (!IsDocument(target) && workspace.Reference(target).is_null()) return {};
+    std::vector<std::pair<fs::path, fs::path>> files{{target, destination}};
+    const fs::path meta = target.wstring() + L".meta";
+    if (fs::exists(meta, error)) files.emplace_back(meta, destination.wstring() + L".meta");
+    size_t moved = 0;
+    for (; moved < files.size(); ++moved) {
+        fs::rename(files[moved].first, files[moved].second, error);
+        if (error) break;
+    }
+    if (error) {
+        TG_LOG_ERROR("名前を変更できませんでした: %s", ToUtf8Display(files[moved].first).c_str());
+        while (moved > 0) {
+            --moved;
+            std::error_code rollback;
+            fs::rename(files[moved].second, files[moved].first, rollback);
+            if (rollback) TG_LOG_ERROR("改名したファイルを元に戻せません: %s", ToUtf8Display(files[moved].first).c_str());
+        }
+        return {};
+    }
+    workspace.Scan();
+    return destination;
+}
+
+}  // namespace
+
+fs::path RenameAsset(ProjectWorkspace& workspace, const fs::path& target, const std::string& newName) {
+    const fs::path name = FromUtf8(newName);
+    if (name.empty() || name.has_parent_path() || name.wstring().starts_with(L".") ||
+        name.wstring().find_first_of(L"<>:\"/\\|?*") != std::wstring::npos) {
+        TG_LOG_WARN("使えない名前です: %s", newName.c_str());
+        return {};
+    }
+    const auto destination = target.parent_path() / name;
+    std::error_code error;
+    if (fs::is_directory(target, error) && !fs::is_symlink(target, error)) {
+        if (!workspace.Contains(target) || !workspace.Contains(destination) || SamePath(target, workspace.Root()) ||
+            target.lexically_relative(workspace.Root()).wstring().starts_with(L".")) {
+            TG_LOG_WARN("このフォルダは改名できません");
+            return {};
+        }
+        if (SamePath(target, destination)) return target;
+        if (fs::exists(destination, error)) {
+            TG_LOG_WARN("同じ名前のフォルダがあります: %s", ToUtf8Display(destination).c_str());
+            return {};
+        }
+        fs::rename(target, destination, error);
+        if (error) {
+            TG_LOG_ERROR("フォルダを改名できませんでした: %s", ToUtf8Display(target).c_str());
+            return {};
+        }
+        workspace.Scan();
+        return destination;
+    }
+    return RelocateAsset(workspace, target, destination);
+}
+
+fs::path MoveAsset(ProjectWorkspace& workspace, const fs::path& target, const fs::path& directory) {
+    std::error_code error;
+    if (!workspace.Contains(directory) || !fs::is_directory(directory, error) ||
+        directory.lexically_relative(workspace.Root()).wstring().starts_with(L".")) {
+        TG_LOG_WARN("移動先のフォルダが使えません: %s", ToUtf8Display(directory).c_str());
+        return {};
+    }
+    if (fs::is_directory(target, error) && !fs::is_symlink(target, error)) {
+        // フォルダは中身ごと移す。ルート・内部フォルダは動かさず、自分自身やその配下へは移さない。
+        if (!workspace.Contains(target) || SamePath(target, workspace.Root()) ||
+            target.lexically_relative(workspace.Root()).wstring().starts_with(L".")) {
+            TG_LOG_WARN("このフォルダは移動できません: %s", ToUtf8Display(target).c_str());
+            return {};
+        }
+        const auto source = fs::weakly_canonical(target, error);
+        const auto into = error ? fs::path{} : fs::weakly_canonical(directory, error);
+        const auto inside = into.lexically_relative(source);
+        if (error || into.empty() || (!inside.empty() && *inside.begin() != L"..")) {
+            TG_LOG_WARN("フォルダを自分自身の中へは移動できません: %s", ToUtf8Display(target).c_str());
+            return {};
+        }
+        const auto destination = directory / target.filename();
+        if (SamePath(target, destination)) return target;
+        if (fs::exists(destination, error) || error) {
+            TG_LOG_WARN("移動先に同じ名前のフォルダがあります: %s", ToUtf8Display(destination).c_str());
+            return {};
+        }
+        fs::rename(target, destination, error);
+        if (error) {
+            TG_LOG_ERROR("フォルダを移動できませんでした: %s", ToUtf8Display(target).c_str());
+            return {};
+        }
+        workspace.Scan();
+        return destination;
+    }
+    return RelocateAsset(workspace, target, directory / target.filename());
+}
+
 }  // namespace tg::io

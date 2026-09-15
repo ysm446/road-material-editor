@@ -110,6 +110,9 @@ inline constexpr const char* kMaterialDragDropType = "TG_MATERIAL";
 //（どちらも graph::SurfaceId）。Road の沿道欄の該当行へ落とすと、その区間に割り当たる。
 inline constexpr const char* kLayerMaterialDragDropType = "TG_LAYER_MATERIAL";
 inline constexpr const char* kBoundaryMaterialDragDropType = "TG_BOUNDARY_MATERIAL";
+// アセットの帯で、ライブラリの ID を持たないファイル（未読み込みの画像・シーンなど）をドラッグしたときのペイロード。
+// 中身はパスの wchar_t 文字列（終端込み）。一覧のフォルダ・左のフォルダ階層へ落とすと移動する。
+inline constexpr const char* kAssetPathDragDropType = "TG_ASSET_PATH";
 
 // 直前の ui::PropertyCombo の値の矩形（サムネイル＋コンボ）を受け口にして、type のペイロードを受ける。
 // 落とされた ID を outId に入れて真。コンボ本体だけでなくサムネイルにも落とせるようにするための部品。

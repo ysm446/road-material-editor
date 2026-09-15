@@ -7,7 +7,7 @@
 // 配置データへ足して編集ウィンドウ、.tgscene → シーン）。
 // 読み込み済みのものはライブラリのサムネイルとドラッグ元（TG_TEXTURE / TG_MATERIAL /
 // TG_LAYER_MATERIAL / TG_BOUNDARY_MATERIAL）を使い、未読み込みのものは AssetThumbnailCache が
-// 別領域で作ったサムネイルを出す。
+// 別領域で作ったサムネイルを出す。ファイルはフォルダへドラッグで移動、F2 か右クリックでその場で改名する。
 
 #include "app/Application.h"
 
@@ -25,9 +25,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cwctype>
 #include <unordered_map>
 #include <functional>
+#include <utility>
 
 namespace tg {
 namespace fs = std::filesystem;
@@ -95,6 +97,95 @@ bool Application::IsAssetLoaded(const fs::path& path) const {
     for (const auto& a : m_surfaceLayouts.layerMaterials) if (SameFile(a.assetPath, path)) return true;
     for (const auto& a : m_surfaceLayouts.boundaryMaterials) if (SameFile(a.assetPath, path)) return true;
     return false;
+}
+
+void Application::OpenAssetRename(const fs::path& path) {
+    if (path.empty() || path.filename() == L"project.tgproj") return;
+    std::error_code error;
+    // 拡張子は変えさせない。フォルダは名前全体を編集する。
+    const auto name = fs::is_directory(path, error) ? path.filename() : path.stem();
+    std::snprintf(m_assetRenameBuffer, sizeof(m_assetRenameBuffer), "%s", ToUtf8Portable(name).c_str());
+    m_assetRenameTarget = path;
+    m_assetRenameFocus = true;
+    m_assetRenameInTree = false;
+}
+
+void Application::FinishAssetRename(bool commit) {
+    const auto target = m_assetRenameTarget;
+    m_assetRenameTarget.clear();
+    m_assetRenameFocus = false;
+    m_assetRenameInTree = false;
+    if (!commit || target.empty() || m_assetRenameBuffer[0] == '\0') return;
+    std::error_code error;
+    const auto extension = fs::is_directory(target, error) ? fs::path{} : target.extension();
+    auto name = std::string(m_assetRenameBuffer) + ToUtf8Portable(extension);
+    if (name == ToUtf8Portable(target.filename())) return;
+    m_pendingAssetRename = target;
+    m_pendingAssetRenameName = std::move(name);
+}
+
+// 移動・改名したファイル（フォルダなら配下も）を指す、読み込み済みのアセットの絶対パスを付け替える。
+// 参照は ID で解決するので、ファイル側はこれだけで追従する。
+void Application::RelinkAssetPaths(const fs::path& from, const fs::path& to) {
+    const auto source = from.lexically_normal();
+    const auto remap = [&](fs::path& path) {
+        if (path.empty()) return;
+        const auto relative = path.lexically_normal().lexically_relative(source);
+        if (relative.empty() || *relative.begin() == L"..") return;
+        path = relative == L"." ? to : to / relative;
+    };
+    for (const auto& a : m_textureLibrary.Entries()) remap(m_textureLibrary.FindMutable(a.id)->path);
+    for (const auto& a : m_materialLibrary.Entries()) remap(m_materialLibrary.FindMutable(a.id)->assetPath);
+    for (const auto& a : m_skyLibrary.Entries()) {
+        auto* sky = m_skyLibrary.FindMutable(a.id);
+        remap(sky->assetPath);
+        remap(sky->sky.hdriPath);
+    }
+    for (auto& a : m_surfaceLayouts.layerMaterials) remap(a.assetPath);
+    for (auto& a : m_surfaceLayouts.boundaryMaterials) remap(a.assetPath);
+    const auto previousProject = m_projectPath;
+    remap(m_projectPath);
+    if (m_projectPath != previousProject) {
+        m_recentProjects.Remove(m_workspace.Root(), previousProject);
+        m_recentProjects.Add(m_workspace.Root(), m_projectPath);
+        UpdateWindowTitle();
+    }
+    remap(m_selectedAssetPath);
+    remap(m_assetDirectory);
+    m_assetThumbnails.Invalidate();
+}
+
+void Application::AssetFolderDropTarget(const fs::path& directory) {
+    if (!ImGui::BeginDragDropTarget()) return;
+    // 読み込み済みのものはライブラリの ID で運ばれてくるので、パスへ引き直す。
+    fs::path source;
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kAssetPathDragDropType);
+        payload != nullptr && payload->DataSize >= int(sizeof(wchar_t))) {
+        source = fs::path(static_cast<const wchar_t*>(payload->Data));
+    } else if (const ImGuiPayload* texture = ImGui::AcceptDragDropPayload(kTextureDragDropType);
+               texture != nullptr && texture->DataSize == sizeof(compositor::TextureId)) {
+        if (const auto* entry = m_textureLibrary.Find(*static_cast<const compositor::TextureId*>(texture->Data)))
+            source = entry->path;
+    } else if (const ImGuiPayload* material = ImGui::AcceptDragDropPayload(kMaterialDragDropType);
+               material != nullptr && material->DataSize == sizeof(compositor::MaterialAssetId)) {
+        if (const auto* asset = m_materialLibrary.Find(*static_cast<const compositor::MaterialAssetId*>(material->Data)))
+            source = asset->assetPath;
+    } else if (const ImGuiPayload* layer = ImGui::AcceptDragDropPayload(kLayerMaterialDragDropType);
+               layer != nullptr && layer->DataSize == sizeof(graph::SurfaceId)) {
+        const auto id = *static_cast<const graph::SurfaceId*>(layer->Data);
+        for (const auto& entry : m_surfaceLayouts.layerMaterials) if (entry.id == id) source = entry.assetPath;
+    } else if (const ImGuiPayload* boundary = ImGui::AcceptDragDropPayload(kBoundaryMaterialDragDropType);
+               boundary != nullptr && boundary->DataSize == sizeof(graph::SurfaceId)) {
+        const auto id = *static_cast<const graph::SurfaceId*>(boundary->Data);
+        for (const auto& entry : m_surfaceLayouts.boundaryMaterials) if (entry.id == id) source = entry.assetPath;
+    }
+    // 今と同じフォルダ、フォルダ自身とその配下へは落とさない。
+    const bool intoItself = SameFile(source, directory) || PathKey(directory).starts_with(PathKey(source) + L"\\");
+    if (!source.empty() && m_workspace.Contains(source) && !SameFile(source.parent_path(), directory) && !intoItself) {
+        m_pendingAssetMove = source;
+        m_pendingAssetMoveTarget = directory;
+    }
+    ImGui::EndDragDropTarget();
 }
 
 void Application::DrawAssetDeleteDialog() {
@@ -238,9 +329,31 @@ void Application::PersistLayerThumbnails() {
     if (stored) m_assetThumbnails.Invalidate();
 }
 
-// フレームの外で処理するアセット関連の作業（ルートの切り替え、共有アセットの保存、
+// フレームの外で処理するアセット関連の作業（移動・改名、ルートの切り替え、共有アセットの保存、
 // ファイルを開く、削除、サムネイルの生成）。ProcessPendingFileWork から呼ぶ。
 void Application::ProcessAssetWork() {
+    if (!m_pendingAssetMove.empty()) {
+        const auto source = std::exchange(m_pendingAssetMove, {});
+        const auto directory = std::exchange(m_pendingAssetMoveTarget, {});
+        const auto moved = io::MoveAsset(m_workspace, source, directory);
+        if (!moved.empty() && moved != source) {
+            // 読み込み済みのアセットは絶対パスを持つので、移動先へ付け替える。
+            RelinkAssetPaths(source, moved);
+            TG_LOG_INFO("移動しました: %s → %s", ToUtf8Display(source.filename()).c_str(),
+                        ToUtf8Display(directory.lexically_relative(m_workspace.Root())).c_str());
+        }
+        m_assetRefresh = true;
+    }
+    if (!m_pendingAssetRename.empty()) {
+        const auto source = std::exchange(m_pendingAssetRename, {});
+        const auto renamed = io::RenameAsset(m_workspace, source, m_pendingAssetRenameName);
+        if (!renamed.empty() && renamed != source) {
+            RelinkAssetPaths(source, renamed);
+            TG_LOG_INFO("名前を変更しました: %s → %s", ToUtf8Display(source.filename()).c_str(),
+                        ToUtf8Display(renamed.filename()).c_str());
+        }
+        m_assetRefresh = true;
+    }
     if (m_pendingAssetDelete) {
         m_pendingAssetDelete = false;
         const auto path = m_assetDeleteRelations.target;
@@ -287,6 +400,7 @@ void Application::ProcessAssetWork() {
             m_workspace = std::move(next);
             m_assetDirectory = m_workspace.Root();
             m_selectedAssetPath.clear();
+            m_assetRenameTarget.clear();
             m_assetRefresh = true;
             m_assetThumbnails.Invalidate();
             if (!Headless()) m_recentProjects.AddRoot(m_workspace.Root());
@@ -298,12 +412,12 @@ void Application::ProcessAssetWork() {
             m_pendingProjectOpen.clear();
         }
     }
+    // 作成したマテリアル・天球などの共有アセットをすぐファイルへ書く（シーンの保存でも書かれる）。
     if (m_pendingAssetsSave) {
         m_pendingAssetsSave = false;
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary, m_renderer, m_graph, m_surfaceLayouts,
                              m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
         if (io::SaveSharedAssets(m_workspace, refs)) {
-            TG_LOG_INFO("共有アセットを保存しました");
             m_persistLayerThumbnails = true;
         } else {
             TG_LOG_ERROR("共有アセットを保存できませんでした");
@@ -394,9 +508,22 @@ void Application::DrawAssetBrowser() {
         m_assetThumbnails.Invalidate();
     }
     ImGui::SameLine();
-    if (ImGui::Button("アセットを保存")) m_pendingAssetsSave = true;
-    ImGui::SameLine();
     ImGui::TextDisabled("%s", ToUtf8Display(m_assetDirectory).c_str());
+
+    // フォルダを作り、すぐ名前の入力へ入る（エクスプローラと同じ）。一覧は作った先のフォルダの中身を出す。
+    const auto createFolder = [&](const fs::path& parent) {
+        const auto path = m_workspace.UniquePath(parent, "新しいフォルダー", "");
+        std::error_code error;
+        if (!path.empty()) fs::create_directory(path, error);
+        if (path.empty() || error) {
+            TG_LOG_ERROR("フォルダを作成できませんでした");
+            return;
+        }
+        m_assetDirectory = parent;
+        m_assetRefresh = true;
+        m_selectedAssetPath = path;
+        OpenAssetRename(path);
+    };
 
     const auto available = ImGui::GetContentRegionAvail();
     const float margin = ui::Scaled(ui::kSplitterMargin);
@@ -408,14 +535,47 @@ void Application::DrawAssetBrowser() {
         const auto tree = [&](auto&& self, const fs::path& directory, int depth) -> void {
             if (depth > 32) return;
             const auto label = ToUtf8Display(directory.filename());
-            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
-            if (directory == m_workspace.Root()) flags |= ImGuiTreeNodeFlags_DefaultOpen;
+            const bool root = directory == m_workspace.Root();
+            // 改名中の行は名前の代わりに入力欄を並べる。行いっぱいに広げると入力欄と重なるので広げない。
+            const bool renaming = m_assetRenameInTree && directory == m_assetRenameTarget;
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow;
+            if (!renaming) flags |= ImGuiTreeNodeFlags_SpanAvailWidth;
+            if (root) flags |= ImGuiTreeNodeFlags_DefaultOpen;
             if (directory == m_assetDirectory) flags |= ImGuiTreeNodeFlags_Selected;
             ImGui::PushID(ToUtf8Portable(directory).c_str());
-            const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
+            const bool open = ImGui::TreeNodeEx(renaming ? "##folder" : label.c_str(), flags);
             if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
                 m_assetDirectory = directory;
                 m_assetRefresh = true;
+            }
+            // 行はドラッグ元（フォルダごと移動）とドロップ先を兼ねる。ルートは動かさない。
+            if (!root && !renaming && ImGui::BeginDragDropSource()) {
+                const std::wstring text = directory.wstring();
+                ImGui::SetDragDropPayload(kAssetPathDragDropType, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+                ImGui::TextUnformatted(label.c_str());
+                ImGui::EndDragDropSource();
+            }
+            AssetFolderDropTarget(directory);
+            // 行の右クリックメニュー。ルートは改名できない。
+            if (ImGui::BeginPopupContextItem("folderMenu")) {
+                if (ImGui::MenuItem("開く")) {
+                    m_assetDirectory = directory;
+                    m_assetRefresh = true;
+                }
+                if (ImGui::MenuItem("エクスプローラで表示")) RevealFileInExplorer(directory);
+                ImGui::Separator();
+                if (ImGui::MenuItem("フォルダを作成")) createFolder(directory);
+                if (!root && ImGui::MenuItem("名前を変更…")) {
+                    OpenAssetRename(directory);
+                    m_assetRenameInTree = true;
+                }
+                ImGui::EndPopup();
+            }
+            if (renaming) {
+                ImGui::SameLine();
+                const float width = std::max(ui::Scaled(60.0f), ImGui::GetContentRegionAvail().x);
+                const auto edit = ui::InlineNameInput("##rename", m_assetRenameBuffer, sizeof(m_assetRenameBuffer), width, &m_assetRenameFocus);
+                if (edit != ui::CaptionEdit::Editing) FinishAssetRename(edit == ui::CaptionEdit::Commit);
             }
             if (open) {
                 if (const auto found = m_assetFolders.find(directory.wstring()); found != m_assetFolders.end())
@@ -440,6 +600,15 @@ void Application::DrawAssetBrowser() {
             m_assetRefresh = true;
         }
         if (m_assetEntries.empty()) ui::HintText("右クリックでアセットを作成、またはファイルを読み込みます");
+        // F2 で選択中のものをその場で改名する。テキスト入力中やダイアログ表示中は効かせない。
+        if ((ImGui::IsWindowFocused() || ImGui::IsWindowHovered()) && !ImGui::GetIO().WantTextInput &&
+            !m_assetDeleteDialog && m_assetRenameTarget.empty() && !m_selectedAssetPath.empty() &&
+            m_selectedAssetPath.parent_path() == m_assetDirectory && ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
+            OpenAssetRename(m_selectedAssetPath);
+        }
+        // 一覧で改名中に別のフォルダへ移ったら、入力欄が描かれなくなるので取り消す。
+        if (!m_assetRenameTarget.empty() && !m_assetRenameInTree && m_assetRenameTarget.parent_path() != m_assetDirectory)
+            FinishAssetRename(false);
         const float size = ui::Scaled(84);
         const int columns = std::max(1, int(ImGui::GetContentRegionAvail().x / (size + ImGui::GetStyle().ItemSpacing.x)));
         // 読み込み済みのものをパスで引く表。ファイルごとにライブラリを総なめしない。
@@ -552,23 +721,32 @@ void Application::DrawAssetBrowser() {
                     m_pendingAssetOpen = path;
                 }
             }
-            // 読み込み済みの画像・マテリアル・レイヤーマテリアル・境界マテリアルは従来と同じペイロードでドラッグできる。
+            // ドラッグ元。読み込み済みのものは従来と同じ ID のペイロード（割り当ての欄が受ける）で、
+            // それ以外のファイルはパスを運ぶ。どちらもフォルダへ落とせば移動する（AssetFolderDropTarget）。
             // テクスチャは hold-to-switch を残すため SourceNoHoldToOpenOthers を付けない。
-            if ((textureId != compositor::kNoTexture || materialId != compositor::kNoMaterialAsset || layerId || boundaryId) &&
-                ImGui::BeginDragDropSource()) {
-                if (materialId != compositor::kNoMaterialAsset)
+            // フォルダも中身ごと運べる（パスのペイロード）。
+            const bool movable = path.filename() != L"project.tgproj";
+            if (movable && ImGui::BeginDragDropSource()) {
+                if (materialId != compositor::kNoMaterialAsset) {
                     ImGui::SetDragDropPayload(kMaterialDragDropType, &materialId, sizeof(materialId));
-                else if (layerId)
+                } else if (layerId) {
                     ImGui::SetDragDropPayload(kLayerMaterialDragDropType, &layerId, sizeof(layerId));
-                else if (boundaryId)
+                } else if (boundaryId) {
                     ImGui::SetDragDropPayload(kBoundaryMaterialDragDropType, &boundaryId, sizeof(boundaryId));
-                else
+                } else if (textureId != compositor::kNoTexture) {
                     ImGui::SetDragDropPayload(kTextureDragDropType, &textureId, sizeof(textureId));
+                } else {
+                    const std::wstring text = path.wstring();
+                    ImGui::SetDragDropPayload(kAssetPathDragDropType, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+                }
                 ImGui::TextUnformatted(ToUtf8Display(path.filename()).c_str());
                 ImGui::EndDragDropSource();
             }
-            if (thumb.hovered) {
-                const char* hint = (layerId || boundaryId) ? "ダブルクリックで編集 / Road の区間の行へドラッグで割り当て"
+            if (folder) AssetFolderDropTarget(path);
+            // ドラッグ中は ImGui が運んでいるものを出すので、ツールチップを重ねない。
+            if (thumb.hovered && ImGui::GetDragDropPayload() == nullptr) {
+                const char* hint = folder ? "ダブルクリックで開く / サムネイルを落とすと移動"
+                    : (layerId || boundaryId) ? "ダブルクリックで編集 / Road の区間の行へドラッグで割り当て"
                     : (ext == ".tglayer" || ext == ".tgboundary") ? "ダブルクリックでシーンへ読み込んで編集"
                     : "ダブルクリックで開く";
                 ImGui::SetTooltip("%s\n%s", ToUtf8Display(path).c_str(), hint);
@@ -580,6 +758,7 @@ void Application::DrawAssetBrowser() {
                     else m_pendingAssetOpen = path;
                 }
                 if (ImGui::MenuItem("エクスプローラで表示")) RevealFileInExplorer(path);
+                if (path.filename() != L"project.tgproj" && ImGui::MenuItem("名前を変更…", "F2")) OpenAssetRename(path);
                 if (textureId != compositor::kNoTexture) {
                     ImGui::Separator();
                     DrawTextureContextMenu(textureId);
@@ -604,19 +783,18 @@ void Application::DrawAssetBrowser() {
                 }
                 ImGui::EndPopup();
             }
-            ui::GridCaption(ToUtf8Display(path.filename()).c_str(), size);
+            if (path == m_assetRenameTarget && !m_assetRenameInTree) {
+                const auto edit = ui::GridCaptionInput("##rename", m_assetRenameBuffer, sizeof(m_assetRenameBuffer), size, &m_assetRenameFocus);
+                if (edit != ui::CaptionEdit::Editing) FinishAssetRename(edit == ui::CaptionEdit::Commit);
+            } else {
+                ui::GridCaption(ToUtf8Display(path.filename()).c_str(), size);
+            }
             ImGui::EndGroup();
             ImGui::PopID();
             if (++index % columns && index < int(m_assetEntries.size())) ImGui::SameLine();
         }
         if (ImGui::BeginPopupContextWindow("createAsset", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
-            if (ImGui::MenuItem("フォルダを作成")) {
-                const auto path = m_workspace.UniquePath(m_assetDirectory, "NewFolder", "");
-                std::error_code error;
-                if (!path.empty()) fs::create_directory(path, error);
-                if (path.empty() || error) TG_LOG_ERROR("フォルダを作成できませんでした");
-                m_assetRefresh = true;
-            }
+            if (ImGui::MenuItem("フォルダを作成")) createFolder(m_assetDirectory);
             if (ImGui::MenuItem("マテリアルを作成")) {
                 const auto id = m_materialLibrary.Add("新規マテリアル");
                 auto* asset = m_materialLibrary.FindMutable(id);

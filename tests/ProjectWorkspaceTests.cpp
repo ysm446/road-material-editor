@@ -355,10 +355,68 @@ void TestSurfaceAssets() {
     fs::remove_all(root, error);
 }
 
+void TestRename() {
+    Section("AssetRelations: 名前の変更");
+    const fs::path root = FreshDirectory("rename");
+    std::error_code error;
+    ProjectWorkspace workspace;
+    Check(workspace.Open(root), "ルートを開く");
+    const fs::path image = root / "Textures" / "source.png";
+    Touch(image);
+    const json imageRef = workspace.Reference(image);
+    fs::path material = root / "Textures" / "stone.tgmat";
+    json body = {{"maps", {{"baseColor", imageRef}}}};
+    Check(workspace.SaveAsset(material, "material-asset", body), "参照元のマテリアル");
+    const json materialRef = workspace.Reference(material);
+    const auto renamedImage = tg::io::RenameAsset(workspace, image, "ground.png");
+    Check(Same(renamedImage, root / "Textures" / "ground.png") && fs::exists(renamedImage.wstring() + L".meta") &&
+              !fs::exists(image.wstring() + L".meta"),
+          "画像の改名は .meta も新しい名前へ揃える");
+    Check(Same(workspace.Resolve(imageRef), renamedImage), "参照は改名後の画像を指す");
+    Check(tg::io::RenameAsset(workspace, renamedImage, "bad/name.png").empty() &&
+              tg::io::RenameAsset(workspace, renamedImage, "").empty() &&
+              tg::io::RenameAsset(workspace, renamedImage, ".hidden.png").empty(),
+          "使えない名前は拒否する");
+    Touch(root / "Textures" / "taken.png");
+    Check(tg::io::RenameAsset(workspace, renamedImage, "taken.png").empty() && fs::exists(renamedImage),
+          "同じ名前のファイルがあれば変えない");
+    const auto folder = tg::io::RenameAsset(workspace, root / "Textures", "Images");
+    Check(Same(folder, root / "Images") && Same(workspace.Resolve(materialRef), root / "Images" / "stone.tgmat") &&
+              Same(workspace.Resolve(imageRef), root / "Images" / "ground.png"),
+          "フォルダの改名でも参照は切れない");
+    Check(tg::io::RenameAsset(workspace, workspace.Root(), "Other").empty() && fs::exists(root / "project.tgproj"),
+          "ルートは改名できない");
+    Check(tg::io::RenameAsset(workspace, root / "project.tgproj", "other.tgproj").empty(), "目印ファイルは改名できない");
+
+    Section("AssetRelations: フォルダへの移動");
+    fs::create_directories(root / "Other", error);
+    const auto moved = tg::io::MoveAsset(workspace, root / "Images" / "ground.png", root / "Other");
+    Check(Same(moved, root / "Other" / "ground.png") && fs::exists(moved.wstring() + L".meta") &&
+              !fs::exists(root / "Images" / "ground.png.meta") && Same(workspace.Resolve(imageRef), moved),
+          "移動しても .meta と参照が付いてくる");
+    Touch(root / "Images" / "ground.png");
+    Check(tg::io::MoveAsset(workspace, root / "Images" / "ground.png", root / "Other").empty() &&
+              fs::exists(root / "Images" / "ground.png"),
+          "移動先に同じ名前があれば動かさない");
+    fs::create_directories(root / ".terrain-graph", error);
+    Check(tg::io::MoveAsset(workspace, root / "Images" / "stone.tgmat", root / ".terrain-graph").empty(),
+          "内部フォルダへは移さない");
+    const auto movedFolder = tg::io::MoveAsset(workspace, root / "Images", root / "Other");
+    Check(Same(movedFolder, root / "Other" / "Images") &&
+              Same(workspace.Resolve(materialRef), root / "Other" / "Images" / "stone.tgmat"),
+          "フォルダを中身ごと移し、参照は切れない");
+    Check(tg::io::MoveAsset(workspace, root / "Other", root / "Other" / "Images").empty() &&
+              tg::io::MoveAsset(workspace, root / "Other", root / "Other").empty() && fs::exists(root / "Other" / "Images"),
+          "フォルダを自分自身やその配下へは移さない");
+    Check(tg::io::MoveAsset(workspace, workspace.Root(), root / "Other").empty(), "ルートは移動できない");
+    fs::remove_all(root, error);
+}
+
 }  // namespace
 
 void RunProjectWorkspaceTests() {
     TestWorkspace();
     TestHistoryAndThumbnails();
     TestSurfaceAssets();
+    TestRename();
 }

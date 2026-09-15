@@ -1008,8 +1008,7 @@ void GridCaption(const char* text, float width) {
     if (text == nullptr) {
         return;
     }
-    // ImGui 1.92 は同じフォントを別サイズで積める。第 2 フォントは読み込まない。
-    ImGui::PushFont(nullptr, kCaptionFontSize * FontScale());
+    // 名前も本文と同じ標準の UI フォントサイズで描く（文字サイズ設定と拡大率に追従する）。
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 
     // 2 行目が空でも行は描く。**空行を飛ばすと升目の高さが揃わない。**
@@ -1021,7 +1020,29 @@ void GridCaption(const char* text, float width) {
     }
 
     ImGui::PopStyleColor();
-    ImGui::PopFont();
+}
+
+CaptionEdit InlineNameInput(const char* id, char* buffer, size_t bufferSize, float width, bool* focus) {
+    ImGui::SetNextItemWidth(width);
+    if (*focus) ImGui::SetKeyboardFocusHere();
+    const bool enter = ImGui::InputText(id, buffer, bufferSize,
+                                        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+    if (ImGui::IsItemActive()) *focus = false;
+    CaptionEdit result = CaptionEdit::Editing;
+    if (enter) result = CaptionEdit::Commit;
+    // 外をクリックして離れたら確定、Esc なら取り消し（エクスプローラと同じ）。
+    else if (ImGui::IsItemDeactivated()) result = ImGui::IsKeyPressed(ImGuiKey_Escape, false) ? CaptionEdit::Cancel : CaptionEdit::Commit;
+    return result;
+}
+
+CaptionEdit GridCaptionInput(const char* id, char* buffer, size_t bufferSize, float width, bool* focus) {
+    const float startY = ImGui::GetCursorPosY();
+    const CaptionEdit result = InlineNameInput(id, buffer, bufferSize, width, focus);
+    // GridCaption の 2 行ぶんに高さを揃える（編集中に升目の高さが変わらないように）。
+    const float spacing = ImGui::GetStyle().ItemSpacing.y;
+    const float rest = 2.0f * ImGui::GetTextLineHeightWithSpacing() - (ImGui::GetCursorPosY() - startY) - spacing;
+    if (rest > 0.0f) ImGui::Dummy(ImVec2(width, rest));
+    return result;
 }
 
 void HintText(const char* format, ...) {

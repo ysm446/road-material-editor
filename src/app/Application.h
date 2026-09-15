@@ -580,6 +580,24 @@ private:
     std::unordered_map<std::wstring, std::vector<std::filesystem::path>> m_assetFolders;
     std::filesystem::path m_selectedAssetPath;
     bool m_assetRefresh = true;
+    // 名前の変更。一覧のサムネイルの下（またはフォルダ階層の行）でその場で入力し、確定分をフレームの外で処理する。
+    // m_assetRenameTarget が空でなければ編集中。m_assetRenameFocus は入力欄が掴むまで立てておく。
+    void OpenAssetRename(const std::filesystem::path& path);
+    // その場の入力を終える。commit なら入力した名前で改名を予約する（拡張子は元のまま）。
+    void FinishAssetRename(bool commit);
+    // 改名したファイル・フォルダを指す、読み込み済みのアセットの絶対パスを付け替える（フォルダなら配下も）。
+    void RelinkAssetPaths(const std::filesystem::path& from, const std::filesystem::path& to);
+    std::filesystem::path m_assetRenameTarget;
+    bool m_assetRenameFocus = false;
+    // 左のフォルダ階層の行で編集しているとき true（一覧の同じフォルダには欄を出さない）。
+    bool m_assetRenameInTree = false;
+    char m_assetRenameBuffer[256] = {};
+    std::filesystem::path m_pendingAssetRename;
+    std::string m_pendingAssetRenameName;
+    // 一覧のフォルダ・左のフォルダ階層に置くドロップ先。サムネイルが落とされたらそのフォルダへの移動を予約する。
+    void AssetFolderDropTarget(const std::filesystem::path& directory);
+    std::filesystem::path m_pendingAssetMove;
+    std::filesystem::path m_pendingAssetMoveTarget;
     // ファイルの削除（退避）。検査 → 確認 → 実行の順で、実行はフレームの外。
     std::filesystem::path m_pendingAssetDeleteInspect;
     io::AssetRelations m_assetDeleteRelations;

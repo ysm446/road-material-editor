@@ -176,6 +176,8 @@ private:
     void DrawAssetBrowser();
     void RefreshAssetBrowser();
     void ProcessAssetWork();
+    // 保存した共有レイヤーマテリアルのサムネイルをディスクへ残す（m_persistLayerThumbnails）。フレームの外で呼ぶ。
+    void PersistLayerThumbnails();
     void DrawSceneSwitchDialog();
     void DrawAssetDeleteDialog();
     // 現在のシーンがそのファイルを使っているか（削除の可否）。
@@ -338,9 +340,11 @@ private:
     bool m_layerPreviewDisplacement = true;
     int m_layerPreviewView = 0;
     void ProcessLayerPreview();
-    void DrawLayerMaterialLibrary();
-    void DrawBoundaryMaterialLibrary();
-    graph::SurfaceId m_selectedBoundaryMaterial = 0;
+    // 境界マテリアルの編集ウィンドウ。アセットの帯でダブルクリックすると開く。
+    void DrawBoundaryMaterialEditor();
+    // レイヤーマテリアル / 境界マテリアルをシーンから外す（ファイルは残す）。配置で使っていれば外さない。
+    bool RemoveLayerMaterialFromScene(graph::SurfaceId id);
+    bool RemoveBoundaryMaterialFromScene(graph::SurfaceId id);
     graph::SurfaceId m_editBoundaryMaterial = 0;
     void ProcessLayerThumbnails();
     void RenderLayerThumbnails(ID3D12GraphicsCommandList* commandList);
@@ -358,9 +362,10 @@ private:
     uint64_t m_layerThumbnailTextureRevision = 0;
     graph::SurfaceId m_layerThumbnailActive = 0;
     int m_layerThumbnailFrames = 0;
-    graph::SurfaceId m_selectedLayerMaterial = 0;
-    std::string m_layerLibraryError;
-    bool m_defaultLayerTabPending = false;
+    // 保存した共有レイヤーマテリアルのサムネイルを .terrain-graph/thumbnails へ残す要求。
+    // 帯は未読み込みの .tglayer を描画できないので、読み込み済みのものから作っておく。
+    // 保存の直後に立て、文書が変わったら下ろす（保存したファイルと違う絵を残さない）。
+    bool m_persistLayerThumbnails = false;
     // マテリアルプレビューの球。窓を開いている間だけ描く。
     renderer::MaterialSphere m_materialSphere;
     // 天球プレビューの球。同じく窓を開いている間だけ描く。

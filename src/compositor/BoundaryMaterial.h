@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <filesystem>
 #include <string>
 
 namespace tg::compositor {
@@ -14,5 +15,8 @@ struct BoundaryMaterial {
     float heightCenter = 0.5f;
     bool alongU = false;
     bool invertMask = false;
+    // 共有アセット（.tgboundary）のファイルと固定 ID。未保存なら空。アンドゥの写しにも入る。
+    std::filesystem::path assetPath;
+    std::string assetUid;
 };
 }

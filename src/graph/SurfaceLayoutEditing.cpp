@@ -158,6 +158,9 @@ bool DuplicateLayerMaterial(SurfaceLayoutDocument& document, SurfaceSpan& span) 
     material.id = document.AllocateId();
     if (!material.id) return false;
     material.name += " コピー";
+    // 複製は別の共有アセットになる（保存時に新しいファイルと ID を持つ）。
+    material.assetPath.clear();
+    material.assetUid.clear();
     document.layerMaterials.push_back(material);
     if (AssignLayerMaterial(document, span, material.id)) return true;
     document.layerMaterials.pop_back();

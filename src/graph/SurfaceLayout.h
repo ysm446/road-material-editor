@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 #include <optional>
@@ -80,6 +81,9 @@ struct LayerMaterial {
     float layerBlendRange = 0.2f;
     std::vector<PresetMaterial> materials;
     std::optional<PresetGraph> materialGraph;
+    // 共有アセット（.tglayer）のファイルと固定 ID。未保存・複製直後は空。アンドゥの写しにも入る。
+    std::filesystem::path assetPath;
+    std::string assetUid;
 };
 struct SpanParameter {
     SurfaceId parameter = 0;

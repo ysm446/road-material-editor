@@ -15,6 +15,7 @@
 #include "io/RecentFiles.h"
 #include "io/ThumbnailStore.h"
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 
@@ -272,9 +273,92 @@ void TestHistoryAndThumbnails() {
     fs::remove_all(directory, error);
 }
 
+// 同じファイルか（表記の揺れ、正規化の有無を問わない）。
+bool Same(const fs::path& a, const fs::path& b) {
+    std::error_code error;
+    return fs::equivalent(a, b, error) && !error;
+}
+
+void TestSurfaceAssets() {
+    Section("ProjectWorkspace: レイヤーマテリアル・境界マテリアルの共有アセット");
+    const fs::path root = FreshDirectory("surface-assets");
+    std::error_code error;
+    ProjectWorkspace workspace;
+    Check(workspace.Open(root), "ルートを開く");
+    const fs::path image = root / "mask.png";
+    Touch(image);
+    const json layer = {{"id", 5}, {"name", "gravel"}, {"displacement", 0.02}, {"layerBlendRange", 0.2},
+                        {"materials", json::array({{{"material", 1}, {"uvRepeat", 2.0}}, {{"material", 0}, {"uvRepeat", 1.0}}})}};
+    const json boundary = {{"id", 6}, {"name", "edge"}, {"mask", 1}, {"height", 0}, {"width", 0.5}};
+    json scene = {{"version", 26},
+                  {"textures", json::array({{{"id", 1}, {"name", "mask"}, {"path", tg::ToUtf8Portable(image)}}})},
+                  {"materials", json::array({{{"id", 1}, {"name", "stone"}, {"maps", json::object()}}})},
+                  {"skies", json::array()},
+                  {"surfaceLayouts", {{"version", 6}, {"layerMaterials", json::array({layer})},
+                                      {"boundaryMaterials", json::array({boundary})}}}};
+    const json original = scene;
+    const fs::path scenePath = root / "Scenes" / "a.tgscene";
+    const fs::path layerPath = root / "LayerMaterials" / "gravel.tglayer";
+    const fs::path boundaryPath = root / "BoundaryMaterials" / "edge.tgboundary";
+    Check(workspace.SaveScene(scenePath, scene), "レイヤー・境界を含むシーンを保存する");
+    Check(fs::exists(layerPath) && fs::exists(boundaryPath), "LayerMaterials/ と BoundaryMaterials/ へ分ける");
+    const json savedLayer = scene["surfaceLayouts"]["layerMaterials"][0];
+    Check(savedLayer["id"] == 5 && savedLayer.contains("asset") && !savedLayer.contains("materials"),
+          "シーンの配置データには番号と参照だけを残す");
+    json layerFile, boundaryFile;
+    Check(workspace.ReadAsset(layerPath, "layer-material-asset", layerFile) &&
+              layerFile["materials"][0]["material"] == scene["materials"][0]["asset"] &&
+              layerFile["materials"][1]["material"].is_null(),
+          "レイヤーのマテリアル参照を固定 ID にする（なしは null）");
+    Check(workspace.ReadAsset(boundaryPath, "boundary-material-asset", boundaryFile) &&
+              boundaryFile["mask"]["uid"] == scene["textures"][0]["source"]["uid"] && boundaryFile["height"].is_null(),
+          "境界の画像を固定 ID で参照する");
+
+    json loaded;
+    Check(workspace.ReadScene(scenePath, loaded), "シーンを読む");
+    const json expandedLayer = loaded["surfaceLayouts"]["layerMaterials"][0];
+    Check(expandedLayer["id"] == 5 && expandedLayer["name"] == "gravel" &&
+              expandedLayer["materials"][0]["material"] == 1 && expandedLayer["materials"][1]["material"] == 0,
+          "レイヤーの参照をシーンの番号へ戻す");
+    Check(Same(tg::FromUtf8(expandedLayer.value("_assetPath", std::string())), layerPath) && expandedLayer["uid"] == savedLayer["asset"]["uid"],
+          "展開したレイヤーはファイルと固定 ID を持つ");
+    const json expandedBoundary = loaded["surfaceLayouts"]["boundaryMaterials"][0];
+    Check(expandedBoundary["id"] == 6 && expandedBoundary["mask"] == 1 && expandedBoundary["height"] == 0 &&
+              expandedBoundary["width"] == 0.5,
+          "境界の画像参照をシーンの番号へ戻す");
+
+    json resaved = original;
+    Check(workspace.SaveScene(root / "Scenes" / "b.tgscene", resaved) &&
+              !fs::exists(root / "LayerMaterials" / "gravel_1.tglayer") &&
+              !fs::exists(root / "BoundaryMaterials" / "edge_1.tgboundary") &&
+              resaved["surfaceLayouts"]["layerMaterials"][0]["asset"]["uid"] == savedLayer["asset"]["uid"],
+          "同じ中身の埋め込みは連番の複製を作らない");
+
+    json other = {{"surfaceLayouts", {{"layerMaterials", json::array({{{"id", 9}, {"asset", savedLayer["asset"]}}})}}}};
+    Check(workspace.Expand(other) && other["materials"].size() == 1 && other["materials"][0]["name"] == "stone" &&
+              other["surfaceLayouts"]["layerMaterials"][0]["materials"][0]["material"] == other["materials"][0]["id"],
+          "レイヤーが参照するマテリアルが表に無ければ足す（他のシーンで作ったもの）");
+    json legacyScene = {{"surfaceLayouts", {{"layerMaterials", json::array({layer})}}}};
+    Check(workspace.Expand(legacyScene) && legacyScene["surfaceLayouts"]["layerMaterials"][0] == layer,
+          "共有化前のシーンの埋め込みはそのまま読む");
+
+    const auto relations = tg::io::InspectAssetRelations(workspace, root / "Materials" / "stone.tgmat");
+    Check(relations.complete && std::any_of(relations.referencers.begin(), relations.referencers.end(),
+                                            [&](const fs::path& path) { return Same(path, layerPath); }),
+          "マテリアルを参照するレイヤーを参照元として数える");
+    const auto record = tg::io::AssetThumbnailRecord(workspace, layerPath);
+    Touch(record.image);
+    Check(tg::io::CommitThumbnail(record) && tg::io::ThumbnailIsCurrent(record), "レイヤーのサムネイルを記録する");
+    std::ofstream(root / "Materials" / "stone.tgmat", std::ios::app | std::ios::binary).put(' ');
+    Check(!tg::io::ThumbnailIsCurrent(tg::io::AssetThumbnailRecord(workspace, layerPath)),
+          "参照するマテリアルが変わるとレイヤーのサムネイルは無効になる");
+    fs::remove_all(root, error);
+}
+
 }  // namespace
 
 void RunProjectWorkspaceTests() {
     TestWorkspace();
     TestHistoryAndThumbnails();
+    TestSurfaceAssets();
 }

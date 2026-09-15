@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-13 23:45
+更新日時: 2026-09-15 11:08
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -11,6 +11,8 @@ Road Editor への移行初期は、この既存形式を継続利用する。�
 ルート内の `.tgmat` / `.tgsky`（共有アセット）に分けて保存する。** 埋め込み形式の `.tgproj` は読み込みだけ受け付け、
 保存は常に `.tgscene` へ行う。`.tgscene` の中身は下の `.tgproj` と同じ節を持ち、`textures` / `materials` / `skies` の
 各項目が `{"uid", "path"}` の参照になる（元の版は `projectVersion` に退避）。
+2026-09-15 からは `surfaceLayouts.layerMaterials[]` / `boundaryMaterials[]` も `.tglayer` / `.tgboundary` へ分け、
+シーンの項目は `{"id", "asset": {"uid", "path"}}` になる（節の版は 6 のまま。展開後は従来と同じ埋め込みの形）。
 ルートの目印 `project.tgproj`（`terrain-graph.workspace` 版 1）、共有アセットの形式、`.meta`、参照の解決規則は
 [プロジェクトルートと共有アセット](../design/project-workspace.md) を参照する。
 版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンク、版12で Road の材質スロットと Road Mask、版13で面上の Path と Decal を追加した（「Road Editor で追加した版」）。
@@ -49,6 +51,8 @@ Road Editor への移行初期は、この既存形式を継続利用する。�
 | `.tgscene` | シーン（グラフ / 配置 / プレビュー設定 / 共有アセットへの参照） | 作業の保存と再開。ルート内に置く |
 | `.tgmat`（`terrain-graph.material-asset`） | 共有マテリアル 1 つ | ルート内でシーン間に共有する |
 | `.tgsky` | 共有天球 1 つ | 同上 |
+| `.tglayer`（`terrain-graph.layer-material-asset`） | 共有レイヤーマテリアル 1 つ | 同上。Road の区間へ割り当てる |
+| `.tgboundary`（`terrain-graph.boundary-material-asset`） | 共有境界マテリアル 1 つ | 同上。沿道の区間へ割り当てる |
 | `<画像>.meta` | 画像・HDRI の固定 ID | 元ファイルの隣に置くサイドカー |
 | `project.tgproj` | ルートの目印（プロジェクト ID） | ルート直下に 1 つ |
 | `.tgproj`（`terrain-graph.project`） | 旧プロジェクト全体（埋め込み） | 読み込みのみ。保存は `.tgscene` へ |

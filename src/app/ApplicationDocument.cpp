@@ -162,6 +162,8 @@ void Application::MarkDocumentChanged() {
     m_layerThumbnailsDirty = true;
     m_layerPreviewDirty = true;
     m_documentDirty = true;
+    // 保存したファイルと中身が変わったので、サムネイルをディスクへ残すのは次の保存まで待つ。
+    m_persistLayerThumbnails = false;
     // マテリアルの編集はグラフの改版に映らないので、シーンの材質を直接再評価させる
     // （グラフ自体の編集は Revision の変化でメッシュシーンが作り直される）。
     m_renderer.InvalidateSceneMaterials();

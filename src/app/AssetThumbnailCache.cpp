@@ -36,7 +36,8 @@ std::string Extension(const fs::path& path) {
 bool AssetThumbnailCache::Supports(const fs::path& path) {
     const auto ext = Extension(path);
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" ||
-           ext == ".exr" || ext == ".hdr" || ext == ".tgmat" || ext == ".tgsky" || ext == ".tgscene";
+           ext == ".exr" || ext == ".hdr" || ext == ".tgmat" || ext == ".tgsky" || ext == ".tgscene" ||
+           ext == ".tglayer" || ext == ".tgboundary";
 }
 
 void AssetThumbnailCache::BeginRequests() {
@@ -97,7 +98,8 @@ void AssetThumbnailCache::Store(rhi::Device& device, const fs::path& path, rhi::
     entry.failed = !texture.IsValid();
     entry.lastUsed = m_frame;
     entry.texture = std::move(texture);
-    if (entry.failed && Extension(path) != ".tgscene")
+    // 生成を試みて失敗したときだけ知らせる（保存前のシーンや、未保存のレイヤーマテリアルの画像が無いのは正常）。
+    if (entry.failed && persist)
         TG_LOG_WARN("アセットのサムネイルを生成できません: %s", ToUtf8Display(path).c_str());
     m_entries.emplace(path, std::move(entry));
 }
@@ -208,6 +210,24 @@ void AssetThumbnailCache::Process(rhi::Device& device, rhi::PipelineCache& pipel
             return;
         }
         device.DeferRelease(thumbnail);
+    }
+    if (extension == ".tglayer" || extension == ".tgboundary") {
+        fs::path source;
+        nlohmann::json body;
+        if (extension == ".tgboundary" && workspace.ReadAsset(path, "boundary-material-asset", body))
+            for (const char* slot : {"mask", "height"})
+                if (source.empty() && body.contains(slot) && body[slot].is_object()) source = workspace.Resolve(body[slot]);
+        if (!source.empty()) {
+            // 境界マテリアルは境界マスク（無ければハイト）の画像そのもの。
+            if (!BuildImage(device, source, thumbnail)) device.DeferRelease(thumbnail);
+            Store(device, path, std::move(thumbnail));
+            return;
+        }
+        // レイヤーマテリアルはここでは描画できない（道路の評価と描画が要る）。読み込んで保存したときに
+        // アプリが残した画像（上の ThumbnailIsCurrent）だけを使い、無ければ帯が種類の文字を出す。
+        Store(device, path, std::move(thumbnail), false);
+        m_entries[path].failed = false;
+        return;
     }
     if (extension != ".tgmat" && extension != ".tgsky") {
         if (!BuildImage(device, path, thumbnail)) device.DeferRelease(thumbnail);

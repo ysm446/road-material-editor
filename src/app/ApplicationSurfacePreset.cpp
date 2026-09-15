@@ -409,114 +409,23 @@ void Application::RenderLayerThumbnails(ID3D12GraphicsCommandList* commandList) 
     m_layerThumbnailActive = 0;
 }
 
-void Application::DrawLayerMaterialLibrary() {
-    if (!ImGui::FindWindowByName("レイヤーマテリアル") && !ImGui::FindWindowSettingsByID(ImHashStr("レイヤーマテリアル")))
-        m_defaultLayerTabPending = true;
-    if (m_defaultLayerTabPending) {
-        auto* material = ImGui::FindWindowByName("マテリアル");
-        auto* layered = ImGui::FindWindowByName("レイヤーマテリアル");
-        if (material && layered && material->DockNode && material->DockNode == layered->DockNode && material->DockNode->TabBar) {
-            auto* tabs = material->DockNode->TabBar;
-            auto* item = ImGui::TabBarFindTabByID(tabs, layered->TabId);
-            int materialIndex = -1, layerIndex = -1;
-            for (int i = 0; i < tabs->Tabs.Size; ++i) {
-                if (tabs->Tabs[i].ID == material->TabId) materialIndex = i;
-                if (tabs->Tabs[i].ID == layered->TabId) layerIndex = i;
+// レイヤーマテリアルをシーンから外す。ファイル（.tglayer）は残す。配置で使っていれば外さない。
+// 一覧はアセットの帯にあり、右クリックの「シーンから外す」から呼ぶ。
+bool Application::RemoveLayerMaterialFromScene(graph::SurfaceId id) {
+    for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands)
+        for (const auto& span : band.spans)
+            if (graph::PresetLayerMaterial(m_surfaceLayouts, span.preset) == id) {
+                TG_LOG_WARN("配置で使用中のレイヤーマテリアルはシーンから外せません。割り当てを変更してください");
+                return false;
             }
-            if (item && materialIndex >= 0 && layerIndex >= 0) {
-                const int offset = materialIndex + (layerIndex > materialIndex ? 1 : 0) - layerIndex;
-                if (offset) ImGui::TabBarQueueReorder(tabs, item, offset);
-                m_defaultLayerTabPending = false;
-            }
-        }
-    }
-    if (const auto* window = ImGui::FindWindowByName("マテリアル"); window && window->DockId)
-        ImGui::SetNextWindowDockID(window->DockId, ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("レイヤーマテリアル")) { ImGui::End(); return; }
-    bool create = false, edit = false, remove = false;
-    const auto menu = [&](bool hasTarget) {
-        if (ImGui::MenuItem("新規作成")) create = true;
-        if (ImGui::MenuItem("編集", nullptr, false, hasTarget)) edit = true;
-        if (ImGui::MenuItem("削除", "DEL", false, hasTarget)) remove = true;
-    };
-    if (!m_layerLibraryError.empty()) ui::HintText("%s", m_layerLibraryError.c_str());
-    const float size = ui::Scaled(84);
-    if (ImGui::BeginChild("layerMaterialGrid", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
-        const int columns = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / (size + ImGui::GetStyle().ItemSpacing.x)));
-        int index = 0;
-        for (const auto& preset : m_surfaceLayouts.layerMaterials) {
-            ImGui::PushID(static_cast<int>(preset.id)); ImGui::BeginGroup();
-            const auto cached = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == preset.id; });
-            const ImTextureID texture = cached != m_layerThumbnails.end() && cached->ready ? static_cast<ImTextureID>(cached->texture.srv.gpu.ptr) : 0;
-            const auto thumbnail = ui::ThumbnailButton("thumbnail", texture, size, m_selectedLayerMaterial == preset.id);
-            if (thumbnail.clicked) {
-                m_selectedLayerMaterial = preset.id; m_layerLibraryError.clear();
-                // 編集ウィンドウが開いていれば、選んだものへ内容を切り替える（フォーカスは移さない）。
-                if (m_editSurfacePreset && m_editSurfacePreset != preset.id) {
-                    m_editSurfacePreset = preset.id; m_selectedPresetLayer = 0; m_selectedPresetMask = false; m_surfacePresetError.clear();
-                }
-            }
-            if (thumbnail.doubleClicked) {
-                m_editSurfacePreset = preset.id; m_selectedPresetLayer = 0; m_surfacePresetError.clear();
-                ImGui::SetWindowFocus("レイヤーマテリアル編集");
-            }
-            if (thumbnail.hovered) ImGui::SetTooltip("%s\nダブルクリックで編集 / DELで削除", preset.name.c_str());
-            // Road の沿道欄のマテリアル行へ落とすと、その区間に割り当たる。
-            if (ImGui::BeginDragDropSource()) {
-                ImGui::SetDragDropPayload(kLayerMaterialDragDropType, &preset.id, sizeof(preset.id));
-                ImGui::TextUnformatted(preset.name.c_str());
-                ImGui::EndDragDropSource();
-            }
-            if (ImGui::BeginPopupContextItem("##layerMaterialMenu")) {
-                m_selectedLayerMaterial = preset.id;
-                menu(true);
-                ImGui::EndPopup();
-            }
-            ui::GridCaption(preset.name.c_str(), size);
-            ImGui::EndGroup(); ImGui::PopID();
-            if (++index % columns && index < static_cast<int>(m_surfaceLayouts.layerMaterials.size())) ImGui::SameLine();
-        }
-        if (ImGui::BeginPopupContextWindow("##layerMaterialGridMenu",
-                ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
-            menu(false);
-            ImGui::EndPopup();
-        }
-        if (edit && m_selectedLayerMaterial) {
-            m_editSurfacePreset = m_selectedLayerMaterial;
-            m_selectedPresetLayer = 0; m_surfacePresetError.clear();
-            ImGui::SetWindowFocus("レイヤーマテリアル編集");
-        }
-        if ((remove || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
-            ImGui::IsKeyPressed(ImGuiKey_Delete, false))) && m_selectedLayerMaterial) {
-            bool used = false;
-            for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands)
-                for (const auto& span : band.spans) used |= graph::PresetLayerMaterial(m_surfaceLayouts, span.preset) == m_selectedLayerMaterial;
-            if (used) m_layerLibraryError = "配置で使用中です。割り当てを変更してから削除してください。";
-            else {
-                const auto found = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(), [&](const auto& p) { return p.id == m_selectedLayerMaterial; });
-                if (found != m_surfaceLayouts.layerMaterials.end()) {
-                    if (m_editSurfacePreset == found->id) m_editSurfacePreset = 0;
-                    const auto removed = found->id;
-                    std::erase_if(m_surfaceLayouts.presets, [&](const auto& p) { return p.layerMaterial == removed; });
-                    m_surfaceLayouts.layerMaterials.erase(found); m_graph.MarkDirty(); MarkDocumentChanged();
-                }
-                m_selectedLayerMaterial = 0; m_layerLibraryError.clear();
-            }
-        }
-    }
-    if (create) {
-        graph::LayerMaterial preset;
-        preset.id = m_surfaceLayouts.AllocateId(); preset.name = "新しいレイヤーマテリアル";
-        if (!preset.id) {
-            m_layerLibraryError = "レイヤーマテリアルのIDを確保できません";
-            ImGui::EndChild(); ImGui::End(); return;
-        }
-        preset.materials.emplace_back();
-        m_selectedLayerMaterial = m_editSurfacePreset = preset.id;
-        m_surfaceLayouts.layerMaterials.push_back(std::move(preset)); MarkDocumentChanged();
-        m_selectedPresetLayer = 0; m_surfacePresetError.clear(); m_layerLibraryError.clear();
-    }
-    ImGui::EndChild(); ImGui::End();
+    const auto found = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(),
+        [&](const auto& p) { return p.id == id; });
+    if (found == m_surfaceLayouts.layerMaterials.end()) return false;
+    if (m_editSurfacePreset == id) m_editSurfacePreset = 0;
+    std::erase_if(m_surfaceLayouts.presets, [&](const auto& p) { return p.layerMaterial == id; });
+    m_surfaceLayouts.layerMaterials.erase(found);
+    m_graph.MarkDirty(); MarkDocumentChanged();
+    return true;
 }
 
 void Application::DrawSurfacePresetEditor() {

@@ -602,18 +602,17 @@ void Application::DrawUi() {
     DrawGraphPanel();
     // アセットの帯は畳める。出さなければドックノードが空になり、中央（ビューポート）が
     // その高さをもらう。ウィンドウはドック先を覚えているので、戻せば同じ所へ入る。
-    // 帯のタブは submit 順に並ぶ。アセット（フォルダ）を先頭にする。
+    // レイヤーマテリアル・境界マテリアルもアセット（.tglayer / .tgboundary）として帯に並ぶ。
     m_assetThumbnails.BeginRequests();
     if (m_settings.Display().showAssetBand) {
         DrawAssetBrowser();
-        DrawLayerMaterialLibrary();
-        DrawBoundaryMaterialLibrary();
     }
     if (m_showTextureList) DrawTextureLibraryPanel();
     if (m_showMaterialList) DrawMaterialLibraryPanel();
     if (m_showSkyList) DrawSkyLibraryPanel();
     DrawMaterialPanel();
     if (m_editSurfacePreset) DrawSurfacePresetEditor();
+    if (m_editBoundaryMaterial) DrawBoundaryMaterialEditor();
     DrawLightingPanel();
 
     DrawMaterialSphereWindow();
@@ -696,10 +695,8 @@ void Application::BuildDefaultLayout(ImGuiID dockspaceId) {
     // （ImGui の hold-to-switch。テクスチャのドラッグ元で SourceNoHoldToOpenOthers を付けない）。
     // **前面にしたい「テクスチャ」を最後にドックする。** 同じ枠では最後にドックしたものが
     // 選ばれる。タブの並びは submit した順（テクスチャ → マテリアル → … → 天球）。
-    // 帯は「アセット（ルートのフォルダ階層とその中身）/ レイヤーマテリアル / 境界マテリアル」。
-    // **前面にしたい「アセット」を最後にドックする。**
-    ImGui::DockBuilderDockWindow("境界マテリアル", bottom);
-    ImGui::DockBuilderDockWindow("レイヤーマテリアル", bottom);
+    // 帯は「アセット」1 枠（ルートのフォルダ階層とその中身）。レイヤーマテリアル・境界マテリアルも
+    // .tglayer / .tgboundary としてここに並ぶ。
     ImGui::DockBuilderDockWindow("アセット", bottom);
     // 右カラムへタブで重ねる。縦に積むと 1 枚あたりが短くなり、
     // どれもスクロールしないと全体が見えなくなる。
@@ -715,7 +712,6 @@ void Application::BuildDefaultLayout(ImGuiID dockspaceId) {
     // 前面のタブは右カラムが「グラフ」、帯が「テクスチャ」。
     // この時点ではまだウィンドウが無いので、実際の指定は各パネルの Begin 直前で行う。
     m_focusDefaultTabs = 3;
-    m_defaultLayerTabPending = true;
 }
 
 void Application::PushStatus(LogLevel level, const char* text) {

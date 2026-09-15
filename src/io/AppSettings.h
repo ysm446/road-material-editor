@@ -47,7 +47,7 @@ struct DisplaySettings {
     bool showUvChecker = false;
     // メッシュシーンにワイヤーフレームを重ねるか。
     bool showWireframe = false;
-    // アセットの帯（アセット / レイヤーマテリアル / 境界マテリアル）を出すか。畳むとビューポートが縦に広がる。
+    // アセットの帯（ルートのフォルダ階層とその中身）を出すか。畳むとビューポートが縦に広がる。
     bool showAssetBand = true;
     // 前面にあるときの FPS 上限。0 で上限なし。
     int frameRateLimit = 0;

@@ -39,7 +39,23 @@ fs::path Absolute(const fs::path& path) {
 
 bool IsNative(const fs::path& path) {
     const auto ext = path.extension().wstring();
-    return _wcsicmp(ext.c_str(), L".tgmat") == 0 || _wcsicmp(ext.c_str(), L".tgsky") == 0;
+    for (const auto* native : {L".tgmat", L".tgsky", L".tglayer", L".tgboundary"})
+        if (_wcsicmp(ext.c_str(), native) == 0) return true;
+    return false;
+}
+
+// レイヤーマテリアル本体のマテリアル参照を書き換える（レイヤーと、ノード形式のノードの settings）。
+void MapLayerMaterials(json& layer, const std::function<json(const json&)>& convert) {
+    if (auto layers = layer.find("materials"); layers != layer.end() && layers->is_array())
+        for (auto& entry : *layers)
+            if (entry.is_object() && entry.contains("material")) entry["material"] = convert(entry["material"]);
+    const auto graph = layer.find("materialGraph");
+    if (graph == layer.end() || !graph->is_object()) return;
+    if (auto nodes = graph->find("nodes"); nodes != graph->end() && nodes->is_array())
+        for (auto& node : *nodes)
+            if (node.is_object() && node.contains("settings") && node["settings"].is_object() &&
+                node["settings"].contains("material"))
+                node["settings"]["material"] = convert(node["settings"]["material"]);
 }
 
 // マテリアル本体の画像参照を書き換える（baseColor / normal と、スロットの texture）。
@@ -332,10 +348,21 @@ bool ProjectWorkspace::SaveScene(const fs::path& path, json& document) {
         entry["source"] = ref;
         entry.erase("path");
     }
+    // 配置データの中のレイヤーマテリアル・境界マテリアルの一覧。無ければ nullptr。
+    const auto surfaceAssets = [&](const char* key) -> json* {
+        const auto layouts = document.find("surfaceLayouts");
+        if (layouts == document.end() || !layouts->is_object()) return nullptr;
+        const auto list = layouts->find(key);
+        return list != layouts->end() && list->is_array() ? &*list : nullptr;
+    };
     std::unordered_set<std::string> claimedUids;
     for (const char* key : {"materials", "skies"})
         for (const auto& entry : document[key])
             if (const auto uid = String(entry, "uid"); !uid.empty()) claimedUids.insert(uid);
+    for (const char* key : {"layerMaterials", "boundaryMaterials"})
+        if (const auto* list = surfaceAssets(key))
+            for (const auto& entry : *list)
+                if (const auto uid = String(entry, "uid"); !uid.empty()) claimedUids.insert(uid);
     const auto save = [&](json& entry, const char* kind, const char* folder, const char* ext) {
         const json id = entry.contains("id") ? entry["id"] : json();
         fs::path assetPath = FromUtf8(String(entry, "_assetPath"));
@@ -354,13 +381,19 @@ bool ProjectWorkspace::SaveScene(const fs::path& path, json& document) {
         if (!id.is_null()) entry["id"] = id;  // 天球は順番で参照するので番号を持たない
         return !entry["asset"].is_null();
     };
-    for (auto& entry : document["materials"]) {
-        MapTextures(entry, [&](const json& value) -> json {
+    // シーン内の番号 → 永続 ID の参照。表に無い番号（0 = なし）は null。
+    const auto byNumber = [](const std::unordered_map<int, json>& table) {
+        return [&table](const json& value) -> json {
             if (!value.is_number_integer()) return nullptr;
-            const auto found = textures.find(value.get<int>());
-            return found == textures.end() ? json() : found->second;
-        });
+            const auto found = table.find(value.get<int>());
+            return found == table.end() ? json() : found->second;
+        };
+    };
+    std::unordered_map<int, json> materialRefs;
+    for (auto& entry : document["materials"]) {
+        MapTextures(entry, byNumber(textures));
         if (!save(entry, "material-asset", "Materials", ".tgmat")) return false;
+        if (entry.contains("id") && entry["id"].is_number_integer()) materialRefs[entry["id"].get<int>()] = entry["asset"];
     }
     for (auto& entry : document["skies"]) {
         if (!entry["hdri"].is_null() && entry["hdri"] != "") {
@@ -368,6 +401,23 @@ bool ProjectWorkspace::SaveScene(const fs::path& path, json& document) {
             if (entry["hdri"].is_null()) return false;
         }
         if (!save(entry, "sky-asset", "Skies", ".tgsky")) return false;
+    }
+    // レイヤーマテリアルと境界マテリアル。マテリアル・画像の参照を永続 ID へ写してファイルへ分け、
+    // 配置データには番号（SurfaceId）と参照だけを残す。区間やプリセットはその番号で指したまま。
+    if (auto* list = surfaceAssets("layerMaterials")) {
+        for (auto& entry : *list) {
+            if (!entry.is_object()) return false;
+            MapLayerMaterials(entry, byNumber(materialRefs));
+            if (!save(entry, "layer-material-asset", "LayerMaterials", ".tglayer")) return false;
+        }
+    }
+    if (auto* list = surfaceAssets("boundaryMaterials")) {
+        const auto textureRef = byNumber(textures);
+        for (auto& entry : *list) {
+            if (!entry.is_object()) return false;
+            for (const char* slot : {"mask", "height"}) entry[slot] = textureRef(entry.value(slot, json()));
+            if (!save(entry, "boundary-material-asset", "BoundaryMaterials", ".tgboundary")) return false;
+        }
     }
     // 同じ保存先の ID は維持し、名前を付けて保存では別の ID にする。
     json existing;
@@ -430,6 +480,45 @@ bool ProjectWorkspace::Expand(json& document) {
         entry = std::move(body);
         return true;
     };
+    // 配置データのレイヤーマテリアル・境界マテリアル。共有化前のシーンの埋め込み（asset の無いもの）はそのまま。
+    // レイヤーが参照するマテリアルがシーンの表に無ければ足す（他のシーンで作った共有レイヤーマテリアル）。
+    int nextMaterial = 1;
+    std::unordered_map<std::string, int> materialIds;
+    for (const auto& entry : materials) {
+        const int id = entry["id"].get<int>();
+        nextMaterial = std::max(nextMaterial, id + 1);
+        if (const auto uid = String(entry.value("asset", json::object()), "uid"); !uid.empty()) materialIds.emplace(uid, id);
+    }
+    const auto materialId = [&](const json& ref) -> json {
+        const auto uid = String(ref, "uid");
+        if (uid.empty()) return 0;
+        if (const auto found = materialIds.find(uid); found != materialIds.end()) return found->second;
+        const int id = nextMaterial++;
+        materialIds.emplace(uid, id);
+        materials.push_back({{"id", id}, {"asset", ref}});
+        return id;
+    };
+    if (auto layouts = document.find("surfaceLayouts"); layouts != document.end() && layouts->is_object()) {
+        for (const std::string key : {"layerMaterials", "boundaryMaterials"}) {
+            const auto list = layouts->find(key);
+            if (list == layouts->end()) continue;
+            if (!list->is_array()) return false;
+            for (auto& entry : *list) {
+                if (!entry.is_object()) return false;
+                if (!entry.contains("asset")) continue;
+                if (key == "layerMaterials") {
+                    if (!read(entry, "layer-material-asset")) return false;
+                    MapLayerMaterials(entry, materialId);
+                } else {
+                    if (!read(entry, "boundary-material-asset")) return false;
+                    for (const char* slot : {"mask", "height"}) {
+                        const auto id = textureId(entry.value(slot, json()));
+                        entry[slot] = id.is_null() ? json(0) : id;
+                    }
+                }
+            }
+        }
+    }
     for (auto& entry : materials) {
         if (!read(entry, "material-asset")) return false;
         MapTextures(entry, textureId);

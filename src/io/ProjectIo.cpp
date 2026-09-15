@@ -1533,6 +1533,19 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs,
         const auto reference = writeTexture(boundary[key].get<uint32_t>());
         boundary[key] = reference.is_null() ? json(0) : reference;
     }
+    if (workspace != nullptr) {
+        // 共有アセットの置き場所と固定 ID（SaveSharedAssets が付けたもの）。SaveScene がこれを見てファイルへ分ける。
+        const auto identify = [](json& list, const auto& entries) {
+            for (json& value : list)
+                for (const auto& entry : entries)
+                    if (value["id"] == entry.id) {
+                        value["_assetPath"] = ToUtf8Portable(entry.assetPath);
+                        value["uid"] = entry.assetUid;
+                    }
+        };
+        identify(layouts["layerMaterials"], refs.surfaceLayouts.layerMaterials);
+        identify(layouts["boundaryMaterials"], refs.surfaceLayouts.boundaryMaterials);
+    }
     document["surfaceLayouts"] = std::move(layouts);
 
     // 天球はマテリアルと同じく、構造ごと埋め込む（画像だけ相対パスの参照）。
@@ -1602,6 +1615,19 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
             TG_LOG_ERROR("配置データを読み込めません（現在の文書は保持）: %s", error.c_str());
             return false;
         }
+        // 共有アセットの置き場所と固定 ID（シーンの展開で入ったもの）。旧 .tgproj には無い。
+        const auto identify = [&](const char* key, auto& entries) {
+            const json* list = FindMember(*layouts, key);
+            if (list == nullptr || !list->is_array()) return;
+            for (const json& value : *list)
+                for (auto& entry : entries)
+                    if (value.is_object() && value.contains("id") && value["id"] == entry.id) {
+                        entry.assetPath = FromUtf8(ReadString(value, "_assetPath"));
+                        entry.assetUid = ReadString(value, "uid");
+                    }
+        };
+        identify("layerMaterials", pendingLayouts.layerMaterials);
+        identify("boundaryMaterials", pendingLayouts.boundaryMaterials);
         if (!pendingLayouts.layouts.empty()) {
             graph::NodeGraph validationGraph;
             const auto* graphValue = FindMember(document, "graph");
@@ -1815,6 +1841,12 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
     for (const renderer::SkyAsset& entry : refs.skies.Entries()) {
         if (!entry.assetUid.empty()) claimedUids.insert(entry.assetUid);
     }
+    for (const graph::LayerMaterial& entry : refs.surfaceLayouts.layerMaterials) {
+        if (!entry.assetUid.empty()) claimedUids.insert(entry.assetUid);
+    }
+    for (const compositor::BoundaryMaterial& entry : refs.surfaceLayouts.boundaryMaterials) {
+        if (!entry.assetUid.empty()) claimedUids.insert(entry.assetUid);
+    }
     // 置き場所が未定のものの保存先。ID の無いもの（旧 .tgproj・単体 .tgmat から来たもの）は、
     // 同じ中身の既存アセットがあればそれを使う。無ければ名前から連番で作る。
     const auto placement = [&](json& body, const fs::path& current, const char* kind, const wchar_t* folder,
@@ -1858,7 +1890,177 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
         asset->assetUid = ReadString(body, "uid");
         claimedUids.insert(asset->assetUid);
     }
+    // レイヤーマテリアル。本文は配置データの保存形式と同じで、マテリアルの参照だけを上で保存した
+    // .tgmat の固定 ID にする（SaveScene が作る本文と一致させ、中身が変わらなければ書き直さない）。
+    for (graph::LayerMaterial& material : refs.surfaceLayouts.layerMaterials) {
+        graph::SurfaceLayoutDocument single;
+        single.layerMaterials.push_back(material);
+        const json written = WriteSurfaceLayouts(single);
+        json body = written["layerMaterials"][0];
+        const auto materialRef = [&](json& value) {
+            const compositor::MaterialAsset* asset = refs.materials.Find(value.get<uint32_t>());
+            value = (asset != nullptr && !asset->assetPath.empty()) ? workspace.Reference(asset->assetPath) : json();
+            if (asset != nullptr && value.is_null()) valid = false;
+        };
+        for (json& layer : body["materials"]) materialRef(layer["material"]);
+        if (body.contains("materialGraph")) {
+            for (json& node : body["materialGraph"]["nodes"]) materialRef(node["settings"]["material"]);
+        }
+        body["uid"] = material.assetUid;
+        fs::path assetPath = placement(body, material.assetPath, "layer-material-asset", L"LayerMaterials",
+                                       material.name, ".tglayer");
+        if (!valid || !workspace.SaveAsset(assetPath, "layer-material-asset", body)) {
+            TG_LOG_ERROR("レイヤーマテリアルを保存できません: %s", material.name.c_str());
+            return false;
+        }
+        material.assetPath = assetPath;
+        material.assetUid = ReadString(body, "uid");
+        claimedUids.insert(material.assetUid);
+    }
+    // 境界マテリアル。画像は元ファイルの固定 ID で参照する。
+    for (compositor::BoundaryMaterial& material : refs.surfaceLayouts.boundaryMaterials) {
+        graph::SurfaceLayoutDocument single;
+        single.boundaryMaterials.push_back(material);
+        const json written = WriteSurfaceLayouts(single);
+        json body = written["boundaryMaterials"][0];
+        body["mask"] = writeTexture(material.mask);
+        body["height"] = writeTexture(material.height);
+        body["uid"] = material.assetUid;
+        fs::path assetPath = placement(body, material.assetPath, "boundary-material-asset", L"BoundaryMaterials",
+                                       material.name, ".tgboundary");
+        if (!valid || !workspace.SaveAsset(assetPath, "boundary-material-asset", body)) {
+            TG_LOG_ERROR("境界マテリアルを保存できません: %s", material.name.c_str());
+            return false;
+        }
+        material.assetPath = assetPath;
+        material.assetUid = ReadString(body, "uid");
+        claimedUids.insert(material.assetUid);
+    }
     return valid;
+}
+
+namespace {
+
+// 展開済みの文書（ProjectWorkspace::Expand の結果）の画像とマテリアルをライブラリへ足す。
+// 同じ固定 ID のマテリアルが読み込み済みなら足さずにそれを使う。文書内の番号 → ライブラリの ID を返す。
+void AddExpandedLibraries(const json& document, rhi::Device& device, rhi::PipelineCache& pipelineCache,
+                          compositor::TextureLibrary& textures, compositor::MaterialLibrary& materials,
+                          std::unordered_map<int, compositor::TextureId>& textureIds,
+                          std::unordered_map<int, compositor::MaterialAssetId>& materialIds) {
+    for (const json& node : document.at("textures")) {
+        const fs::path texturePath = FromUtf8(ReadString(node, "path"));
+        compositor::TextureId id = textures.Load(device, pipelineCache, texturePath);
+        if (id == compositor::kNoTexture) {
+            TG_LOG_WARN("テクスチャが見つかりません（リンク切れ）: %s", ToUtf8Display(texturePath).c_str());
+            id = textures.AddMissing(texturePath, ReadString(node, "name"));
+        }
+        textureIds[ReadInt(node, "id", 0)] = id;
+    }
+    const TextureReader readTexture = [&textureIds](const json& value) {
+        const auto it = textureIds.find(value.is_number_integer() ? value.get<int>() : 0);
+        return (it != textureIds.end()) ? it->second : compositor::kNoTexture;
+    };
+    for (const json& node : document.at("materials")) {
+        const std::string uid = ReadString(node, "uid");
+        const auto& entries = materials.Entries();
+        const auto existing = std::find_if(entries.begin(), entries.end(),
+                                           [&uid](const compositor::MaterialAsset& a) { return a.assetUid == uid; });
+        if (existing != entries.end()) {
+            materialIds[ReadInt(node, "id", 0)] = existing->id;
+            continue;
+        }
+        const compositor::MaterialAssetId id = materials.Add(ReadString(node, "name"));
+        compositor::MaterialAsset* asset = materials.FindMutable(id);
+        ReadMaterialBody(node, *asset, readTexture);
+        asset->assetUid = uid;
+        asset->assetPath = FromUtf8(ReadString(node, "_assetPath"));
+        asset->thumbnailDirty = true;
+        materialIds[ReadInt(node, "id", 0)] = id;
+    }
+}
+
+}  // namespace
+
+graph::SurfaceId LoadSharedSurfaceAsset(ProjectWorkspace& workspace, const std::filesystem::path& path,
+                                        rhi::Device& device, rhi::PipelineCache& pipelineCache,
+                                        compositor::TextureLibrary& textures, compositor::MaterialLibrary& materials,
+                                        graph::SurfaceLayoutDocument& layouts) {
+    if (!workspace.Scan()) {
+        return 0;
+    }
+    json header;
+    if (!workspace.Contains(path) || !ProjectWorkspace::ReadJson(path, header)) {
+        return 0;
+    }
+    const std::string assetUid = ReadString(header, "uid");
+    if (assetUid.empty()) {
+        return 0;
+    }
+    const bool isLayer = _wcsicmp(path.extension().c_str(), L".tglayer") == 0;
+    // 読み込み済みなら足さずにそれを使う（同じアセットを 2 つの番号で持たない）。
+    if (isLayer) {
+        for (const graph::LayerMaterial& entry : layouts.layerMaterials) {
+            if (entry.assetUid == assetUid) return entry.id;
+        }
+    } else {
+        for (const compositor::BoundaryMaterial& entry : layouts.boundaryMaterials) {
+            if (entry.assetUid == assetUid) return entry.id;
+        }
+    }
+    const char* key = isLayer ? "layerMaterials" : "boundaryMaterials";
+    json document;
+    document["surfaceLayouts"][key] = json::array(
+        {{{"id", 1}, {"asset", {{"uid", assetUid}, {"path", RelativePathString(path, workspace.Root())}}}}});
+    if (!workspace.Expand(document)) {
+        return 0;
+    }
+    // 本文は配置データの読み込み器で検査する。参照の番号はまだ文書内のもの。
+    const json& expanded = document.at("surfaceLayouts").at(key).at(0);
+    json value = {{"version", 6}, {"nextId", 2}, {"presets", json::array()}, {"layouts", json::array()},
+                  {"layerMaterials", json::array()}, {"boundaryMaterials", json::array()}};
+    value[key].push_back(expanded);
+    graph::SurfaceLayoutDocument parsed;
+    std::string error;
+    if (!ReadSurfaceLayouts(value, parsed, error)) {
+        TG_LOG_ERROR("アセットを読み込めません（%s）: %s", error.c_str(), ToUtf8Display(path).c_str());
+        return 0;
+    }
+    const graph::SurfaceId id = layouts.AllocateId();
+    if (id == 0) {
+        return 0;
+    }
+    std::unordered_map<int, compositor::TextureId> textureIds;
+    std::unordered_map<int, compositor::MaterialAssetId> materialIds;
+    AddExpandedLibraries(document, device, pipelineCache, textures, materials, textureIds, materialIds);
+    if (isLayer) {
+        const auto materialId = [&materialIds](uint32_t number) {
+            const auto found = materialIds.find(static_cast<int>(number));
+            return (found != materialIds.end()) ? found->second : compositor::kNoMaterialAsset;
+        };
+        graph::LayerMaterial material = parsed.layerMaterials.front();
+        for (graph::PresetMaterial& layer : material.materials) layer.material = materialId(layer.material);
+        if (material.materialGraph) {
+            for (graph::PresetNode& node : material.materialGraph->nodes) node.settings.material = materialId(node.settings.material);
+        }
+        material.id = id;
+        material.assetUid = assetUid;
+        material.assetPath = FromUtf8(ReadString(expanded, "_assetPath"));
+        layouts.layerMaterials.push_back(std::move(material));
+    } else {
+        const auto textureId = [&textureIds](uint32_t number) {
+            const auto found = textureIds.find(static_cast<int>(number));
+            return (found != textureIds.end()) ? found->second : compositor::kNoTexture;
+        };
+        compositor::BoundaryMaterial material = parsed.boundaryMaterials.front();
+        material.mask = textureId(material.mask);
+        material.height = textureId(material.height);
+        material.id = id;
+        material.assetUid = assetUid;
+        material.assetPath = FromUtf8(ReadString(expanded, "_assetPath"));
+        layouts.boundaryMaterials.push_back(std::move(material));
+    }
+    TG_LOG_INFO("アセットを読み込みました: %s", ToUtf8Display(path).c_str());
+    return id;
 }
 
 bool LoadSharedAsset(ProjectWorkspace& workspace, const std::filesystem::path& path,
@@ -1885,34 +2087,8 @@ bool LoadSharedAsset(ProjectWorkspace& workspace, const std::filesystem::path& p
         return false;
     }
     std::unordered_map<int, compositor::TextureId> textureIds;
-    for (const json& node : document["textures"]) {
-        const fs::path texturePath = FromUtf8(ReadString(node, "path"));
-        compositor::TextureId id = textures.Load(device, pipelineCache, texturePath);
-        if (id == compositor::kNoTexture) {
-            TG_LOG_WARN("テクスチャが見つかりません（リンク切れ）: %s", ToUtf8Display(texturePath).c_str());
-            id = textures.AddMissing(texturePath, ReadString(node, "name"));
-        }
-        textureIds[ReadInt(node, "id", 0)] = id;
-    }
-    const TextureReader readTexture = [&textureIds](const json& value) {
-        const auto it = textureIds.find(value.is_number_integer() ? value.get<int>() : 0);
-        return (it != textureIds.end()) ? it->second : compositor::kNoTexture;
-    };
-    for (const json& node : document["materials"]) {
-        const std::string uid = ReadString(node, "uid");
-        const auto& entries = materials.Entries();
-        const bool exists = std::any_of(entries.begin(), entries.end(),
-                                        [&uid](const compositor::MaterialAsset& a) { return a.assetUid == uid; });
-        if (exists) {
-            continue;
-        }
-        const compositor::MaterialAssetId id = materials.Add(ReadString(node, "name"));
-        compositor::MaterialAsset* asset = materials.FindMutable(id);
-        ReadMaterialBody(node, *asset, readTexture);
-        asset->assetUid = uid;
-        asset->assetPath = FromUtf8(ReadString(node, "_assetPath"));
-        asset->thumbnailDirty = true;
-    }
+    std::unordered_map<int, compositor::MaterialAssetId> materialIds;
+    AddExpandedLibraries(document, device, pipelineCache, textures, materials, textureIds, materialIds);
     for (const json& node : document["skies"]) {
         const std::string uid = ReadString(node, "uid");
         const auto& entries = skies.Entries();

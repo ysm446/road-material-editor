@@ -1,10 +1,13 @@
 // アセットの帯。プロジェクトのルートフォルダの階層と、フォルダの中身（画像・マテリアル・
-// 天球・シーン）をサムネイルの格子で出す。旧「テクスチャ / マテリアル / 天球」のタブの代わり。
+// 天球・レイヤーマテリアル・境界マテリアル・シーン）をサムネイルの格子で出す。
+// 旧「テクスチャ / マテリアル / 天球 / レイヤーマテリアル / 境界マテリアル」のタブの代わり。
 //
 // 一覧はファイルそのもの。**シーンへ読み込んでいないものも見える。** ダブルクリックで
-// 読み込み（画像 → テクスチャ、.tgmat → マテリアル、.tgsky → 天球、.tgscene → シーン）。
-// 読み込み済みのものはライブラリのサムネイルとドラッグ元（TG_TEXTURE / TG_MATERIAL）を使い、
-// 未読み込みのものは AssetThumbnailCache が別領域で作ったサムネイルを出す。
+// 読み込み（画像 → テクスチャ、.tgmat → マテリアル、.tgsky → 天球、.tglayer / .tgboundary →
+// 配置データへ足して編集ウィンドウ、.tgscene → シーン）。
+// 読み込み済みのものはライブラリのサムネイルとドラッグ元（TG_TEXTURE / TG_MATERIAL /
+// TG_LAYER_MATERIAL / TG_BOUNDARY_MATERIAL）を使い、未読み込みのものは AssetThumbnailCache が
+// 別領域で作ったサムネイルを出す。
 
 #include "app/Application.h"
 
@@ -15,6 +18,7 @@
 #include "io/AssetRelations.h"
 #include "io/ProjectIo.h"
 #include "io/ThumbnailStore.h"
+#include "rhi/TextureReadback.h"
 #include "ui/UiStyle.h"
 
 #include <imgui.h>
@@ -88,6 +92,8 @@ bool Application::IsAssetLoaded(const fs::path& path) const {
     for (const auto& a : m_textureLibrary.Entries()) if (SameFile(a.path, path)) return true;
     for (const auto& a : m_materialLibrary.Entries()) if (SameFile(a.assetPath, path)) return true;
     for (const auto& a : m_skyLibrary.Entries()) if (SameFile(a.assetPath, path) || SameFile(a.sky.hdriPath, path)) return true;
+    for (const auto& a : m_surfaceLayouts.layerMaterials) if (SameFile(a.assetPath, path)) return true;
+    for (const auto& a : m_surfaceLayouts.boundaryMaterials) if (SameFile(a.assetPath, path)) return true;
     return false;
 }
 
@@ -182,8 +188,8 @@ void Application::RefreshAssetBrowser() {
         // .meta と内部フォルダ（.terrain-graph）は出さない。
         if (entry.is_symlink(error) || entry.path().filename().wstring().starts_with(L".")) continue;
         const auto ext = Extension(entry.path());
-        if (!entry.is_directory(error) && !IsImage(ext) && ext != ".hdr" && ext != ".tgmat" &&
-            ext != ".tgsky" && ext != ".tgscene" && ext != ".tgproj" && ext != ".mmproj") continue;
+        if (!entry.is_directory(error) && !IsImage(ext) && ext != ".hdr" && ext != ".tgmat" && ext != ".tgsky" &&
+            ext != ".tglayer" && ext != ".tgboundary" && ext != ".tgscene" && ext != ".tgproj" && ext != ".mmproj") continue;
         m_assetEntries.push_back(entry);
     }
     std::sort(m_assetEntries.begin(), m_assetEntries.end(), [](const auto& a, const auto& b) {
@@ -207,6 +213,29 @@ void Application::RefreshAssetBrowser() {
     };
     collect(collect, m_workspace.Root(), 0);
     m_assetRefresh = false;
+}
+
+// 保存した共有レイヤーマテリアルのサムネイルを .terrain-graph/thumbnails へ残す。
+// 帯は未読み込みの .tglayer を描画できないので、ここで残した画像を AssetThumbnailCache が読む。
+// 描き直し待ちのものがあれば次のフレームへ回す（保存したファイルと違う絵を残さない）。
+void Application::PersistLayerThumbnails() {
+    if (!m_persistLayerThumbnails || m_layerThumbnailsDirty || m_layerThumbnailActive ||
+        std::any_of(m_layerThumbnails.begin(), m_layerThumbnails.end(), [](const auto& t) { return t.dirty; })) return;
+    m_persistLayerThumbnails = false;
+    bool stored = false;
+    for (auto& thumbnail : m_layerThumbnails) {
+        const auto material = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(),
+            [&](const auto& m) { return m.id == thumbnail.id; });
+        if (!thumbnail.ready || material == m_surfaceLayouts.layerMaterials.end() || material->assetPath.empty() ||
+            !m_workspace.Contains(material->assetPath)) continue;
+        const auto record = io::AssetThumbnailRecord(m_workspace, material->assetPath);
+        if (io::ThumbnailIsCurrent(record)) continue;
+        std::error_code error;
+        fs::create_directories(record.image.parent_path(), error);
+        if (!error && rhi::SaveTextureToPng(m_device, thumbnail.texture, record.image, 128) && io::CommitThumbnail(record))
+            stored = true;
+    }
+    if (stored) m_assetThumbnails.Invalidate();
 }
 
 // フレームの外で処理するアセット関連の作業（ルートの切り替え、共有アセットの保存、
@@ -273,8 +302,12 @@ void Application::ProcessAssetWork() {
         m_pendingAssetsSave = false;
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary, m_renderer, m_graph, m_surfaceLayouts,
                              m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
-        if (io::SaveSharedAssets(m_workspace, refs)) TG_LOG_INFO("共有アセットを保存しました");
-        else TG_LOG_ERROR("共有アセットを保存できませんでした");
+        if (io::SaveSharedAssets(m_workspace, refs)) {
+            TG_LOG_INFO("共有アセットを保存しました");
+            m_persistLayerThumbnails = true;
+        } else {
+            TG_LOG_ERROR("共有アセットを保存できませんでした");
+        }
         m_assetRefresh = true;
         m_assetThumbnails.Invalidate();
     }
@@ -307,6 +340,28 @@ void Application::ProcessAssetWork() {
             } else {
                 TG_LOG_ERROR("アセットを開けません: %s", ToUtf8Display(path).c_str());
             }
+        } else if (ext == ".tglayer" || ext == ".tgboundary") {
+            // 配置データへ足して（読み込み済みならそれを使って）編集ウィンドウを開く。
+            const size_t before = m_surfaceLayouts.layerMaterials.size() + m_surfaceLayouts.boundaryMaterials.size();
+            const graph::SurfaceId id = io::LoadSharedSurfaceAsset(m_workspace, path, m_device, m_pipelineCache,
+                                                                   m_textureLibrary, m_materialLibrary, m_surfaceLayouts);
+            if (id == 0) {
+                TG_LOG_ERROR("アセットを開けません: %s", ToUtf8Display(path).c_str());
+            } else {
+                if (ext == ".tglayer") {
+                    m_editSurfacePreset = id;
+                    m_selectedPresetLayer = 0;
+                    m_selectedPresetMask = false;
+                    m_surfacePresetError.clear();
+                } else {
+                    m_editBoundaryMaterial = id;
+                }
+                if (m_surfaceLayouts.layerMaterials.size() + m_surfaceLayouts.boundaryMaterials.size() != before) {
+                    m_renderer.InvalidateSceneMaterials();
+                    ++m_layerThumbnailTextureRevision;
+                    MarkDocumentChanged();
+                }
+            }
         } else if (IsImage(ext)) {
             const compositor::TextureId id = m_textureLibrary.Load(m_device, m_pipelineCache, path);
             if (id != compositor::kNoTexture) {
@@ -321,6 +376,7 @@ void Application::ProcessAssetWork() {
         }
         m_assetRefresh = true;
     }
+    PersistLayerThumbnails();
     if (m_assetRefresh) RefreshAssetBrowser();
     m_assetThumbnails.Process(m_device, m_pipelineCache, m_workspace, m_assetDirectory);
 }
@@ -392,6 +448,8 @@ void Application::DrawAssetBrowser() {
             compositor::TextureId texture = compositor::kNoTexture;
             compositor::MaterialAssetId material = compositor::kNoMaterialAsset;
             bool missing = false;
+            graph::SurfaceId layer = 0;
+            graph::SurfaceId boundary = 0;
         };
         std::unordered_map<std::wstring, Loaded> loaded;
         for (const auto& a : m_textureLibrary.Entries()) if (!a.path.empty())
@@ -400,6 +458,29 @@ void Application::DrawAssetBrowser() {
             loaded[PathKey(a.assetPath)] = {static_cast<ImTextureID>(a.thumbnail.srv.gpu.ptr), compositor::kNoTexture, a.id, MaterialHasMissingTexture(a)};
         for (const auto& a : m_skyLibrary.Entries()) if (!a.assetPath.empty())
             loaded[PathKey(a.assetPath)] = {static_cast<ImTextureID>(a.thumbnail.srv.gpu.ptr)};
+        for (const auto& a : m_surfaceLayouts.layerMaterials) if (!a.assetPath.empty()) {
+            const auto cached = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == a.id; });
+            Loaded entry;
+            entry.handle = cached != m_layerThumbnails.end() && cached->ready ? static_cast<ImTextureID>(cached->texture.srv.gpu.ptr) : 0;
+            entry.layer = a.id;
+            loaded[PathKey(a.assetPath)] = entry;
+        }
+        for (const auto& a : m_surfaceLayouts.boundaryMaterials) if (!a.assetPath.empty()) {
+            // Road の境界マテリアル行と同じく、境界マスク（無ければハイト）の R チャンネル。
+            const auto* texture = m_textureLibrary.Find(a.mask ? a.mask : a.height);
+            Loaded entry;
+            entry.handle = texture ? static_cast<ImTextureID>(texture->ChannelHandle(0).ptr) : 0;
+            entry.missing = texture && texture->missing;
+            entry.boundary = a.id;
+            loaded[PathKey(a.assetPath)] = entry;
+        }
+        // レイヤーマテリアル編集を開く（開いていれば対象を切り替える）。
+        const auto editLayer = [&](graph::SurfaceId id) {
+            m_editSurfacePreset = id;
+            m_selectedPresetLayer = 0;
+            m_selectedPresetMask = false;
+            m_surfacePresetError.clear();
+        };
         int index = 0;
         for (const auto& entry : m_assetEntries) {
             const auto path = entry.path();
@@ -409,11 +490,14 @@ void Application::DrawAssetBrowser() {
             ImTextureID handle = 0;
             compositor::TextureId textureId = compositor::kNoTexture;
             compositor::MaterialAssetId materialId = compositor::kNoMaterialAsset;
+            graph::SurfaceId layerId = 0, boundaryId = 0;
             bool missing = false;
             if (const auto found = loaded.find(PathKey(path)); found != loaded.end()) {
                 handle = found->second.handle;
                 textureId = found->second.texture;
                 materialId = found->second.material;
+                layerId = found->second.layer;
+                boundaryId = found->second.boundary;
                 missing = found->second.missing;
             }
             if (!handle && !folder && ImGui::IsRectVisible(ImVec2(size, size)))
@@ -425,7 +509,8 @@ void Application::DrawAssetBrowser() {
                 DrawFolderIcon(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
             } else if (!handle) {
                 const char* type = ext == ".tgscene" ? "シーン" : ext == ".tgmat" ? "マテリアル" :
-                    ext == ".tgsky" ? "天球" : (ext == ".tgproj" || ext == ".mmproj") ? "旧形式" :
+                    ext == ".tgsky" ? "天球" : ext == ".tglayer" ? "レイヤー" : ext == ".tgboundary" ? "境界" :
+                    (ext == ".tgproj" || ext == ".mmproj") ? "旧形式" :
                     IsImage(ext) || ext == ".hdr" ? "画像" : "ファイル";
                 const auto min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
                 const auto text = ImGui::CalcTextSize(type);
@@ -445,6 +530,9 @@ void Application::DrawAssetBrowser() {
                     const auto& entries = m_materialLibrary.Entries();
                     for (size_t i = 0; i < entries.size(); ++i) if (entries[i].id == materialId) m_selectedMaterial = int(i);
                 }
+                // 編集ウィンドウが開いていれば、選んだものへ内容を切り替える（フォーカスは移さない）。
+                if (layerId && m_editSurfacePreset && m_editSurfacePreset != layerId) editLayer(layerId);
+                if (boundaryId && m_editBoundaryMaterial) m_editBoundaryMaterial = boundaryId;
             }
             if (thumb.doubleClicked) {
                 if (folder) {
@@ -454,22 +542,37 @@ void Application::DrawAssetBrowser() {
                     m_showTexturePreview = true;
                 } else if (materialId != compositor::kNoMaterialAsset) {
                     m_showMaterialSphere = true;
+                } else if (layerId) {
+                    editLayer(layerId);
+                    ImGui::SetWindowFocus("レイヤーマテリアル編集");
+                } else if (boundaryId) {
+                    m_editBoundaryMaterial = boundaryId;
+                    ImGui::SetWindowFocus("境界マテリアル編集");
                 } else {
                     m_pendingAssetOpen = path;
                 }
             }
-            // 読み込み済みの画像とマテリアルは従来と同じペイロードでドラッグできる。
+            // 読み込み済みの画像・マテリアル・レイヤーマテリアル・境界マテリアルは従来と同じペイロードでドラッグできる。
             // テクスチャは hold-to-switch を残すため SourceNoHoldToOpenOthers を付けない。
-            if ((textureId != compositor::kNoTexture || materialId != compositor::kNoMaterialAsset) &&
+            if ((textureId != compositor::kNoTexture || materialId != compositor::kNoMaterialAsset || layerId || boundaryId) &&
                 ImGui::BeginDragDropSource()) {
                 if (materialId != compositor::kNoMaterialAsset)
                     ImGui::SetDragDropPayload(kMaterialDragDropType, &materialId, sizeof(materialId));
+                else if (layerId)
+                    ImGui::SetDragDropPayload(kLayerMaterialDragDropType, &layerId, sizeof(layerId));
+                else if (boundaryId)
+                    ImGui::SetDragDropPayload(kBoundaryMaterialDragDropType, &boundaryId, sizeof(boundaryId));
                 else
                     ImGui::SetDragDropPayload(kTextureDragDropType, &textureId, sizeof(textureId));
                 ImGui::TextUnformatted(ToUtf8Display(path.filename()).c_str());
                 ImGui::EndDragDropSource();
             }
-            if (thumb.hovered) ImGui::SetTooltip("%s\nダブルクリックで開く", ToUtf8Display(path).c_str());
+            if (thumb.hovered) {
+                const char* hint = (layerId || boundaryId) ? "ダブルクリックで編集 / Road の区間の行へドラッグで割り当て"
+                    : (ext == ".tglayer" || ext == ".tgboundary") ? "ダブルクリックでシーンへ読み込んで編集"
+                    : "ダブルクリックで開く";
+                ImGui::SetTooltip("%s\n%s", ToUtf8Display(path).c_str(), hint);
+            }
             if (ImGui::BeginPopupContextItem("assetMenu")) {
                 m_selectedAssetPath = path;
                 if (ImGui::MenuItem("開く")) {
@@ -483,6 +586,17 @@ void Application::DrawAssetBrowser() {
                 } else if (materialId != compositor::kNoMaterialAsset) {
                     ImGui::Separator();
                     DrawMaterialContextMenu(materialId);
+                } else if (layerId || boundaryId) {
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("編集")) {
+                        if (layerId) editLayer(layerId);
+                        else m_editBoundaryMaterial = boundaryId;
+                    }
+                    // ファイルは残す。配置で使っていれば外さない（理由はステータスバーに出る）。
+                    if (ImGui::MenuItem("シーンから外す")) {
+                        if (layerId) RemoveLayerMaterialFromScene(layerId);
+                        else RemoveBoundaryMaterialFromScene(boundaryId);
+                    }
                 }
                 if (!folder && path.filename() != L"project.tgproj") {
                     ImGui::Separator();
@@ -519,6 +633,36 @@ void Application::DrawAssetBrowser() {
                 m_skyLibrary.SetActive(id);
                 m_showSkyPreview = true;
                 m_pendingAssetsSave = true;
+            }
+            // レイヤーマテリアル・境界マテリアルは、作成と同時に現在のシーンの配置データへ入り、編集ウィンドウを開く。
+            if (ImGui::MenuItem("レイヤーマテリアルを作成")) {
+                graph::LayerMaterial material;
+                material.id = m_surfaceLayouts.AllocateId();
+                material.name = "新しいレイヤーマテリアル";
+                material.materials.emplace_back();
+                material.assetPath = m_workspace.UniquePath(m_assetDirectory, material.name, ".tglayer");
+                if (material.id) {
+                    editLayer(material.id);
+                    m_surfaceLayouts.layerMaterials.push_back(std::move(material));
+                    m_pendingAssetsSave = true;
+                    MarkDocumentChanged();
+                } else {
+                    TG_LOG_ERROR("レイヤーマテリアルの ID を確保できません");
+                }
+            }
+            if (ImGui::MenuItem("境界マテリアルを作成")) {
+                compositor::BoundaryMaterial material;
+                material.id = m_surfaceLayouts.AllocateId();
+                material.name = "新しい境界マテリアル";
+                material.assetPath = m_workspace.UniquePath(m_assetDirectory, material.name, ".tgboundary");
+                if (material.id) {
+                    m_editBoundaryMaterial = material.id;
+                    m_surfaceLayouts.boundaryMaterials.push_back(std::move(material));
+                    m_pendingAssetsSave = true;
+                    MarkDocumentChanged();
+                } else {
+                    TG_LOG_ERROR("境界マテリアルの ID を確保できません");
+                }
             }
             if (ImGui::MenuItem("ファイルを読み込む…")) {
                 const auto paths = ShowOpenFilesDialog(

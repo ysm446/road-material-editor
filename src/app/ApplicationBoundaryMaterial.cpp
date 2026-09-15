@@ -2,78 +2,29 @@
 #include "app/ApplicationUiHelpers.h"
 #include "ui/UiStyle.h"
 #include "core/Log.h"
-#include <imgui_internal.h>
 #include <algorithm>
 #include <cstdio>
 
 namespace tg {
-void Application::DrawBoundaryMaterialLibrary() {
-    if (const auto* window = ImGui::FindWindowByName("レイヤーマテリアル"); window && window->DockId)
-        ImGui::SetNextWindowDockID(window->DockId, ImGuiCond_FirstUseEver);
-    bool create = false, remove = false;
-    if (ImGui::Begin("境界マテリアル")) {
-        const auto menu = [&](bool target) {
-            if (ImGui::MenuItem("新規作成")) create = true;
-            if (ImGui::MenuItem("編集", nullptr, false, target)) m_editBoundaryMaterial = m_selectedBoundaryMaterial;
-            if (ImGui::MenuItem("削除", "DEL", false, target)) remove = true;
-        };
-        const float size = ui::Scaled(84);
-        const int columns = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / (size + ImGui::GetStyle().ItemSpacing.x)));
-        int index = 0;
-        for (const auto& material : m_surfaceLayouts.boundaryMaterials) {
-            ImGui::PushID(static_cast<int>(material.id)); ImGui::BeginGroup();
-            const auto* texture = m_textureLibrary.Find(material.mask ? material.mask : material.height);
-            const auto clicked = ui::ThumbnailButton("boundary", texture ? static_cast<ImTextureID>(texture->ChannelHandle(0).ptr) : 0,
-                size, m_selectedBoundaryMaterial == material.id);
-            if (clicked.clicked) m_selectedBoundaryMaterial = material.id;
-            if (clicked.doubleClicked) m_editBoundaryMaterial = material.id;
-            if (clicked.hovered) ImGui::SetTooltip("%s\nダブルクリックで編集", material.name.c_str());
-            // Road の沿道欄の境界マテリアル行へ落とすと、その区間に割り当たる。
-            if (ImGui::BeginDragDropSource()) {
-                ImGui::SetDragDropPayload(kBoundaryMaterialDragDropType, &material.id, sizeof(material.id));
-                ImGui::TextUnformatted(material.name.c_str());
-                ImGui::EndDragDropSource();
+// 境界マテリアルをシーンから外す。ファイル（.tgboundary）は残す。沿道で使っていれば外さない。
+bool Application::RemoveBoundaryMaterialFromScene(graph::SurfaceId id) {
+    for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands)
+        for (const auto& span : band.spans)
+            if (span.boundaryMaterial == id) {
+                TG_LOG_WARN("沿道で使用中の境界マテリアルはシーンから外せません。割り当てを解除してください");
+                return false;
             }
-            if (ImGui::BeginPopupContextItem("boundaryMenu")) {
-                m_selectedBoundaryMaterial = material.id; menu(true); ImGui::EndPopup();
-            }
-            ui::GridCaption(material.name.c_str(), size);
-            ImGui::EndGroup(); ImGui::PopID();
-            if (++index % columns && index < static_cast<int>(m_surfaceLayouts.boundaryMaterials.size())) ImGui::SameLine();
-        }
-        if (ImGui::BeginPopupContextWindow("boundaryBackground", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
-            menu(false); ImGui::EndPopup();
-        }
-        remove |= ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
-            ImGui::IsKeyPressed(ImGuiKey_Delete, false);
-        if (remove && m_selectedBoundaryMaterial) {
-            bool used = false;
-            for (const auto& layout : m_surfaceLayouts.layouts) for (const auto& band : layout.bands)
-                for (const auto& span : band.spans) used |= span.boundaryMaterial == m_selectedBoundaryMaterial;
-            if (used) ImGui::OpenPopup("使用中の境界");
-            else {
-                std::erase_if(m_surfaceLayouts.boundaryMaterials, [&](const auto& m) { return m.id == m_selectedBoundaryMaterial; });
-                if (m_editBoundaryMaterial == m_selectedBoundaryMaterial) m_editBoundaryMaterial = 0;
-                m_selectedBoundaryMaterial = 0; MarkDocumentChanged();
-            }
-        }
-        if (ImGui::IsPopupOpen("使用中の境界")) ImGui::SetNextWindowSize(ImVec2(ui::Scaled(400), 0));
-        if (ImGui::BeginPopup("使用中の境界")) {
-            ui::HintText("沿道で使用中です。割り当てを解除してから削除してください。"); ImGui::EndPopup();
-        }
-    }
-    ImGui::End();
-    if (create) {
-        compositor::BoundaryMaterial material;
-        material.id = m_surfaceLayouts.AllocateId(); material.name = "新しい境界マテリアル";
-        if (material.id) {
-            m_selectedBoundaryMaterial = m_editBoundaryMaterial = material.id;
-            m_surfaceLayouts.boundaryMaterials.push_back(material); MarkDocumentChanged();
-        }
-    }
+    if (!std::erase_if(m_surfaceLayouts.boundaryMaterials, [&](const auto& m) { return m.id == id; })) return false;
+    if (m_editBoundaryMaterial == id) m_editBoundaryMaterial = 0;
+    MarkDocumentChanged();
+    return true;
+}
+
+// 境界マテリアルの編集ウィンドウ。一覧はアセットの帯（.tgboundary）にあり、ダブルクリックでここを開く。
+void Application::DrawBoundaryMaterialEditor() {
     const auto found = std::find_if(m_surfaceLayouts.boundaryMaterials.begin(), m_surfaceLayouts.boundaryMaterials.end(),
         [&](const auto& m) { return m.id == m_editBoundaryMaterial; });
-    if (!m_editBoundaryMaterial || found == m_surfaceLayouts.boundaryMaterials.end()) return;
+    if (!m_editBoundaryMaterial || found == m_surfaceLayouts.boundaryMaterials.end()) { m_editBoundaryMaterial = 0; return; }
     auto edited = *found;
     bool open = true, changed = false;
     ImGui::SetNextWindowSize(ImVec2(ui::Scaled(540), ui::Scaled(600)), ImGuiCond_FirstUseEver);

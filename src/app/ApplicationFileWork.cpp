@@ -272,7 +272,7 @@ void Application::ResetProject() {
     m_layerThumbnailsDirty = true; ++m_layerThumbnailTextureRevision;
     m_previewSurfaceBands = m_connectSurfaceBands = m_displaceConnectedBands = false;
     m_editSurfacePreset = 0;
-    m_selectedBoundaryMaterial = m_editBoundaryMaterial = 0;
+    m_editBoundaryMaterial = 0;
     m_surfacePresetError.clear();
     m_selectedGraphNode = 0;
     m_previewGraphNode = 0;
@@ -366,7 +366,7 @@ void Application::ProcessPendingFileWork() {
             m_editSurfacePreset = graph::PresetLayerMaterial(m_surfaceLayouts, m_options.editPreset);
             if (!m_editSurfacePreset) m_editSurfacePreset = m_options.editPreset;
             m_options.editPreset = 0;
-            m_selectedBoundaryMaterial = m_editBoundaryMaterial = m_options.editBoundary;
+            m_editBoundaryMaterial = m_options.editBoundary;
             m_options.editBoundary = 0;
             m_surfacePresetError.clear();
             m_pathEdit = PathEditState{};
@@ -410,6 +410,7 @@ void Application::ProcessPendingFileWork() {
                              m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
         if (io::SaveProject(path, refs, &m_workspace)) {
             SaveSceneThumbnail(path);
+            m_persistLayerThumbnails = true;
             m_assetRefresh = true;
             m_recentProjects.Add(m_workspace.Root(), path);
             m_projectPath = path;

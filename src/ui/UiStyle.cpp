@@ -875,6 +875,18 @@ bool PropertyTextInput(const char* label, char* buffer, size_t bufferSize, const
     return changed;
 }
 
+bool PropertyTextInputCommit(const char* label, char* buffer, size_t bufferSize,
+                             const char* tooltip) {
+    PropertyLabel(label, tooltip);
+    ImGui::SetNextItemWidth(
+        std::min(TextScaled(kTextInputWidth), ImGui::GetContentRegionAvail().x));
+    const bool enter = ImGui::InputText("##value", buffer, bufferSize, ImGuiInputTextFlags_EnterReturnsTrue);
+    // Enter で確定した直後のフレームでは Deactivated も立つ。二重に返さないよう Enter を優先する。
+    const bool committed = enter || ImGui::IsItemDeactivatedAfterEdit();
+    PropertyEnd();
+    return committed;
+}
+
 void PropertyValue(const char* label, const char* format, ...) {
     PropertyLabel(label, nullptr);
     va_list args;

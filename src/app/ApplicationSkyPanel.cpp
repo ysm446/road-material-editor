@@ -217,8 +217,10 @@ void Application::DrawSkyPreviewWindow() {
     if (ui::BeginPropertyTable("skyBasicRows")) {
         char nameBuffer[128] = {};
         std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", active->name.c_str());
-        if (ui::PropertyTextInput("名前", nameBuffer, sizeof(nameBuffer))) {
-            active->name = nameBuffer;
+        // 名前は `.tgsky` のファイル名と同じ。保存済みなら確定でファイルを改名する。
+        if (ui::PropertyTextInputCommit("名前", nameBuffer, sizeof(nameBuffer),
+                                        "アセットのファイル名（拡張子なし）。保存済みならファイルも改名する")) {
+            RequestAssetNameChange(active->assetPath, active->name, nameBuffer);
         }
 
         static const char* const kSourceLabels[] = {"手続き的な空", "HDRI"};

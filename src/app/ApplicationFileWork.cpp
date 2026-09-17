@@ -529,6 +529,9 @@ void Application::ProcessPendingFileWork() {
         // 環境の作り直しは、次のフレームの SetActiveSky が判断する。
         m_skyLibrary.Remove(m_device, removed);
     }
+
+    // ここまでの読み込み・改名・移動で付け替わったパスへ名前を揃える。
+    SyncAssetNamesToFiles();
 }
 
 }  // namespace tg

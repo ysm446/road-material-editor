@@ -189,10 +189,11 @@ bool Application::DrawMaterialProperties(compositor::MaterialAsset& asset) {
     if (ui::BeginPropertyTable("materialBasicRows")) {
         char nameBuffer[128] = {};
         std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", asset.name.c_str());
-        if (ui::PropertyTextInput("名前", nameBuffer, sizeof(nameBuffer))) {
-            asset.name = nameBuffer;
+        // 名前は `.tgmat` のファイル名と同じ。保存済みなら確定でファイルを改名する。
+        if (ui::PropertyTextInputCommit("名前", nameBuffer, sizeof(nameBuffer),
+                                        "アセットのファイル名（拡張子なし）。保存済みならファイルも改名する")) {
             // 名前もアンドゥの対象。落とすと、次のアンドゥで改名まで巻き戻る。
-            changed = true;
+            changed |= RequestAssetNameChange(asset.assetPath, asset.name, nameBuffer);
         }
 
         static const compositor::MaterialAsset kDefaultAsset;

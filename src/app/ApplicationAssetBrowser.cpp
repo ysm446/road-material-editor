@@ -157,6 +157,41 @@ void Application::FinishAssetRename(bool commit) {
     m_pendingAssetRenameName = std::move(name);
 }
 
+void Application::SyncAssetNamesToFiles() {
+    const auto sync = [](const fs::path& assetPath, std::string& name) {
+        if (assetPath.empty()) return;
+        auto stem = ToUtf8Display(assetPath.stem());
+        if (!stem.empty() && stem != name) name = std::move(stem);
+    };
+    for (const auto& a : m_materialLibrary.Entries()) {
+        auto* asset = m_materialLibrary.FindMutable(a.id);
+        sync(asset->assetPath, asset->name);
+    }
+    for (const auto& a : m_skyLibrary.Entries()) {
+        auto* sky = m_skyLibrary.FindMutable(a.id);
+        sync(sky->assetPath, sky->name);
+    }
+    for (auto& a : m_surfaceLayouts.layerMaterials) sync(a.assetPath, a.name);
+    for (auto& a : m_surfaceLayouts.boundaryMaterials) sync(a.assetPath, a.name);
+}
+
+bool Application::RequestAssetNameChange(const fs::path& assetPath, std::string& name, const char* newName) {
+    if (newName == nullptr || newName[0] == '\0' || name == newName) return false;
+    if (assetPath.empty()) {
+        name = newName;
+        return true;
+    }
+    std::error_code error;
+    if (!fs::exists(assetPath, error)) {
+        // まだ書き出していない（保存時にこの名前でファイルができる）。
+        name = newName;
+        return true;
+    }
+    m_pendingAssetRename = assetPath;
+    m_pendingAssetRenameName = std::string(newName) + ToUtf8Portable(assetPath.extension());
+    return false;
+}
+
 // 移動・改名したファイル（フォルダなら配下も）を指す、読み込み済みのアセットの絶対パスを付け替える。
 // 参照は ID で解決するので、ファイル側はこれだけで追従する。
 void Application::RelinkAssetPaths(const fs::path& from, const fs::path& to) {

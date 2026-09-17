@@ -600,6 +600,12 @@ private:
     char m_assetRenameBuffer[256] = {};
     std::filesystem::path m_pendingAssetRename;
     std::string m_pendingAssetRenameName;
+    // **ファイルを持つアセットの名前はファイル名（拡張子なし）を正とする。**
+    // 読み込み・改名・移動のあとに、名前をファイル名へ揃える（毎フレームの保留処理の最後で呼ぶ）。
+    void SyncAssetNamesToFiles();
+    // パネルの「名前」欄からの変更。ファイルがあればその改名を予約し（名前は改名後に追従する）、
+    // 未保存なら名前だけを変える。変えたときは true。
+    bool RequestAssetNameChange(const std::filesystem::path& assetPath, std::string& name, const char* newName);
     // 一覧のフォルダ・左のフォルダ階層に置くドロップ先。サムネイルが落とされたらそのフォルダへの移動を予約する。
     void AssetFolderDropTarget(const std::filesystem::path& directory);
     std::vector<std::filesystem::path> m_pendingAssetMoves;

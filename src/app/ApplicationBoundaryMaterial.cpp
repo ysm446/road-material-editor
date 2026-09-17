@@ -33,7 +33,9 @@ void Application::DrawBoundaryMaterialEditor() {
         if (ui::BeginPropertyTable("boundaryProperties")) {
             const compositor::BoundaryMaterial defaults;
             char name[128]; std::snprintf(name, sizeof(name), "%s", edited.name.c_str());
-            if (ui::PropertyTextInput("名前", name, sizeof(name), "境界の一覧に表示する名前") && name[0]) { edited.name = name; changed = true; }
+            // 名前は `.tgboundary` のファイル名と同じ。保存済みなら確定でファイルを改名する。
+            if (ui::PropertyTextInputCommit("名前", name, sizeof(name), "アセットのファイル名（拡張子なし）。保存済みならファイルも改名する"))
+                changed |= RequestAssetNameChange(edited.assetPath, edited.name, name);
             changed |= DrawTextureSlotRow("境界マスク", edited.mask, m_textureLibrary);
             changed |= DrawTextureSlotRow("ハイト", edited.height, m_textureLibrary);
             changed |= ui::PropertyFloat("境界幅", &edited.widthMeters, 0.02f, 2, defaults.widthMeters, "道路端を中心とする帯の幅", "%.2f m");

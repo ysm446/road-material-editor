@@ -104,6 +104,10 @@ bool PropertyCombo(const char* label, int* value, const char* const items[], int
 void LastPropertyComboRect(ImVec2& outMin, ImVec2& outMax);
 bool PropertyTextInput(const char* label, char* buffer, size_t bufferSize,
                        const char* tooltip = nullptr);
+// 確定したときだけ true を返す文字入力（Enter か、編集してからフォーカスが外れたとき）。
+// ファイルの改名など、1 文字ごとに反応させたくない値に使う。
+bool PropertyTextInputCommit(const char* label, char* buffer, size_t bufferSize,
+                             const char* tooltip = nullptr);
 // 表示専用の値。
 void PropertyValue(const char* label, const char* format, ...);
 

@@ -552,7 +552,9 @@ void Application::DrawSurfacePresetEditor() {
         ImGui::Separator();
         if (ui::BeginPropertyTable("layerProperties")) {
             char name[128]; std::snprintf(name, sizeof(name), "%s", preset.name.c_str());
-            if (ui::PropertyTextInput("名前", name, sizeof(name), "アセットの名前") && name[0]) { preset.name = name; changed = true; }
+            // 名前は `.tglayer` のファイル名と同じ。保存済みなら確定でファイルを改名する。
+            if (ui::PropertyTextInputCommit("名前", name, sizeof(name), "アセットのファイル名（拡張子なし）。保存済みならファイルも改名する"))
+                changed |= RequestAssetNameChange(preset.assetPath, preset.name, name);
             const graph::LayerMaterial defaults;
             changed |= ui::PropertyFloat("凹凸の高さ", &preset.displacementMeters, 0, 10, defaults.displacementMeters, "合成ハイトで押し出す実寸", "%.3f m");
             changed |= ui::PropertyFloat("ブレンド幅", &preset.layerBlendRange, 0, 1, defaults.layerBlendRange, "ハイト境界の柔らかさ");

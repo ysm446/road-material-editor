@@ -25,9 +25,13 @@ public:
     Window& operator=(const Window&) = delete;
 
     // width / height はクライアント領域（描画される中身）のサイズ。
-    // ウィンドウ枠のぶんは内部で足す。
+    // ウィンドウ枠のぶんは内部で足す。**非表示のまま作る。** Show() で表示する。
     bool Create(const wchar_t* title, uint32_t width, uint32_t height);
     void Destroy();
+
+    // ウィンドウを表示する。2 回目以降は何もしない。
+    void Show();
+    bool IsShown() const { return m_shown; }
 
     // メニューなどからアプリを閉じる。
     void RequestClose() { m_shouldClose = true; }
@@ -64,6 +68,7 @@ private:
     uint32_t m_height = 0;
     bool m_shouldClose = false;
     bool m_minimized = false;
+    bool m_shown = false;
     MessageHook m_messageHook;
     ResizeCallback m_resizeCallback;
     DropCallback m_dropCallback;

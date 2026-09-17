@@ -210,6 +210,8 @@ private:
     // 真のときはフレームレートを落とさない。
     bool Headless() const;
     // 設定から決まる UI の拡大率。追従なら Windows の表示スケール。
+    // 起動（Initialize）からの経過時間。起動の速さをログへ出すため。
+    float ElapsedSinceStartMs() const;
     float DesiredUiScale() const;
     // 拡大率を掛けた既定のクライアント領域。1920x1080 を拡大率倍したもの。
     // 追従を入れたときに作業面積（論理サイズ）が変わらないようにするため。
@@ -706,6 +708,7 @@ private:
     // 前フレームで前面だったか。切り替わった時点で締め切りを捨てる。
     bool m_wasForeground = true;
     uint32_t m_frameCounter = 0;
+    std::chrono::steady_clock::time_point m_startTime;
 };
 
 }  // namespace tg

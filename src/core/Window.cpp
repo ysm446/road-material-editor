@@ -78,9 +78,18 @@ bool Window::Create(const wchar_t* title, uint32_t width, uint32_t height) {
     // エクスプローラからのドロップを受け付ける（WM_DROPFILES）。
     ::DragAcceptFiles(m_hwnd, TRUE);
 
+    // ここでは表示しない。表示は Show() で、最初のフレームを描いてから行う
+    // （初期化中の白い窓や、拡大前の大きさで開いてから広がる様子を見せない）。
+    return true;
+}
+
+void Window::Show() {
+    if (m_hwnd == nullptr || m_shown) {
+        return;
+    }
+    m_shown = true;
     ::ShowWindow(m_hwnd, SW_SHOWDEFAULT);
     ::UpdateWindow(m_hwnd);
-    return true;
 }
 
 // クライアント領域（描画される中身）を指定サイズへ合わせる。

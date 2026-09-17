@@ -17,6 +17,7 @@
 #include <DirectXMath.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -87,6 +88,7 @@ std::string ScreenshotFileName() {
 
 bool Application::Initialize(const StartupOptions& options) {
     m_options = options;
+    m_startTime = std::chrono::steady_clock::now();
 
     // ファイル選択ダイアログ（IFileDialog）が COM を使う。
     m_comInitialized =
@@ -113,6 +115,9 @@ bool Application::Initialize(const StartupOptions& options) {
     if (!m_shaderCompiler.Create(ResolveShaderRoot())) {
         return false;
     }
+    // コンパイル済みのシェーダをアプリのフォルダへ残す。2 回目以降の起動は
+    // DXC を回さずに済む。
+    m_shaderCompiler.SetCacheDirectory(io::AppDataDirectory() / L"shader-cache");
     if (!m_pipelineCache.Create(m_device.GetDevice(), &m_shaderCompiler)) {
         return false;
     }
@@ -285,7 +290,8 @@ int Application::Run() {
         // 開発用のオプションが動いている間は落とさない。起動直後はウィンドウが
         // 背面のことがあり、待つと保存やスクリーンショットが遅くなる。
         if (!Headless()) {
-            const bool foreground = m_window.IsForeground();
+            // 最初のフレームを描くまでは非表示なので、前面扱いにして間引かない。
+            const bool foreground = !m_window.IsShown() || m_window.IsForeground();
             if (foreground != m_wasForeground) {
                 // 前面へ戻った直後に、積み上げた締め切りで 1 フレーム待たされないように。
                 m_wasForeground = foreground;
@@ -497,6 +503,13 @@ int Application::Run() {
         }
 
         m_device.EndFrame(m_settings.Display().vsync);
+
+        // 最初のフレームをバックバッファへ出してから窓を見せる。
+        // 初期化中（シェーダのコンパイルなど）の白い窓を出さないため。
+        if (!m_window.IsShown()) {
+            TG_LOG_INFO("最初のフレームまで %.0f ms", ElapsedSinceStartMs());
+            m_window.Show();
+        }
 
         // デバッグレイヤーが溜めた検証エラーをログ（とステータスバー）へ流す。
         // 汲まないとデバッガを繋がない限り誰の目にも触れない。
@@ -779,6 +792,11 @@ void Application::DrawStatusBar() {
         }
     }
     ImGui::End();
+}
+
+float Application::ElapsedSinceStartMs() const {
+    const auto elapsed = std::chrono::steady_clock::now() - m_startTime;
+    return std::chrono::duration<float, std::milli>(elapsed).count();
 }
 
 float Application::DesiredUiScale() const {

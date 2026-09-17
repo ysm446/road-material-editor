@@ -172,14 +172,18 @@ void ThumbnailFrame(const ImVec2& min, const ImVec2& max, bool selected, bool ho
                       Scaled(1.0f));
 }
 
-Thumbnail ThumbnailButton(const char* id, ImTextureID texture, float size, bool selected) {
+Thumbnail ThumbnailButton(const char* id, ImTextureID texture, float size, bool selected,
+                          float captionHeight) {
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 max(min.x + size, min.y + size);
 
     // ID を持つアイテムを先に置く。これが無いとドラッグ元にできない。
-    ImGui::InvisibleButton(id, ImVec2(size, size));
+    // 名前の高さも含めて 1 つのアイテムにする（名前を押しても同じ扱い）。
+    ImGui::InvisibleButton(id, ImVec2(size, size + captionHeight));
 
     Thumbnail state;
+    state.min = min;
+    state.max = max;
     state.hovered = ImGui::IsItemHovered();
     state.clicked = ImGui::IsItemClicked();
     state.doubleClicked = state.hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
@@ -1004,6 +1008,10 @@ bool HorizontalSplitter(const char* id, float* height, float minHeight, float ma
     return released;
 }
 
+float GridCaptionHeight() {
+    return 2.0f * ImGui::GetTextLineHeightWithSpacing();
+}
+
 void GridCaption(const char* text, float width) {
     if (text == nullptr) {
         return;
@@ -1040,7 +1048,7 @@ CaptionEdit GridCaptionInput(const char* id, char* buffer, size_t bufferSize, fl
     const CaptionEdit result = InlineNameInput(id, buffer, bufferSize, width, focus);
     // GridCaption の 2 行ぶんに高さを揃える（編集中に升目の高さが変わらないように）。
     const float spacing = ImGui::GetStyle().ItemSpacing.y;
-    const float rest = 2.0f * ImGui::GetTextLineHeightWithSpacing() - (ImGui::GetCursorPosY() - startY) - spacing;
+    const float rest = GridCaptionHeight() - (ImGui::GetCursorPosY() - startY) - spacing;
     if (rest > 0.0f) ImGui::Dummy(ImVec2(width, rest));
     return result;
 }

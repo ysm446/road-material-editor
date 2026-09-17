@@ -741,21 +741,25 @@ void Application::DrawAssetBrowser() {
             ImGui::PushID(ToUtf8Portable(path).c_str());
             ImGui::BeginGroup();
             const bool selected = IsAssetSelected(path);
-            const auto thumb = ui::ThumbnailButton("##asset", handle, size, selected);
+            // 名前の行まで含めて 1 つの当たり判定にする（名前を押しても選べる・掴める・落とせる）。
+            const float spacing = ImGui::GetStyle().ItemSpacing.y;
+            const auto thumb = ui::ThumbnailButton("##asset", handle, size, selected,
+                                                   spacing + ui::GridCaptionHeight());
+            const ImVec2 afterTile = ImGui::GetCursorScreenPos();
             if (folder) {
-                DrawFolderIcon(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+                DrawFolderIcon(thumb.min, thumb.max);
             } else if (!handle) {
                 const char* type = ext == ".tgscene" ? "シーン" : ext == ".tgmat" ? "マテリアル" :
                     ext == ".tgsky" ? "天球" : ext == ".tglayer" ? "レイヤー" : ext == ".tgboundary" ? "境界" :
                     (ext == ".tgproj" || ext == ".mmproj") ? "旧形式" :
                     IsImage(ext) || ext == ".hdr" ? "画像" : "ファイル";
-                const auto min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+                const auto min = thumb.min, max = thumb.max;
                 const auto text = ImGui::CalcTextSize(type);
                 ImGui::GetWindowDrawList()->AddText(ImVec2((min.x + max.x - text.x) * 0.5f, (min.y + max.y - text.y) * 0.5f),
                                                     ImGui::GetColorU32(ImGuiCol_TextDisabled), type);
             }
             if (missing || (!handle && m_assetThumbnails.Failed(path)))
-                ui::MissingBadge(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+                ui::MissingBadge(thumb.min, thumb.max);
             // 押した時点で選ぶ（ドラッグの前に選択を決める）。複数選択のうちの 1 つを修飾キーなしで押したときは、
             // 全部をそのままドラッグできるよう選択を残し、ドラッグせずに離したら単独へ絞る。
             const bool plain = !io.KeyCtrl && !io.KeyShift;
@@ -876,12 +880,19 @@ void Application::DrawAssetBrowser() {
                 }
                 ImGui::EndPopup();
             }
+            // 名前は当たり判定のアイテムの上に重ねて描く（文字は操作を奪わない。
+            // 改名の入力欄は後から置くアイテムなので、そちらが優先して受ける）。
+            ImGui::SetCursorScreenPos(ImVec2(thumb.min.x, thumb.max.y + spacing));
             if (path == m_assetRenameTarget && !m_assetRenameInTree) {
                 const auto edit = ui::GridCaptionInput("##rename", m_assetRenameBuffer, sizeof(m_assetRenameBuffer), size, &m_assetRenameFocus);
                 if (edit != ui::CaptionEdit::Editing) FinishAssetRename(edit == ui::CaptionEdit::Commit);
             } else {
                 ui::GridCaption(ToUtf8Display(path.filename()).c_str(), size);
             }
+            // 名前の描画で進んだカーソルをアイテムの下へ揃える。位置を戻すだけだと
+            // ImGui が「境界を広げる SetCursorPos」と見なして警告するので、Dummy で確定する。
+            const float below = afterTile.y - ImGui::GetCursorScreenPos().y;
+            if (below > 0.0f) ImGui::Dummy(ImVec2(size, below));
             ImGui::EndGroup();
             ImGui::PopID();
             if (++index % columns && index < int(m_assetEntries.size())) ImGui::SameLine();

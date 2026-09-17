@@ -126,6 +126,10 @@ struct Thumbnail {
     // ダブルクリック。**1 回目のクリックは clicked にも立つ**ので、
     // 「選ぶ」と「開く」を両方やりたい側はそのまま両方見ればよい。
     bool doubleClicked = false;
+    // 絵の矩形（名前の領域は含まない）。アイコンや目印を重ねるときはこれを使う。
+    // 名前まで当たり判定に含めると GetItemRectMin/Max は名前の下まで伸びる。
+    ImVec2 min;
+    ImVec2 max;
 };
 
 // サムネイル 1 枚。**ドラッグ元にできる形で置く。**
@@ -136,7 +140,15 @@ struct Thumbnail {
 //
 // 戻った直後に `BeginDragDropSource()` を置いてよい
 // （枠の描画は最後のアイテムを変えない）。
-Thumbnail ThumbnailButton(const char* id, ImTextureID texture, float size, bool selected);
+//
+// captionHeight を渡すと、絵の下に名前ぶんの高さを足した矩形を 1 つのアイテムにする
+// （名前を押しても選べる・掴める・落とせる）。絵と枠は上の size x size にだけ描き、
+// 呼び出し側は戻り値の max の下へ GridCaption を置く。カーソルはアイテム全体の下へ進む。
+Thumbnail ThumbnailButton(const char* id, ImTextureID texture, float size, bool selected,
+                          float captionHeight = 0.0f);
+
+// 升目の名前（GridCaption / GridCaptionInput）の高さ。2 行ぶん。
+float GridCaptionHeight();
 
 // 一覧の行に置く小さなサムネイル。**選択枠は付けない。**
 // 行そのものが選択を示すので、画像側にも枠を出すと選択が二重に見える。

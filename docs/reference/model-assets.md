@@ -1,7 +1,7 @@
 # model-assets — 3D モデル（FBX）とマテリアルスロット
 
 作成日時: 2026-09-19 17:30
-更新日時: 2026-09-20 02:35
+更新日時: 2026-09-20 02:50
 
 FBX を読み込んで共有アセット `.tgmodel` にし、FBX のマテリアルごと（スロット）に共有マテリアル `.tgmat` を割り当てる。
 terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationModelPanel`）を移植したもの。
@@ -117,7 +117,12 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
     ギズモの軸はワールド軸で、下流に Transform があればその座標へ戻して値に足す（回転は R' = R・P・Ra・P の逆 を角度へ戻す）。
     ギズモは画面上で一定の大きさ（90px）、ImGui で重ね描きし深度は見ない。
   - Esc でドラッグ前へ戻す / 選択解除、Delete でノードごと削除、F で寄る。設定はグラフパネルのプロパティ欄（モデル / 位置 / 回転 / 倍率 / 寸法）。
-  - FBX にノードが 2 つ以上あれば、プロパティに「ノード」の節（字下げした階層から選ぶ・回転 (度)・すべて戻す）。回転を足したノードには * が付く。
+  - FBX にノードが 2 つ以上あれば、プロパティに「ノード」の節（字下げした階層から選ぶ・ギズモ・回転 (度)・すべて戻す）。回転を足したノードには * が付く。
+  - **ノード用のギズモ**（「ノード」の「ギズモ」を入れる）: ビューポートのギズモが、選んだノードの原点を中心にした回転の輪になる。
+    輪の軸はノードの回転の軸（モデルの軸を親の回転と置き方に合わせたもの）。掴んだときの回転 S に、その軸まわりの回転を後ろから掛ける
+    （S' = S · Ra）。Ctrl で 15 度刻み、Esc で掴む前に戻す。部品のクリックはそのノードを選び（モデル全体は動かさない）、
+    選んだノードの部品の枠を選択の色、カーソルが乗った部品のノードの枠をホバーの色で描く。W / E / R でモデルのギズモに戻る。
+    部品ごとの範囲（`ModelPart::minimum` / `maximum`、ノードの座標）は読み込みで求める。
 - 範囲の枠（モデルの向きに沿った境界ボックス）は `PreviewRenderer::SetOverlayLines` でレンダラが描く。シーンの深度でテストするので奥は隠れる。
   選んだ Model はそのモデル、選んだ Transform はその枝のモデルすべて（`ImGuiCol_PlotLinesHovered`）、ホバーは `ImGuiCol_PlotLines`。
 - 描画は `PreviewRenderer::drawSceneExtras` から `ModelPreview::RenderInScene` を呼ぶ。本描画は不透明の道路の直後
@@ -166,6 +171,7 @@ XNA のモデルビューワ（`docs/references/modelviewer_character_xna3_20151
 - `--gizmo-rotate`: ギズモを回転（E）で始める。`--select-node <id>` と合わせて回転ギズモを撮る。
 - `--gizmo-scale`: ギズモを倍率（R）で始める。
 - `--model-node-rotation <node> <x> <y> <z>`: `--place-model` で置いたモデルのノードに回転を足す（繰り返し指定できる）。
+- `--model-node-gizmo <node>`: ノード用のギズモを入れ、そのノードを選んで始める（`--select-node <id>` と合わせて撮る）。
 
 ## 未対応（後続）
 

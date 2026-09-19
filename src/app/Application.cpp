@@ -175,6 +175,10 @@ bool Application::Initialize(const StartupOptions& options) {
     }
     if (options.gizmoRotate) m_modelGizmoMode = ModelGizmoMode::Rotate;
     if (options.gizmoScale) m_modelGizmoMode = ModelGizmoMode::Scale;
+    if (!options.modelNodeGizmo.empty()) {
+        m_modelNodeGizmo = true;
+        m_selectedModelNodeName = options.modelNodeGizmo;
+    }
     if (!options.placeModel.empty()) {
         m_pendingModelPlacements.push_back({std::filesystem::absolute(options.placeModel).lexically_normal(), {}});
     }

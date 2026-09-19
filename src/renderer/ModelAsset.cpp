@@ -317,6 +317,16 @@ bool LoadModel(const fs::path& path, ModelAsset& asset) {
             level.triangles += count;
         }
     }
+    for (ModelLod& level : geometry->lods) {
+        for (ModelPart& part : level.parts) {
+            if (part.mesh.vertices.empty()) continue;
+            part.minimum = part.maximum = part.mesh.vertices.front().position;
+            for (const MeshVertex& v : part.mesh.vertices) {
+                XMStoreFloat3(&part.minimum, XMVectorMin(XMLoadFloat3(&part.minimum), XMLoadFloat3(&v.position)));
+                XMStoreFloat3(&part.maximum, XMVectorMax(XMLoadFloat3(&part.maximum), XMLoadFloat3(&v.position)));
+            }
+        }
+    }
     if (geometry->lods.empty() || !geometry->lods[0].triangles) {
         asset.error = "表示できるメッシュがありません";
         return false;

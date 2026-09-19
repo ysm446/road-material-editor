@@ -58,6 +58,9 @@ enum class NodeKind : uint32_t {
     Merge = 30,
     // ひび割れ。道路面の上に 3〜6 m の枝分かれした割れ目の塊を乱数で配置し、帯メッシュで貼る。
     Crack = 31,
+    // 3D モデル（.tgmodel）を 1 つ置く。出力を Mesh Output / Merge へ繋ぐとビューポートに出る。
+    // 道路メッシュの評価器は素通りし（道路を作り直さない）、描画は Application が行う。
+    Model = 32,
     // 材質。Road / Shoulder / Decal などの Material スロットへ渡す。
     Surface = 0,
     // 実寸の 3 次元カーブ。道路の線形や、面上に引いたデカールの経路。ビューポートで編集する。
@@ -184,6 +187,15 @@ struct ShoulderNodeSettings {
     uint32_t layerBlendMode[kRoadMaterialSlots] = {0, 0, 0, 0};
 };
 
+// モデル。model は Application のモデル一覧の ID（0 = なし）。position はモデルの底面の中心の位置（m）、
+// 回転は Y 軸まわり（度）、倍率はモデルアセットの倍率に掛ける。道路には依存しない。
+struct ModelNodeSettings {
+    uint64_t model = 0;
+    float position[3] = {0.0f, 0.0f, 0.0f};
+    float rotationDegrees = 0.0f;
+    float scale = 1.0f;
+};
+
 // Merge。設定は持たない。Mesh 1〜4 に繋いだ枝を順に積み、下流の白線・Decal は最初の枝の面に乗る。
 struct MergeNodeSettings {};
 
@@ -304,7 +316,7 @@ struct CompiledGraph {
 using NodeSettings =
     std::variant<LayerNodeSettings, PathNodeSettings, RoadNodeSettings, RoadMarkingNodeSettings,
                  RoadMaskNodeSettings, DecalNodeSettings, ShoulderNodeSettings, MergeNodeSettings,
-                 CrackNodeSettings, std::monostate>;
+                 CrackNodeSettings, ModelNodeSettings, std::monostate>;
 
 struct Node {
     GraphId id = 0;
@@ -402,7 +414,7 @@ const NodeDefinition* FindNodeDefinition(NodeKind kind);
 const NodeDefinition* FindNodeDefinitionByName(std::string_view name);
 // レイヤー設定を持つ種類か（Surface）。
 bool IsLayerNodeKind(NodeKind kind);
-// 道路メッシュの鎖を成す種類か（Road / Lane Marking / Decal / Shoulder / Merge / Crack）。Mesh Output は含まない。
+// 道路メッシュの鎖を成す種類か（Road / Lane Marking / Decal / Shoulder / Merge / Crack / Model）。Mesh Output は含まない。
 // 出力ピンを選ぶと、そのノードまでの鎖がメッシュシーンに出る。
 bool IsMeshNodeKind(NodeKind kind);
 // 選ぶとプレビューの対象になる種類か。Surface と Path、道路メッシュのノード。

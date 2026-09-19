@@ -54,6 +54,10 @@ constexpr std::array<PinDefinition, 2> kCrackPins = {{
     {PinKind::Input, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
+// モデルのピン。入力は無く、Mesh Output / Merge へ繋ぐ Mesh を出す。
+constexpr std::array<PinDefinition, 1> kModelPins = {{
+    {PinKind::Output, ValueType::Mesh, "Mesh"},
+}};
 // Merge のピン。入力は可変で、繋ぐたびに空きが 1 本増える（NormalizeVariablePins）。
 constexpr std::array<PinDefinition, 2> kMergePins = {{
     {PinKind::Input, ValueType::Mesh, "Mesh 1"},
@@ -85,13 +89,14 @@ constexpr std::array<PinDefinition, 2> kRoadMarkingPins = {{
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 
-constexpr std::array<NodeDefinition, 10> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 11> kNodeDefinitions = {{
     {NodeKind::Road, "road", "Road", kRoadPins},
     {NodeKind::RoadMask, "roadMask", "Road Mask", kRoadMaskPins},
     {NodeKind::Decal, "decal", "Decal", kDecalPins},
     {NodeKind::Shoulder, "shoulder", "Shoulder", kShoulderPins},
     {NodeKind::Merge, "merge", "Merge", kMergePins},
     {NodeKind::Crack, "crack", "Crack", kCrackPins},
+    {NodeKind::Model, "model", "Model", kModelPins},
     {NodeKind::RoadMarking, "roadMarking", "Lane Marking", kRoadMarkingPins},
     {NodeKind::MeshOutput, "meshOutput", "Mesh Output", kMeshOutputPins},
     {NodeKind::Surface, "surface", "Surface", kLayerNodePins},
@@ -128,7 +133,7 @@ bool IsLayerNodeKind(NodeKind kind) {
 
 bool IsMeshNodeKind(NodeKind kind) {
     return kind == NodeKind::Road || kind == NodeKind::RoadMarking || kind == NodeKind::Decal ||
-           kind == NodeKind::Shoulder || kind == NodeKind::Merge || kind == NodeKind::Crack;
+           kind == NodeKind::Shoulder || kind == NodeKind::Merge || kind == NodeKind::Crack || kind == NodeKind::Model;
 }
 
 bool IsPreviewableNodeKind(NodeKind kind) {
@@ -322,6 +327,8 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = MergeNodeSettings{};
     } else if (kind == NodeKind::Crack) {
         node.settings = CrackNodeSettings{};
+    } else if (kind == NodeKind::Model) {
+        node.settings = ModelNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
     } else {

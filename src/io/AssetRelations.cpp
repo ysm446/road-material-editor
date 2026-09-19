@@ -19,7 +19,7 @@ bool SamePath(const fs::path& a, const fs::path& b) {
 
 bool IsDocument(const fs::path& path) {
     const auto ext = path.extension().wstring();
-    for (const auto* value : {L".tgscene", L".tgmat", L".tgsky", L".tglayer", L".tgboundary", L".tgproj", L".mmproj", L".mmmat"})
+    for (const auto* value : {L".tgscene", L".tgmat", L".tgsky", L".tglayer", L".tgboundary", L".tgmodel", L".tgproj", L".mmproj", L".mmmat"})
         if (_wcsicmp(ext.c_str(), value) == 0) return true;
     return false;
 }

@@ -13,6 +13,9 @@
 
 #include <DirectXMath.h>
 
+#include <array>
+#include <functional>
+
 namespace tg::renderer {
 
 // ビューポートに何を出すか。シェーダの TG_VIEW_* と一致させること。
@@ -158,6 +161,32 @@ struct PreviewDefaults {
 };
 inline constexpr PreviewDefaults kPreviewDefaults{};
 
+// メッシュシーンとは別に描くもの（配置したモデル）へ渡す、そのパスの描き方。
+// 行列は MeshPbr と同じく**転置せずに**入れてある（シェーダは mul(M, v) で読む）。
+struct SceneDrawContext {
+    // 真ならシャドウカスケードの深度だけのパス（ピクセルシェーダ無し）。
+    bool shadowPass = false;
+    DXGI_FORMAT rtvFormat = DXGI_FORMAT_UNKNOWN;
+    DXGI_FORMAT dsvFormat = DXGI_FORMAT_UNKNOWN;
+    DirectX::XMFLOAT4X4 viewProjection{};
+    DirectX::XMFLOAT4X4 view{};
+    DirectX::XMFLOAT3 cameraPosition{};
+    // 本描画でだけ使う照明と影。
+    std::array<DirectX::XMFLOAT4X4, kShadowCascadeCount> lightViewProjections{};
+    std::array<uint32_t, kShadowCascadeCount> shadowIndices{};
+    std::array<float, kShadowCascadeCount> shadowSplits{};
+    std::array<float, kShadowCascadeCount> shadowBiases{};
+    float shadowTexelSize = 0.0f;
+    float shadowBlend = 0.0f;
+    float shadowNear = 0.0f;
+    uint32_t shadowCascadeCount = 0;
+    const Environment* environment = nullptr;
+    float iblIntensity = 1.0f;
+    DirectX::XMFLOAT3 lightDirection{};
+    float lightIlluminance = 0.0f;
+    DirectX::XMFLOAT3 lightColor{};
+};
+
 class PreviewRenderer {
 public:
     // 作業グリッド（50m 角）を包む球の半径。シーンが無いときのカメラの基準。
@@ -213,7 +242,14 @@ public:
     ExposureSettings& Exposure() { return m_exposure; }
     LightSettings& Light() { return m_light; }
     // シーンを包む球の半径（原点中心）。カメラの Frame() が使う。シーンが無ければ作業グリッドの半径。
+    // 配置したモデル（SetExtraSceneRadius）も含む。
     float BoundingRadius() const;
+    // メッシュシーンの外で描くもの（配置したモデル）。本描画の不透明メッシュの直後と、
+    // 各シャドウカスケードで呼ぶ。シェーディング表示（DebugView::Shaded / Clay 以外は呼ばない）でだけ描く。
+    std::function<void(ID3D12GraphicsCommandList*, const SceneDrawContext&)> drawSceneExtras;
+    // drawSceneExtras が描くものを包む球の半径（原点中心、m）。影の範囲とカメラの距離に使う。0 なら何も無い。
+    // **毎フレーム渡してよい。**
+    void SetExtraSceneRadius(float radius) { m_extraSceneRadius = radius; }
     TonemapMode& Tonemap() { return m_tonemap; }
     DebugView& Debug() { return m_debugView; }
     DebugView Debug() const { return m_debugView; }
@@ -291,6 +327,7 @@ private:
     std::vector<SceneMaterial> m_sceneMaterials;
     bool m_meshSceneEnabled = false;
     float m_meshSceneRadius = 0.1f;
+    float m_extraSceneRadius = 0.0f;
 
     rhi::GpuTexture m_sceneColor;  // 線形 HDR
     // 被写界深度を掛けた結果。**トーンマップはこちらを読む。**

@@ -370,7 +370,8 @@ void Application::HandleCameraInput(renderer::PreviewRenderer& preview, bool ite
     if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
         // 選択中のパスの点、無ければ選択中のメッシュ、それも無ければ原点。
         DirectX::XMFLOAT3 target = kMeshCenter;
-        if (&preview == &m_renderer && !SelectedPathFocusTarget(target)) SelectedMeshFocusTarget(target);
+        if (&preview == &m_renderer && !SelectedPathFocusTarget(target) && !SelectedModelInstanceFocusTarget(target))
+            SelectedMeshFocusTarget(target);
         camera.Focus(target);
     } else if (ImGui::IsKeyPressed(ImGuiKey_A, false)) {
         camera.Frame(kMeshCenter, includeReferenceGrid
@@ -550,6 +551,8 @@ void Application::DrawViewportPanel() {
                                    ImGuiButtonFlags_MouseButtonLeft |
                                        ImGuiButtonFlags_MouseButtonMiddle |
                                        ImGuiButtonFlags_MouseButtonRight);
+            // アセットの帯のモデル（.tgmodel / .fbx）を落とすと、その位置へ置く。
+            ModelDropTarget(imageOrigin, ImVec2(imageOrigin.x + available.x, imageOrigin.y + available.y));
 
             const ImGuiIO& io = ImGui::GetIO();
             renderer::Camera& camera = m_renderer.GetCamera();
@@ -572,8 +575,15 @@ void Application::DrawViewportPanel() {
                 m_pathEdit.dragPoint = 0;
             }
 
-            // Path 未選択なら、カーソル直下のメッシュを強調し、クリックで選ぶ。
-            if (pathNode == nullptr && m_renderer.HasMeshScene() && !lightDragging && !io.KeyAlt) {
+            // Path 未選択なら、置いたモデル → メッシュの順にカーソル直下を強調し、クリックで選ぶ。
+            // モデルを掴んだ入力はメッシュの選択へ渡さない。
+            const bool modelInput = pathNode == nullptr && !lightDragging && !io.KeyAlt &&
+                                    HandleModelInstanceInput(itemActive, itemHovered, imageOrigin, imageMax);
+            if (pathNode != nullptr || lightDragging || io.KeyAlt) {
+                m_hoveredModelNode = 0;
+                m_modelInstanceDrag = {};
+            }
+            if (pathNode == nullptr && m_renderer.HasMeshScene() && !lightDragging && !io.KeyAlt && !modelInput) {
                 HandleMeshHover(itemHovered, imageOrigin, imageMax);
             } else {
                 m_meshHighlight.hovered = -1;
@@ -593,6 +603,7 @@ void Application::DrawViewportPanel() {
             if (pathNode != nullptr) {
                 DrawPathOverlay(*pathNode, imageOrigin, imageMax);
             }
+            DrawModelInstanceOverlay(imageOrigin, imageMax);
 
             // ビューポートに重ねる操作。左上に表示モードの切り替え、右上に FPS。
             DrawViewportOverlay(imageOrigin, imageMax);

@@ -611,6 +611,9 @@ float PreviewRenderer::FocusDistance() const {
 // 現在のシーンを包む球の半径。カメラの Frame()（A キー）が使う。
 // シーンが無ければ作業グリッドの半径（グリッドだけが見えている状態の基準）。
 float PreviewRenderer::BoundingRadius() const {
+    if (m_extraSceneRadius > 0.0f) {
+        return std::max(m_meshSceneEnabled ? m_meshSceneRadius : 0.0f, m_extraSceneRadius);
+    }
     return m_meshSceneEnabled ? m_meshSceneRadius : kReferenceGridRadius;
 }
 
@@ -1041,7 +1044,8 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     constants.shadowCascadeCount = m_shadowCascadeCount;
 
     // 描くものが無ければシャドウパスも走らせない。
-    if (m_shadowEnabled && m_shadowMaps[0].IsValid() && !m_sceneMeshes.empty()) {
+    const bool drawExtras = drawSceneExtras && m_extraSceneRadius > 0.0f && IsShadedView(m_debugView);
+    if (m_shadowEnabled && m_shadowMaps[0].IsValid() && (!m_sceneMeshes.empty() || drawExtras)) {
         float displacementMargin = 0;
         for (const auto& mesh : m_meshScene.meshes)
             displacementMargin = std::max(displacementMargin, std::abs(mesh.displacementMeters));
@@ -1099,6 +1103,13 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
                 // 路面に貼る白線・ひび割れ・Decalは影を受けるだけにする。
                 // 深度だけのパスへ含めると透明マスクが無視され、帯全体が路面を遮光する。
                 drawMeshes(shadowConstants, kPassOpaque, useTessellation);
+                if (drawExtras) {
+                    SceneDrawContext shadowContext;
+                    shadowContext.shadowPass = true;
+                    shadowContext.dsvFormat = kShadowDsvFormat;
+                    shadowContext.viewProjection = cascades.matrices[cascade];
+                    drawSceneExtras(commandList, shadowContext);
+                }
 
                 TransitionIfNeeded(commandList, shadowMap,
                                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -1133,6 +1144,35 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
     commandList->SetPipelineState(meshPipeline);
     drawMeshes(constants, kPassOpaque, useTessellation);
+    // 配置したモデル。不透明の道路の後、路面に貼る帯と半透明の帯の前に描く。
+    if (drawExtras) {
+        PIXBeginEvent(commandList, PIX_COLOR(120, 200, 200), "PreviewSceneExtras");
+        SceneDrawContext context;
+        context.rtvFormat = kSceneColorFormat;
+        context.dsvFormat = kDepthFormat;
+        context.viewProjection = constants.viewProjection;
+        context.view = constants.view;
+        context.cameraPosition = m_camera.Position();
+        for (uint32_t i = 0; i < kShadowCascadeCount; ++i) {
+            context.lightViewProjections[i] = constants.lightViewProjections[i];
+            context.shadowIndices[i] = constants.shadowIndices[i];
+            context.shadowSplits[i] = constants.shadowSplits[i];
+            context.shadowBiases[i] = constants.shadowBiases[i];
+        }
+        context.shadowTexelSize = constants.shadowTexelSize;
+        context.shadowBlend = constants.shadowBlend;
+        context.shadowNear = constants.shadowNear;
+        context.shadowCascadeCount = constants.shadowCascadeCount;
+        context.environment = &m_environment;
+        context.iblIntensity = m_activeSky.iblIntensity;
+        context.lightDirection = m_light.Direction();
+        context.lightIlluminance = m_light.illuminance;
+        context.lightColor = m_light.color;
+        drawSceneExtras(commandList, context);
+        commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
+        commandList->SetPipelineState(meshPipeline);
+        PIXEndEvent(commandList);
+    }
     if (m_meshSceneEnabled) {
         uint32_t passes = 0u;
         for (size_t i = 0; i < m_sceneMeshes.size(); ++i) passes |= passOf(i);

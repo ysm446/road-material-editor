@@ -77,6 +77,7 @@ find_package(Stb REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(tinyexr CONFIG REQUIRED)
 find_package(unofficial-imgui-node-editor CONFIG REQUIRED)
+find_package(ufbx CONFIG REQUIRED)
 
 set(tg_sources
     src/app/Main.cpp
@@ -92,6 +93,8 @@ set(tg_sources
     src/app/ApplicationBoundaryMaterial.cpp
     src/app/ApplicationLayerPanel.cpp
     src/app/ApplicationMaterialPanel.cpp
+    src/app/ApplicationModelPanel.cpp
+    src/app/ApplicationModelPlacement.cpp
     src/app/ApplicationPathEdit.cpp
     src/app/ApplicationPreviewPanels.cpp
     src/app/ApplicationSkyPanel.cpp
@@ -189,6 +192,10 @@ set(tg_sources
     src/renderer/MaterialSphere.h
     src/renderer/MeshData.cpp
     src/renderer/MeshData.h
+    src/renderer/ModelAsset.cpp
+    src/renderer/ModelAsset.h
+    src/renderer/ModelPreview.cpp
+    src/renderer/ModelPreview.h
     src/renderer/Mesh.cpp
     src/renderer/Mesh.h
     src/renderer/PreviewDiagnostics.cpp
@@ -252,6 +259,7 @@ target_link_libraries(road_editor PRIVATE
     unofficial::imgui-node-editor::imgui-node-editor
     nlohmann_json::nlohmann_json
     unofficial::tinyexr::tinyexr
+    ufbx::ufbx
     d3d12
     dxgi
     dxguid

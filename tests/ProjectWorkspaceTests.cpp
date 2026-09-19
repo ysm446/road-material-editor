@@ -135,6 +135,34 @@ void TestWorkspace() {
     json other = loaded;
     Check(workspace.SaveScene(root / "Scenes" / "copy.tgscene", other) && other["sceneUid"] != uid, "名前を付けて保存は別 ID");
 
+    Section("ProjectWorkspace: モデル（.tgmodel）の分離保存と展開");
+    const fs::path fbx = workspace.UniquePath(root / "Models", "plane", ".fbx");
+    fs::create_directories(fbx.parent_path(), error);
+    Touch(fbx);
+    json withModel = {{"version", 27},
+                      {"textures", json::array()},
+                      {"materials", json::array({{{"id", 1}, {"name", "paint"}, {"maps", json::object()}}})},
+                      {"skies", json::array()},
+                      {"models", json::array({{{"id", 1}, {"name", "plane"},
+                                               {"path", tg::ToUtf8Portable(fbx.lexically_relative(root / "Scenes"))},
+                                               {"scale", 100.0},
+                                               {"materials", json::array({1, nullptr})}}})}};
+    const fs::path modelScene = workspace.UniquePath(root / "Scenes", "model", ".tgscene");
+    Check(workspace.SaveScene(modelScene, withModel), "モデルを含むシーンを保存する");
+    json modelBody;
+    Check(workspace.ReadAsset(root / "Models" / "plane.tgmodel", "model-asset", modelBody) &&
+              modelBody["source"]["uid"].is_string() && modelBody["materials"][0]["uid"].is_string() &&
+              modelBody["materials"][1].is_null() && modelBody["scale"] == 100.0,
+          "モデルを .tgmodel へ分け、FBX とスロットを固定 ID で参照する");
+    json modelLoaded;
+    Check(workspace.ReadScene(modelScene, modelLoaded) && modelLoaded["models"].size() == 1 &&
+              modelLoaded["models"][0]["path"] == tg::ToUtf8Portable(fbx) &&
+              modelLoaded["models"][0]["materials"][0].is_number_integer() &&
+              modelLoaded["models"][0]["materials"][1].is_null(),
+          "モデルを展開し、FBX を絶対パス・スロットをシーンの番号へ戻す");
+    // 以降のルート移動の確認は画像を持つシーンで行うので、開始シーンを戻しておく。
+    workspace.SetStartupScene(root / "Scenes" / "copy.tgscene");
+
     json broken = {{"materials", json::array({{{"id", 1}, {"asset", {{"uid", "missing"}, {"path", "Moved/renamed.tgmat"}}}}})}};
     Check(!workspace.Expand(broken), "ID が見つからなければ同名へ付け替えず失敗する");
     const fs::path duplicate = workspace.UniquePath(root, "duplicate", ".tgmat");

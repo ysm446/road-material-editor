@@ -122,6 +122,10 @@ bool Application::Initialize(const StartupOptions& options) {
         return false;
     }
     m_renderer.EnableDiagnostics(m_options.measurePreview);
+    // 置いたモデルは道路のメッシュシーンとは別に、レンダラの本描画とシャドウパスの中で描く。
+    m_renderer.drawSceneExtras = [this](ID3D12GraphicsCommandList* list, const renderer::SceneDrawContext& context) {
+        DrawSceneModels(list, context);
+    };
     if (!m_renderer.Initialize(m_device, m_pipelineCache)) {
         return false;
     }
@@ -165,6 +169,18 @@ bool Application::Initialize(const StartupOptions& options) {
     }
     m_pendingAssetDeleteInspect = options.inspectAssetDelete;
     m_pendingTexturePaths = options.texturePaths;
+    if (!options.importModel.empty()) {
+        m_pendingModelImports.push_back(options.importModel);
+        m_createImportedModelMaterials = true;
+    }
+    if (!options.placeModel.empty()) {
+        m_pendingModelPlacements.push_back({std::filesystem::absolute(options.placeModel).lexically_normal(), {}});
+    }
+    // 開いたアセットのフォルダを帯に出す（サムネイルの確認用）。帯と同じく絶対パスで扱う。
+    if (!options.openAsset.empty() && m_workspace.Contains(options.openAsset)) {
+        m_pendingAssetOpen = std::filesystem::absolute(options.openAsset).lexically_normal();
+        m_assetDirectory = m_pendingAssetOpen.parent_path();
+    }
 
     // 天球は必ず 1 つある状態にする。--hdri が来ていれば、その既定の天球へ入れる。
     m_skyLibrary.EnsureDefault();
@@ -206,6 +222,8 @@ void Application::Shutdown() {
     DestroyGraphEditor();
     m_materialSphere.Destroy(m_device);
     m_skySphere.Destroy(m_device);
+    for (auto& [id, preview] : m_modelPreviews) preview->Destroy(m_device);
+    m_modelPreviews.clear();
     m_materialLibrary.Destroy(m_device);
     m_skyLibrary.Destroy(m_device);
     m_textureLibrary.Destroy(m_device);
@@ -322,7 +340,7 @@ int Application::Run() {
         if (!m_options.saveProjectPath.empty() && m_frameCounter >= m_options.screenshotFrame) {
             const io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
                                        m_renderer, m_graph, m_surfaceLayouts,
-                             m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
+                             m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands, &m_models};
             const bool scene = _wcsicmp(m_options.saveProjectPath.extension().c_str(), L".tgscene") == 0;
             if (io::SaveProject(m_options.saveProjectPath, refs, scene ? &m_workspace : nullptr) && scene) {
                 SaveSceneThumbnail(m_options.saveProjectPath);
@@ -456,6 +474,7 @@ int Application::Run() {
         m_renderer.ShowUvChecker() = m_settings.Display().showUvChecker;
         m_renderer.ShowWireframe() = m_settings.Display().showWireframe;
 
+        m_renderer.SetExtraSceneRadius(ModelInstancesRadius());
         m_renderer.Render(m_device, m_pipelineCache, commandList, m_textureLibrary,
                           m_materialLibrary);
         if (m_editSurfacePreset && m_layerPreviewInitialized)
@@ -482,6 +501,9 @@ int Application::Run() {
                                m_renderer.GetEnvironment(), m_renderer.ActiveSky().iblIntensity,
                                m_renderer.Exposure().Exposure(), m_renderer.Tonemap());
         }
+
+        // モデルプレビューの窓と、まだ描いていないモデルのサムネイル。
+        RenderModelPreviews(commandList);
 
         // レンダラがターゲットを差し替えているので、ImGui を描く前に戻す。
         m_device.BindBackBuffer(commandList);
@@ -578,6 +600,7 @@ void Application::DrawUi() {
             ImGui::MenuItem("マテリアルプレビュー", nullptr, &m_showMaterialSphere);
             ImGui::MenuItem("テクスチャプレビュー", nullptr, &m_showTexturePreview);
             ImGui::MenuItem("天球プレビュー", nullptr, &m_showSkyPreview);
+            ImGui::MenuItem("モデルプレビュー", nullptr, &m_showModelPreview);
             ImGui::MenuItem("情報", nullptr, &m_showInfo);
             ImGui::MenuItem("設定", nullptr, &m_showSettings);
             ImGui::EndMenu();
@@ -631,6 +654,7 @@ void Application::DrawUi() {
     DrawMaterialSphereWindow();
     DrawTexturePreviewWindow();
     DrawSkyPreviewWindow();
+    DrawModelPreviewWindow();
     DrawSceneSwitchDialog();
     DrawAssetDeleteDialog();
     DrawInfoWindow();

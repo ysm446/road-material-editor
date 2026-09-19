@@ -5,6 +5,7 @@
 #include "core/Log.h"
 #include "core/PathUtf8.h"
 #include "io/ProjectIo.h"
+#include "renderer/ModelPreview.h"
 #include "rhi/TextureReadback.h"
 
 #include <pix3.h>
@@ -37,7 +38,7 @@ bool AssetThumbnailCache::Supports(const fs::path& path) {
     const auto ext = Extension(path);
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga" || ext == ".bmp" ||
            ext == ".exr" || ext == ".hdr" || ext == ".tgmat" || ext == ".tgsky" || ext == ".tgscene" ||
-           ext == ".tglayer" || ext == ".tgboundary";
+           ext == ".tglayer" || ext == ".tgboundary" || ext == ".tgmodel" || ext == ".fbx";
 }
 
 void AssetThumbnailCache::BeginRequests() {
@@ -172,6 +173,37 @@ bool AssetThumbnailCache::BuildImage(rhi::Device& device, const fs::path& path, 
     return result;
 }
 
+// モデルを一時の領域へ読み、斜め上からの全体を描く。.tgmodel は割り当てたマテリアルで、
+// FBX 単体は灰色で描く。
+bool AssetThumbnailCache::BuildModel(rhi::Device& device, rhi::PipelineCache& pipelines,
+                                     io::ProjectWorkspace& workspace, const fs::path& path, rhi::GpuTexture& output) {
+    std::vector<renderer::ModelAsset> models;
+    if (Extension(path) == ".tgmodel") {
+        if (!io::LoadSharedAsset(workspace, path, device, pipelines, m_textures, m_materials, m_skies, false, &models))
+            return false;
+    } else {
+        renderer::ModelAsset model;
+        if (!renderer::LoadModel(path, model)) return false;
+        models.push_back(std::move(model));
+    }
+    if (models.empty() || !models.front().geometry) return false;
+    // 縮小したときに細い部品が途切れないよう、残す大きさの 2 倍で描く。
+    renderer::ModelPreview preview(ThumbnailSize * 2);
+    bool rendered = false;
+    if (preview.Prepare(device, models.front(), 0)) {
+        const renderer::Environment unlit;
+        const auto& lighting = m_modelLighting;
+        rendered = device.ExecuteImmediate([&](ID3D12GraphicsCommandList* list) {
+            preview.Render(device, pipelines, list, models.front(), m_materials, m_textures,
+                           lighting.environment ? *lighting.environment : unlit, lighting.iblIntensity, lighting.light,
+                           lighting.exposure, lighting.tonemap);
+        });
+        output = preview.TakeOutput();
+    }
+    preview.Destroy(device);
+    return rendered && output.IsValid();
+}
+
 void AssetThumbnailCache::Process(rhi::Device& device, rhi::PipelineCache& pipelines,
                                   io::ProjectWorkspace& workspace, const fs::path& directory) {
     if (m_invalidate || m_root != workspace.Root() || m_directory != directory) {
@@ -227,6 +259,13 @@ void AssetThumbnailCache::Process(rhi::Device& device, rhi::PipelineCache& pipel
         // アプリが残した画像（上の ThumbnailIsCurrent）だけを使い、無ければ帯が種類の文字を出す。
         Store(device, path, std::move(thumbnail), false);
         m_entries[path].failed = false;
+        return;
+    }
+    if (extension == ".tgmodel" || extension == ".fbx") {
+        ClearScratch(device, m_textures.Entries().size() >= MaxScratchTextures);
+        if (!BuildModel(device, pipelines, workspace, path, thumbnail)) device.DeferRelease(thumbnail);
+        Store(device, path, std::move(thumbnail));
+        ClearScratch(device, false);
         return;
     }
     if (extension != ".tgmat" && extension != ".tgsky") {

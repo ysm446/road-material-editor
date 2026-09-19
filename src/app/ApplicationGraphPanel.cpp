@@ -55,6 +55,8 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.62f, 0.70f, 0.66f, 1.0f);
         case graph::NodeKind::Crack:
             return ImVec4(0.66f, 0.58f, 0.62f, 1.0f);
+        case graph::NodeKind::Model:
+            return ImVec4(0.58f, 0.62f, 0.76f, 1.0f);
         default:
             return ImVec4(0.59f, 0.64f, 0.68f, 1.0f);
     }
@@ -907,6 +909,7 @@ void Application::DrawGraphEditor() {
         addNodeMenuItem(graph::NodeKind::Shoulder, "Shoulder — 道路の境界から外側へ路肩を張る");
         addNodeMenuItem(graph::NodeKind::Merge, "Merge — 複数のRoadSurfaceを1つにまとめる");
         addNodeMenuItem(graph::NodeKind::Crack, "Crack — ひび割れの塊を乱数で配置する");
+        addNodeMenuItem(graph::NodeKind::Model, "Model — 3D モデル（.tgmodel）を 1 つ置く");
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Path, "Path — 実寸の3次元カーブを編集");
@@ -958,6 +961,12 @@ void Application::DrawGraphEditor() {
     // エディタ側の選択がまだ無く、ここで 0 に戻すと「追加 → 選択」が消える
     // （エディタへの選択の反映は次のフレームの流し込みで行う）。
     // コピーは複数選択（枠で囲む）にも効かせたいので、全部控えておく。
+    // ビューポートでモデルを選んだ・外したときは、エディタの選択もそれに合わせる。
+    if (m_graphSelectionRequest) {
+        ed::ClearSelection();
+        if (*m_graphSelectionRequest != 0) ed::SelectNode(ed::NodeId(*m_graphSelectionRequest));
+        m_graphSelectionRequest.reset();
+    }
     ed::NodeId selectedNodes[64];
     const int selectedCount = ed::GetSelectedNodes(selectedNodes, IM_ARRAYSIZE(selectedNodes));
     if (selectedCount > 0) {
@@ -1053,6 +1062,9 @@ void Application::DrawGraphPanel() {
     if (selected == nullptr) {
         ui::HintText("ノードを選ぶと設定が出る。背景の右クリックで追加、"
                      "ピンをドラッグして接続、Ctrl+C / Ctrl+V でコピー");
+    } else if (selected->kind == graph::NodeKind::Model) {
+        // 置き方の変更は道路を作り直さない（MarkDirty しない）。描画は毎フレーム設定から行う。
+        if (DrawModelNodeSettings(*selected)) m_documentDirty = true;
     } else if (auto* road = std::get_if<graph::RoadNodeSettings>(&selected->settings)) {
         if (DrawSurfaceLayoutSettings(selected->id)) { m_graph.MarkDirty(); MarkDocumentChanged(); }
         const auto* activeBand = graph::FindRoadBand(m_surfaceLayouts, selected->id);

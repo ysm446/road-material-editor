@@ -16,6 +16,8 @@
 #include "io/AppSettings.h"
 #include "io/RecentFiles.h"
 #include "renderer/MaterialSphere.h"
+#include "renderer/ModelAsset.h"
+#include "renderer/ModelPreview.h"
 #include "renderer/PreviewRenderer.h"
 #include "renderer/SkyLibrary.h"
 #include "renderer/SkySphere.h"
@@ -29,8 +31,11 @@
 
 #include <chrono>
 #include <filesystem>
+#include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // imgui-node-editor のコンテキスト。ヘッダを丸ごと引き込まないための前方宣言。
@@ -63,6 +68,12 @@ struct StartupOptions {
     // 画面キャプチャは他ウィンドウを掴むことがあるため、確認にはこちらを使う。
     std::filesystem::path uiScreenshotPath;
     uint32_t screenshotFrame = 8;
+    // 開発用。FBX をモデルとして読み込み、FBX のマテリアルからマテリアルを作ってプレビューを開く。
+    std::filesystem::path importModel;
+    // 開発用。ルート内のアセットをアセットの帯のダブルクリックと同じ経路で開く。
+    std::filesystem::path openAsset;
+    // 開発用。モデル（.tgmodel / .fbx）を原点へ置く（帯からビューポートへ落としたのと同じ経路）。
+    std::filesystem::path placeModel;
     // P0: Road / 砂利Surface / 歩道Surface の ID。通常のグラフ評価は変更しない。
     graph::GraphId prototypeRoad = 0;
     graph::GraphId surfaceLayoutRoad = 0;
@@ -163,6 +174,51 @@ private:
     // マテリアルプレビューの窓（回せる球 + プロパティ）。
     // 一覧のサムネイルをダブルクリックするか、ウィンドウメニューから開く。
     void DrawMaterialSphereWindow();
+    // --- モデル（ApplicationModelPanel.cpp） --------------------------------------
+    // モデルプレビューの窓（回せるモデル + 寸法・LOD・マテリアルスロット）。
+    // アセットの帯でモデル（.tgmodel / .fbx）をダブルクリックするか、ウィンドウメニューから開く。
+    void DrawModelPreviewWindow();
+    // FBX の取り込み、スロットのマテリアル作成、シーンから外す、GPU メッシュの用意。フレームの外で呼ぶ。
+    void ProcessModelWork();
+    // 窓に出しているモデルと、まだ描いていないサムネイルを描く。フレームの中で呼ぶ。
+    void RenderModelPreviews(ID3D12GraphicsCommandList* commandList);
+    // 未割り当てのスロットに、FBX のマテリアル（拡散色のテクスチャと色）からマテリアルを作って割り当てる。
+    void CreateModelMaterials(uint64_t modelId);
+    // FBX をモデルとしてシーンへ足す（ルート外なら表示中のフォルダへ取り込む）。読み込み済みならそれを返す。
+    // 失敗したら 0。フレームの外で呼ぶ。
+    uint64_t ImportModelFile(const std::filesystem::path& inputPath);
+    renderer::ModelAsset* FindModel(uint64_t id);
+
+    // --- Model ノード（ApplicationModelPlacement.cpp） ----------------------------
+    // Model ノードを作ってモデルを position（底面の中心）へ置き、Mesh Output へ繋いで選ぶ
+    // （Mesh Output に別のものが繋がっていれば Merge でまとめる）。作ったノードの ID を返す（失敗は 0）。
+    graph::GraphId PlaceModel(uint64_t modelId, const DirectX::XMFLOAT3& position);
+    // ビューポートに出す Model ノード（Mesh Output へ繋がったもの、またはプレビュー中の鎖の中のもの）。
+    std::vector<graph::GraphId> VisibleModelNodes() const;
+    // Model ノードの設定と、そのモデル・ワールド行列の取り出し。モデルが無ければ偽。
+    bool ModelNodeTransform(graph::GraphId nodeId, const renderer::ModelAsset*& model,
+                            renderer::ModelInstance& instance) const;
+    // 選んでいるノードが Model ノードならその設定。
+    graph::ModelNodeSettings* SelectedModelNode();
+    // レンダラの drawSceneExtras から呼ぶ。ビューポートに出す Model ノードを本描画・シャドウパスへ描く。
+    void DrawSceneModels(ID3D12GraphicsCommandList* commandList, const renderer::SceneDrawContext& context);
+    // ビューポートに出すモデルを包む球の半径（原点中心）。無ければ 0。
+    float ModelInstancesRadius() const;
+    // カーソル直下の Model ノード（と距離）。無ければ 0。
+    graph::GraphId PickModelNode(const DirectX::XMFLOAT3& origin, const DirectX::XMFLOAT3& direction, float& distance) const;
+    // カーソル位置の地面（道路メッシュ、無ければ高さ planeY の水平面）。当たらなければ偽。
+    bool PickGround(const ImVec2& mouse, const ImVec2& viewportMin, const ImVec2& viewportMax, float planeY,
+                    bool useMeshes, DirectX::XMFLOAT3& point) const;
+    // Path 未選択のときのモデルのホバー・クリック選択（Model ノードを選ぶ）・ドラッグ移動・Delete。
+    // この入力を使ったら真（メッシュの選択へ渡さない）。
+    bool HandleModelInstanceInput(bool itemActive, bool itemHovered, const ImVec2& viewportMin, const ImVec2& viewportMax);
+    // ホバー中・選択中の置いたモデルの境界ボックスを重ねる。
+    void DrawModelInstanceOverlay(const ImVec2& viewportMin, const ImVec2& viewportMax);
+    // アセットの帯のモデルをビューポートへ落としたときの受け口。
+    void ModelDropTarget(const ImVec2& viewportMin, const ImVec2& viewportMax);
+    // Model ノードの設定（グラフパネルのプロパティ欄）。変えたら真。
+    bool DrawModelNodeSettings(graph::Node& node);
+    bool SelectedModelInstanceFocusTarget(DirectX::XMFLOAT3& target);
     // 天球パネル。一覧で選んだものがそのままビューポートの環境になる。
     void DrawSkyLibraryPanel();
     // 天球一覧の右クリックメニュー（追加 / 複製 / 削除）。
@@ -440,6 +496,42 @@ private:
     ImVec2 m_graphCanvasSize = ImVec2(0.0f, 0.0f);
     compositor::TextureLibrary m_textureLibrary;
     compositor::MaterialLibrary m_materialLibrary;
+    // モデル。マテリアルと同じく文書の一部で、スロットの割り当てはアンドゥの対象。
+    // CPU の形状は共有ポインタなので、スナップショットへ複製しても頂点は複製されない。
+    std::vector<renderer::ModelAsset> m_models;
+    uint64_t m_nextModelId = 1;
+    // 一覧（アセットの帯）で選んでいるモデル。窓はこれを映す。
+    uint64_t m_selectedModel = 0;
+    int m_modelLod = 0;
+    // モデルごとの GPU メッシュと出力。選んでいるものは窓が開いている間毎フレーム描き、
+    // それ以外はサムネイルとして 1 度だけ描く（m_renderedModelThumbnails）。
+    std::unordered_map<uint64_t, std::unique_ptr<renderer::ModelPreview>> m_modelPreviews;
+    std::unordered_set<uint64_t> m_renderedModelThumbnails;
+    // フレームの外で処理するモデルの作業。
+    std::vector<std::filesystem::path> m_pendingModelImports;
+    uint64_t m_pendingModelMaterials = 0;
+    uint64_t m_pendingModelRemove = 0;
+    // カーソル直下の Model ノード（ビューポートの枠の表示用）。
+    graph::GraphId m_hoveredModelNode = 0;
+    // ビューポートからグラフエディタの選択を変える要求（0 は選択を外す）。エディタの描画の中で反映する。
+    std::optional<graph::GraphId> m_graphSelectionRequest;
+    // Model ノードのドラッグ移動。掴んだ点からモデルの位置までのずれと、動かす水平面の高さを保つ。
+    struct ModelInstanceDrag {
+        bool pending = false;
+        bool dragging = false;
+        ImVec2 pressPos{};
+        DirectX::XMFLOAT3 offset{};
+        DirectX::XMFLOAT3 startPosition{};
+        float planeY = 0.0f;
+    } m_modelInstanceDrag;
+    // 帯から落としたモデルの配置。ファイルの読み込みを伴うのでフレームの外で行う。
+    struct PendingModelPlacement {
+        std::filesystem::path path;
+        DirectX::XMFLOAT3 position{};
+    };
+    std::vector<PendingModelPlacement> m_pendingModelPlacements;
+    // 取り込んだ FBX のスロットへ、続けてマテリアルを作るか（--import-model）。
+    bool m_createImportedModelMaterials = false;
     // 天球アセット。マテリアルと並ぶアセットだが、**アンドゥの対象には入れない。**
     // 環境は作っているマテリアルそのものではなく、見え方の設定に近い
     // （プレビュー設定を履歴に載せないのと同じ理由）。
@@ -643,6 +735,9 @@ private:
     bool m_showTexturePreview = false;
     // 天球プレビューの窓。同じくドックへは収めない。
     bool m_showSkyPreview = false;
+    // モデルプレビューの窓と、その中身をこのフレームに描いたか。
+    bool m_showModelPreview = false;
+    bool m_modelPreviewVisible = false;
     // その窓の中身をこのフレームに描いたか（折りたたまれていれば球も描かない）。
     bool m_skyPreviewVisible = false;
     // その窓の中身をこのフレームに描いたか。**折りたたまれていれば球も描かない。**

@@ -229,8 +229,11 @@ void Application::HandleDroppedFiles(const std::vector<std::filesystem::path>& p
         // 旧拡張子 (.mmproj / .mmmat) は material-mixer 時代のファイル。読み込みだけ受け付ける。
         if (extension == ".tgscene" || extension == ".tgproj" || extension == ".mmproj") {
             m_pendingProjectOpen = path;
-        } else if (extension == ".tgsky") {
+        } else if (extension == ".tgsky" || extension == ".tgmodel") {
             m_pendingAssetOpen = path;
+        } else if (extension == ".fbx") {
+            // ルート外ならアセットの帯で表示中のフォルダへ取り込む（ProcessModelWork）。
+            m_pendingModelImports.push_back(path);
         } else if (extension == ".tgmat" || extension == ".mmmat") {
             // 共有アセットか持ち出し用かは ProcessAssetWork が中身を見て振り分ける。
             m_pendingAssetOpen = path;
@@ -263,6 +266,11 @@ void Application::ResetProject() {
     m_skyLibrary.Clear(m_device);
     m_skyLibrary.EnsureDefault();
     m_textureLibrary.Clear(m_device);
+    m_models.clear();
+    m_modelInstanceDrag = {};
+    m_selectedModel = 0;
+    m_modelLod = 0;
+    m_renderedModelThumbnails.clear();
 
     // グラフを既定へ戻す。位置はエディタへ流し込み直す。
     // メッシュシーンは次のフレームの SyncMeshGraph が作り直す（改版を 0 に戻す）。
@@ -352,7 +360,7 @@ void Application::ProcessPendingFileWork() {
 
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
                              m_renderer, m_graph, m_surfaceLayouts,
-                             m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
+                             m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands, &m_models};
         // .tgscene はルートの共有アセットを参照する。旧 .tgproj は従来の埋め込み形式のまま読む。
         const bool isScene = _wcsicmp(path.extension().c_str(), L".tgscene") == 0;
         if (io::LoadProject(path, m_device, m_pipelineCache, refs, isScene ? &m_workspace : nullptr)) {
@@ -389,6 +397,10 @@ void Application::ProcessPendingFileWork() {
             m_selectedMaterial = 0;
             m_selectedTexture = 0;
             m_ordTexture = compositor::kNoTexture;
+            m_selectedModel = m_models.empty() ? 0 : m_models.front().id;
+            m_modelInstanceDrag = {};
+            m_modelLod = 0;
+            m_renderedModelThumbnails.clear();
             // 読み込んだ文書が新しい起点になる。前の文書の履歴は捨てる。
             m_undoHistory.Clear();
             m_documentDirty = false;
@@ -407,7 +419,7 @@ void Application::ProcessPendingFileWork() {
 
         io::ProjectRefs refs{m_textureLibrary, m_materialLibrary, m_skyLibrary,
                              m_renderer, m_graph, m_surfaceLayouts,
-                             m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands};
+                             m_previewSurfaceBands, m_connectSurfaceBands, m_displaceConnectedBands, &m_models};
         if (io::SaveProject(path, refs, &m_workspace)) {
             SaveSceneThumbnail(path);
             m_persistLayerThumbnails = true;
@@ -517,6 +529,12 @@ void Application::ProcessPendingFileWork() {
             if (graphChanged) {
                 m_graph.MarkDirty();
             }
+            for (renderer::ModelAsset& model : m_models) {
+                for (compositor::MaterialAssetId& slot : model.materials) {
+                    if (slot == removed) slot = compositor::kNoMaterialAsset;
+                }
+            }
+            m_renderedModelThumbnails.clear();
             m_selectedMaterial = std::max(0, m_selectedMaterial - 1);
             MarkDocumentChanged();
         }
@@ -529,6 +547,9 @@ void Application::ProcessPendingFileWork() {
         // 環境の作り直しは、次のフレームの SetActiveSky が判断する。
         m_skyLibrary.Remove(m_device, removed);
     }
+
+    // FBX の取り込みとモデルの GPU メッシュ。シーンの読み込みの後に行う（読み込みが一覧を入れ替えるため）。
+    ProcessModelWork();
 
     // ここまでの読み込み・改名・移動で付け替わったパスへ名前を揃える。
     SyncAssetNamesToFiles();

@@ -912,6 +912,11 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
     }
     bool success = false;
     std::string error;
+    // モデルは道路メッシュを持たない（Application が別に描く）。道路面が無いだけで失敗ではない。
+    if (node->kind == NodeKind::Model) {
+        visiting.erase(node->id);
+        return false;
+    }
     if (node->kind == NodeKind::Road) {
         if (EvaluateRoad(graph, node->id, chain.road, error)) {
             renderer::SceneMesh mesh;
@@ -929,9 +934,14 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
     } else if (node->kind == NodeKind::Merge) {
         // 繋いだ枝を順に積む。同じノード由来のメッシュは 1 回だけ。下流の部品は最初の枝の面に乗る。
         bool first = true;
+        bool modelOnly = false;
         for (const Pin& pin : node->inputs) {
             const Node* upstream = graph.FindUpstreamNodeForPin(pin.id);
             if (!upstream) continue;
+            if (upstream->kind == NodeKind::Model) {
+                modelOnly = true;
+                continue;
+            }
             MeshChain branch;
             if (!EvaluateMeshChain(graph, upstream, branch, errors, visiting)) continue;
             const std::vector<int> remap = MergeChainMeshes(chain, branch);
@@ -942,7 +952,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             }
             success = true;
         }
-        if (!success) error = "Mesh 1 に RoadSurface を接続してください";
+        if (!success && !modelOnly) error = "Mesh 1 に RoadSurface を接続してください";
     } else if (const auto* marking = std::get_if<RoadMarkingNodeSettings>(&node->settings)) {
         const Node* upstream = node->inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node->inputs.front().id);
         if (!upstream) {
@@ -1527,5 +1537,28 @@ CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph, GraphId previewNodeId
     compiled.scene.meshes = std::move(all.meshes);
     compiled.meshSources = std::move(all.sources);
     return compiled;
+}
+
+std::vector<GraphId> CollectOutputModelNodes(const NodeGraph& graph, GraphId previewNodeId) {
+    std::vector<GraphId> result;
+    std::unordered_set<GraphId> visited;
+    // Merge を辿って Model を集める。道路の部品（白線など）の入力は道路面なので、そこから先は見ない。
+    const auto visit = [&](auto&& self, const Node* node) -> void {
+        if (node == nullptr || visited.size() >= 256 || !visited.insert(node->id).second) return;
+        if (node->kind == NodeKind::Model) {
+            result.push_back(node->id);
+        } else if (node->kind == NodeKind::Merge) {
+            for (const Pin& pin : node->inputs) self(self, graph.FindUpstreamNodeForPin(pin.id));
+        }
+    };
+    if (const Node* preview = graph.FindNode(previewNodeId); preview != nullptr && IsMeshNodeKind(preview->kind)) {
+        visit(visit, preview);
+        return result;
+    }
+    for (const auto& node : graph.Nodes()) {
+        if (node.kind == NodeKind::MeshOutput && !node.inputs.empty())
+            visit(visit, graph.FindUpstreamNodeForPin(node.inputs.front().id));
+    }
+    return result;
 }
 }  // namespace tg::graph

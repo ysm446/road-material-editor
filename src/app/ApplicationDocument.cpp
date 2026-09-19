@@ -35,6 +35,7 @@ DocumentSnapshot Application::CaptureDocument() const {
     snapshot.surfaceLayouts = m_surfaceLayouts;
     snapshot.selectedGraphNode = m_selectedGraphNode;
     snapshot.selectedMaterial = m_selectedMaterial;
+    snapshot.models = m_models;
 
     snapshot.materials.reserve(m_materialLibrary.Entries().size());
     for (const compositor::MaterialAsset& asset : m_materialLibrary.Entries()) {
@@ -123,12 +124,35 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
         asset.thumbnailDirty = true;
     }
 
+    // --- モデル -------------------------------------------------------------
+    // 初回保存で付いた永続 ID は、保存前に作った段へ戻っても保持する（マテリアルと同じ）。
+    std::vector<renderer::ModelAsset> models = snapshot.models;
+    for (renderer::ModelAsset& model : models) {
+        if (model.assetUid.empty()) {
+            if (const renderer::ModelAsset* current = FindModel(model.id); current != nullptr) {
+                model.assetUid = current->assetUid;
+                model.assetPath = current->assetPath;
+            }
+        }
+        for (compositor::MaterialAssetId& slot : model.materials) {
+            if (m_materialLibrary.Find(slot) == nullptr) slot = compositor::kNoMaterialAsset;
+        }
+    }
+    m_models = std::move(models);
+    m_renderedModelThumbnails.clear();
+    m_modelInstanceDrag = {};
+
     // --- グラフ -------------------------------------------------------------
     std::vector<graph::Node> nodes = snapshot.graphNodes;
     for (graph::Node& node : nodes) {
         graph::VisitNodeMaterialLayers(node, [&](compositor::MaterialLayer& layer) {
             if (m_materialLibrary.Find(layer.material) == nullptr) layer.material = compositor::kNoMaterialAsset;
         });
+    }
+    // 戻した先で外されていたモデルを指す Model ノードは「なし」にする。
+    for (graph::Node& node : nodes) {
+        if (auto* model = std::get_if<graph::ModelNodeSettings>(&node.settings); model && !FindModel(model->model))
+            model->model = 0;
     }
     m_graph.Replace(std::move(nodes), snapshot.graphLinks);
     m_graph.SetRoadNetwork(snapshot.roadNetwork);
@@ -162,6 +186,8 @@ void Application::MarkDocumentChanged() {
     m_layerThumbnailsDirty = true;
     m_layerPreviewDirty = true;
     m_documentDirty = true;
+    // マテリアルの変更はモデルの見た目にも効くので、サムネイルを描き直す。
+    m_renderedModelThumbnails.clear();
     // 保存したファイルと中身が変わったので、サムネイルをディスクへ残すのは次の保存まで待つ。
     m_persistLayerThumbnails = false;
     // マテリアルの編集はグラフの改版に映らないので、シーンの材質を直接再評価させる

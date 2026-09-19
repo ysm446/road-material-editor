@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-20 02:50
+更新日時: 2026-09-20 03:17
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -28,6 +28,12 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
+
+### 2026-09-20 03:17 — 自動露出（terrain-graph から移植）
+
+terrain-graph の `d62bb5f` を移植した。`shaders/ExposureMeter.hlsl`（ヒストグラム → EV100 の 3 パス）、`PreviewRenderer::MeterExposure` / `ReadExposureMeter`（フレーム枠ごとの読み戻しと順応）、`ExposureSettings` の自動の項目、露出の「方式」の UI、`preview.exposure` の保存。
+`rhi::ResourceAllocator` に `CreateStructuredBuffer` と UAV を許す `CreateDefaultBuffer` を足した（terrain-graph と同じ）。
+詳細は [rendering.md](../design/rendering.md) の「自動露出」。
 
 ### 2026-09-20 02:50 — FBX のノードを回すギズモ
 

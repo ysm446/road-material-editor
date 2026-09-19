@@ -188,8 +188,14 @@ bool LoadModel(const fs::path& path, ModelAsset& asset) {
                         const auto uv = ufbx_get_vertex_vec2(&mesh.vertex_uv, index);
                         v.uv = {float(uv.x), float(1.0 - uv.y)};
                     }
-                    // 道路 UV は使わない。MeshVertex の規約どおり uv を写す。
-                    v.roadUv = v.uv;
+                    // 道路 UV の枠には 2 つ目の UV（ライトマップ用など）を入れる。無ければ uv を写す（MeshVertex の規約）。
+                    // マテリアルのマップごとの UV の選択（MaterialAsset::mapUvSets）で読み分ける。
+                    if (mesh.uv_sets.count > 1 && mesh.uv_sets.data[1].vertex_uv.exists) {
+                        const auto uv2 = ufbx_get_vertex_vec2(&mesh.uv_sets.data[1].vertex_uv, index);
+                        v.roadUv = {float(uv2.x), float(1.0 - uv2.y)};
+                    } else {
+                        v.roadUv = v.uv;
+                    }
                     for (int k = 0; k < 3; ++k) {
                         const float value = (&v.position.x)[k];
                         if (!std::isfinite(value)) {

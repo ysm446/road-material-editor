@@ -1,7 +1,7 @@
 # model-assets — 3D モデル（FBX）とマテリアルスロット
 
 作成日時: 2026-09-19 17:30
-更新日時: 2026-09-19 22:58
+更新日時: 2026-09-20 03:05
 
 FBX を読み込んで共有アセット `.tgmodel` にし、FBX のマテリアルごと（スロット）に共有マテリアル `.tgmat` を割り当てる。
 terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationModelPanel`）を移植したもの。
@@ -21,6 +21,9 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
   LOD グループがあれば子の順を LOD 番号にする。
 - UV の V は画像の行（下向き）へ反転する。接線は面ごとに UV から求め、法線へ直交化する。
   負のスケールで裏返った面は、変換後の法線に合わせて頂点順を入れ替える。
+- **2 つ目の UV**（ライトマップ用など）があれば `MeshVertex::roadUv` の枠へ入れる（無ければ 1 つ目を写す）。
+  マテリアルのマップごとの UV（`mapUvSets`）で読み分ける。接線は 1 つ目の UV から求めるので、
+  2 つ目の UV で読む法線マップは向きが合わないことがある。
 - 形状（`ModelGeometry`）は不変で `shared_ptr` 共有。アンドゥのスナップショットへ複製しても頂点は複製されない。
 
 ### 倍率
@@ -118,6 +121,36 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
 - 描くメッシュはモデルプレビューと共有しているので、窓で表示 LOD を変えるとビューポートもその LOD になる。
 - 選択の判定は CPU で、境界ボックス → LOD 0 の三角形の順に調べる。
 
+## XNA の戦車（`data/Models/` の type10 / type74 / tiger / panzer / t72）
+
+XNA のモデルビューワ（`docs/references/modelviewer_character_xna3_20151026`）の戦車を、F16 と同じ手順でパーツごとの `.tgmodel` にした。
+- パーツは body / turret / barrel / track の FBX ごとに 1 モデル（Type 74 は砲身が砲塔に含まれ、barrel が無い）。
+  まとめ済みの `panzer.fbx` / `type74.fbx` は持ってきていない。倍率は F16 と同じく 100（cm 宣言で m の値）。
+- マテリアルはテクスチャ 1 枚につき 1 つ（パーツ間で共有）。ラフネス = `_multi` の B、AO = `_lightmap` の R、法線 = `_normal`
+  （XNA の `material_tank_v2.fx` の規約）。法線の緑の向きは XNA 側が法線マップを使っていないため未確認で、既定（OpenGL）のまま。
+- **T-72 の全パーツと Type 10 の track はライトマップを UV2 で引く**（XNA の `LightmapUVChannel = 1`）。
+  これらのマテリアルは AO を 2 つ目の UV で読む（`mapUvSets` の `ambientOcclusion` = 2）。
+- XNA での組み立て（`Tank.cs`、m、FBX の原点どうし）。砲塔は車体の子で Y 軸まわりに旋回、砲身は砲塔の子で X 軸まわりに俯仰。track は車体と同じ位置。
+
+| 戦車 | 砲塔（車体から） | 砲身（砲塔から） |
+|---|---|---|
+| tiger | (0, 1.78, 0) | (0, 0.40, 1.15) |
+| panzer | (0, 1.56, 0) | (0, 0.27, 0.73) |
+| type74 | (0, 1.36, 0.60) | なし |
+| type10 | (0, 1.52, 0.40) | (0, 0.31, 1.11) |
+| t72 | (0, 1.25, 0.16) | (0, 0.35, 1.03) |
+
+  Model ノードは形状の底面の中心を原点へ移すので、この値はそのままでは使えない（FBX の原点を基準にした値）。
+- **戦車ごとの親子付き FBX**（`data/Models/<戦車>/<戦車>.fbx` と `.tgmodel`、倍率 1）。パーツをまとめ直したもので、1 つの Model ノードで 1 台が出る。
+  - 階層は `<戦車>`（空）→ `body` → `turret` → `barrel`、`track` は `<戦車>` の直下。砲塔と砲身のピボットは上の表のオフセット
+    （砲身は砲塔 + 砲身）。頂点は実寸の m。T-72 と Type 10 の track は UV2 も持つ。マテリアルはパーツの `.tgmat` をそのまま使う。
+  - パーツの FBX を ufbx で読むと組み上がった位置に出る（ノードの変換を焼き込むため。XNA はノードの変換を使わずオフセットで置いていた）。
+    そこでピボットを引いて各パーツのローカルにし、オブジェクトの位置をオフセットにした。
+  - 作り方: `fbxdump`（ufbx で LoadModel と同じ読み方をして三角形を JSON へ）→ Blender 5.2 の `build_tanks.py`
+    （組み立てて FBX 7.4 で書き出し）→ `--import-model` → 重複したマテリアルを既存の `.tgmat` へ付け替え。
+    Blender は FBX 6.1 ASCII を読めないので、元のパーツは直接 Blender へ入れない。スクリプトは `data/Models/_tools/xna_tanks/`（手元のみ）。
+  - 今のツールは読み込みで階層を焼き込むので、砲塔の旋回・砲身の俯仰はまだ動かせない（階層を保つのは後続）。パーツごとの `.tgmodel` も残してある。
+
 ## 開発用オプション
 
 - `--import-model <fbx>`: FBX を取り込み、「FBX のマテリアルから作成」まで行ってプレビューを開く。
@@ -129,5 +162,4 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
 ## 未対応（後続）
 
 - モデル系のノードで Path / Road に沿って置く・並べる（ガードレールの支柱や標識）。
-- UV2（ライトマップ用の 2 つ目の UV）。F16 はライトマップも UV1 なので AO として使えている。
 - スキンメッシュ・アニメーション、埋め込みテクスチャ、FBX 以外の形式（glTF / OBJ）。

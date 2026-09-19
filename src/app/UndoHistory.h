@@ -49,6 +49,7 @@ struct MaterialSnapshot {
     float saturation = 1.0f;
     float brightness = 1.0f;
     bool flipNormalGreen = true;
+    uint32_t mapUvSets = 0;
     float roughnessValue = 0.5f;
     float metallicValue = 0.0f;
     float ambientOcclusionValue = 1.0f;

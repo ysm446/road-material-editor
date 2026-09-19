@@ -24,6 +24,18 @@ enum class BlendMode : uint32_t {
     Translucent = 2,  // 不透明度でそのまま合成する。影は落とさない
 };
 
+// マテリアルのマップ。MaterialAsset::mapUvSets のビットの位置で、シェーダの TG_MAP_* と一致させること。
+enum class MaterialMap : uint32_t {
+    BaseColor = 0,
+    Normal = 1,
+    Roughness = 2,
+    Metallic = 3,
+    AmbientOcclusion = 4,
+    Height = 5,
+    Opacity = 6,
+    Count = 7,
+};
+
 struct MaterialAsset {
     MaterialAssetId id = kNoMaterialAsset;
     // 共有アセットの置き場所と永続 ID（`.tgmat`）。未保存なら空。
@@ -84,6 +96,11 @@ struct MaterialAsset {
     // そちらで、既定を DirectX にすると読み込んだ素材が軒並み反転して見えるため。
     bool flipNormalGreen = true;
 
+    // **マップごとにどの UV で読むか。** MaterialMap の位置のビットが立っていれば 2 つ目の UV、無ければ 1 つ目。
+    // ライトマップ（AO）だけを 2 つ目の UV に展開した FBX（XNA の戦車など）のため。
+    // UV を 2 つ持つのはモデルだけで、道路の合成とマテリアルの球は 1 つ目の UV で読む。
+    uint32_t mapUvSets = 0;
+
     // 一覧に出すサムネイル。マップかパラメータを変えたら作り直す。
     rhi::GpuTexture thumbnail;
     bool thumbnailDirty = true;
@@ -91,6 +108,12 @@ struct MaterialAsset {
 
 // チャンネル指定をシェーダへ渡す形へ詰める。並びは TG_CHANNEL_SLOT_* と一致させること。
 uint32_t PackMaterialChannels(const MaterialAsset& asset);
+
+inline constexpr uint32_t MaterialMapBit(MaterialMap map) { return 1u << static_cast<uint32_t>(map); }
+// そのマップを 2 つ目の UV で読むか。
+inline bool UsesSecondUv(const MaterialAsset& asset, MaterialMap map) {
+    return (asset.mapUvSets & MaterialMapBit(map)) != 0;
+}
 
 // マテリアルを保持し、サムネイルを作る。
 class MaterialLibrary {

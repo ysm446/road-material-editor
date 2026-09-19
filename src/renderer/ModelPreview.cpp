@@ -34,7 +34,9 @@ struct ModelConstants {
     uint32_t tonemapMode;
     // 0 = プレビュー（sRGB へトーンマップ）、1 = シーン（線形 HDR、影を受ける）。
     uint32_t sceneMode;
-    uint32_t pad[2];
+    // マップごとの UV（MaterialAsset::mapUvSets）。立っているビットのマップは 2 つ目の UV で読む。
+    uint32_t mapUvSets;
+    uint32_t pad;
     // ワールド行列（転置して入れる。viewProjection と同じ規約）。
     DirectX::XMFLOAT4X4 world;
     // ここから下はシーンの影。MeshPbr と同じく転置せずに入れる。
@@ -185,6 +187,7 @@ void ModelPreview::Render(rhi::Device& device, rhi::PipelineCache& pipelineCache
         constants.aoIndex = textures.SrvIndex(asset.ambientOcclusion.texture, false);
         constants.opacityIndex = textures.SrvIndex(asset.opacity.texture, false);
         constants.mapChannels = compositor::PackMaterialChannels(asset);
+        constants.mapUvSets = asset.mapUvSets;
         constants.flipNormalGreen = asset.flipNormalGreen ? 1u : 0u;
         const bool hasEnvironment = environment.IsReady();
         constants.irradianceIndex = hasEnvironment ? environment.IrradianceSrvIndex() : compositor::kInvalidTextureIndex;
@@ -280,6 +283,7 @@ void ModelPreview::RenderInScene(rhi::Device& device, rhi::PipelineCache& pipeli
         constants.aoIndex = textures.SrvIndex(asset.ambientOcclusion.texture, false);
         constants.opacityIndex = textures.SrvIndex(asset.opacity.texture, false);
         constants.mapChannels = compositor::PackMaterialChannels(asset);
+        constants.mapUvSets = asset.mapUvSets;
         constants.flipNormalGreen = asset.flipNormalGreen ? 1u : 0u;
         constants.irradianceIndex = hasEnvironment ? context.environment->IrradianceSrvIndex()
                                                    : compositor::kInvalidTextureIndex;

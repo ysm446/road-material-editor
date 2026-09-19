@@ -320,29 +320,62 @@ inline bool DrawTextureCombo(const char* id, compositor::TextureId& slot,
     return changed;
 }
 
+// マップをどの UV で読むかのコンボ（テクスチャの行の右端）。uvSets が無ければ何もしない。
+// UV を 2 つ持つのはモデルだけで、道路の合成とマテリアルの球では 1 つ目の UV で読む。
+inline bool DrawUvSetCombo(uint32_t* uvSets, compositor::MaterialMap map, float width) {
+    if (uvSets == nullptr) return false;
+    static const char* const kUvSetLabels[] = {"UV1", "UV2"};
+    const uint32_t bit = compositor::MaterialMapBit(map);
+    int uvSet = (*uvSets & bit) != 0 ? 1 : 0;
+    ImGui::SetNextItemWidth(width);
+    if (!ImGui::Combo("##uvSet", &uvSet, kUvSetLabels, IM_ARRAYSIZE(kUvSetLabels))) return false;
+    *uvSets = uvSet != 0 ? (*uvSets | bit) : (*uvSets & ~bit);
+    return true;
+}
+
+inline constexpr float kUvSetComboWidth = 60.0f;
+
 // テクスチャスロットを選ぶ行。RGB をそのまま使うマップ（ベースカラー / 法線）用。
+// uvSets を渡すと、テクスチャがあるときに右へ UV の選択を出す（map はそのビット）。
 inline bool DrawTextureSlotRow(const char* label, compositor::TextureId& slot,
-                        const compositor::TextureLibrary& library) {
-    ui::PropertyLabel(label, "「なし」なら定数値を使う");
-    const float width =
-        std::min(ui::Scaled(ui::kComboMaxWidth), ImGui::GetContentRegionAvail().x);
-    const bool changed = DrawTextureCombo("##value", slot, library, width);
+                        const compositor::TextureLibrary& library, uint32_t* uvSets = nullptr,
+                        compositor::MaterialMap map = compositor::MaterialMap::BaseColor) {
+    ui::PropertyLabel(label, uvSets ? "「なし」なら定数値を使う。右は読む UV（UV2 はモデルの 2 つ目の UV）"
+                                    : "「なし」なら定数値を使う");
+    const bool showUv = uvSets != nullptr && slot != compositor::kNoTexture;
+    const float uvWidth = showUv ? ui::Scaled(kUvSetComboWidth) : 0.0f;
+    const float spacing = showUv ? ImGui::GetStyle().ItemInnerSpacing.x : 0.0f;
+    // テクスチャの欄は UV の無い行と同じ幅に保ち、UV のコンボのぶんだけ行を右へ伸ばす（窓が狭いときだけ縮める）。
+    const float width = std::max(ui::Scaled(60.0f),
+        std::min(ui::Scaled(ui::kComboMaxWidth), ImGui::GetContentRegionAvail().x - uvWidth - spacing));
+    bool changed = DrawTextureCombo("##value", slot, library, width);
+    if (showUv) {
+        ImGui::SameLine(0.0f, spacing);
+        changed |= DrawUvSetCombo(uvSets, map, uvWidth);
+    }
     ui::PropertyEnd();
     return changed;
 }
 
 // スカラーのマップを選ぶ行。テクスチャに加えて、どのチャンネルを読むかも選ぶ。
 // Megascans の _ORD のように 1 枚へ複数のマップを詰めたテクスチャがあるため。
+// uvSets を渡すと、チャンネルの右へ UV の選択も出す（map はそのビット）。
 inline bool DrawMapSlotRow(const char* label, compositor::MapSlot& slot,
-                    const compositor::TextureLibrary& library) {
-    ui::PropertyLabel(label, "「なし」なら定数値を使う。右は読むチャンネル");
+                    const compositor::TextureLibrary& library, uint32_t* uvSets = nullptr,
+                    compositor::MaterialMap map = compositor::MaterialMap::Roughness) {
+    ui::PropertyLabel(label, uvSets ? "「なし」なら定数値を使う。右は読むチャンネルと UV（UV2 はモデルの 2 つ目の UV）"
+                                    : "「なし」なら定数値を使う。右は読むチャンネル");
 
+    const bool hasTexture = slot.texture != compositor::kNoTexture;
+    const bool showUv = uvSets != nullptr && hasTexture;
     const float channelWidth = ui::Scaled(52.0f);
+    const float uvWidth = showUv ? ui::Scaled(kUvSetComboWidth) : 0.0f;
     const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
     const float available = ImGui::GetContentRegionAvail().x;
+    // UV のコンボはテクスチャの欄を削らず、そのぶん行を右へ伸ばす（窓が狭いときだけ縮める）。
+    const float uvExtra = showUv ? uvWidth + spacing : 0.0f;
     const float comboWidth =
-        std::max(ui::Scaled(60.0f),
-                 std::min(ui::Scaled(ui::kComboMaxWidth), available) - channelWidth - spacing);
+        std::max(ui::Scaled(60.0f), std::min(ui::Scaled(ui::kComboMaxWidth), available - uvExtra) - channelWidth - spacing);
 
     bool changed = DrawTextureCombo("##texture", slot.texture, library, comboWidth);
 
@@ -355,6 +388,10 @@ inline bool DrawMapSlotRow(const char* label, compositor::MapSlot& slot,
                          IM_ARRAYSIZE(kTextureChannelLabels))) {
             slot.channel = static_cast<compositor::TextureChannel>(channel);
             changed = true;
+        }
+        if (showUv) {
+            ImGui::SameLine(0.0f, spacing);
+            changed |= DrawUvSetCombo(uvSets, map, uvWidth);
         }
     }
 

@@ -59,6 +59,7 @@ DocumentSnapshot Application::CaptureDocument() const {
         material.saturation = asset.saturation;
         material.brightness = asset.brightness;
         material.flipNormalGreen = asset.flipNormalGreen;
+        material.mapUvSets = asset.mapUvSets;
         material.roughnessValue = asset.roughnessValue;
         material.metallicValue = asset.metallicValue;
         material.ambientOcclusionValue = asset.ambientOcclusionValue;
@@ -118,6 +119,7 @@ void Application::ApplyDocument(const DocumentSnapshot& snapshot) {
         asset.saturation = material.saturation;
         asset.brightness = material.brightness;
         asset.flipNormalGreen = material.flipNormalGreen;
+        asset.mapUvSets = material.mapUvSets;
         asset.roughnessValue = material.roughnessValue;
         asset.metallicValue = material.metallicValue;
         asset.ambientOcclusionValue = material.ambientOcclusionValue;

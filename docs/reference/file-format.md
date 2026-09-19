@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-19 22:40
+更新日時: 2026-09-20 02:12
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -453,6 +453,11 @@ lift, uvRepeat, uvAlongU }` を持つ（長さは m、角度は度、density は
 RGB をそのまま使うマップ（ベースカラー / 法線）はテクスチャ参照を直に書く。
 スカラーのマップは「テクスチャ + 読むチャンネル」の組で書く
 （Megascans の `_ORD` のように 1 枚へ詰めたテクスチャを使うため）。
+
+マテリアルの `mapUvSets` はマップごとに読む UV（`1` か `2`）。キーは `maps` と同じ
+（`baseColor` / `normal` / `roughness` / `metallic` / `ambientOcclusion` / `height` / `opacity`）。
+無いキー・無いとき（古いファイル）は 1。`maps` の中はテクスチャの参照だけにするため、外に置く。
+UV を 2 つ持つのはモデル（FBX の 2 つ目の UV）だけで、道路の合成とマテリアルの球は 2 でも 1 つ目の UV で読む。
 
 ```json
 "maps": {

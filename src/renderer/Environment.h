@@ -34,10 +34,17 @@ float SkyLuminanceScale(float skyLuminance, float measuredSky);
 //   + 環境 BRDF の LUT
 //
 // 生成はすべてコンピュートで行い、Device::ExecuteImmediate でその場で完了させる。
+struct AtmosphereSettings;
+
 class Environment {
 public:
-    bool Initialize(rhi::Device& device, rhi::PipelineCache& pipelineCache);
+    // buildDefaultSky が偽なら既定の空を作らない（シーンの空のように、すぐ別の空で作り直すとき）。
+    bool Initialize(rhi::Device& device, rhi::PipelineCache& pipelineCache, bool buildDefaultSky = true);
     void Shutdown(rhi::Device& device);
+
+    // シーンの空（大気散乱）から作り直す。lutIndex は多重散乱の LUT、groundIndex は地面反射の輝度（どちらも SRV）。
+    bool BuildFromAtmosphere(rhi::Device& device, rhi::PipelineCache& pipelineCache,
+                             const AtmosphereSettings& settings, uint32_t lutIndex, uint32_t groundIndex);
 
     // 手続き的な空から作り直す。
     bool BuildFromSky(rhi::Device& device, rhi::PipelineCache& pipelineCache,

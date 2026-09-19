@@ -81,6 +81,8 @@ struct StartupOptions {
     std::vector<renderer::ModelNodeRotation> modelNodeRotations;
     // ノード用のギズモをオンにして、そのノードを選ぶ（--model-node-gizmo <node>）。
     std::string modelNodeGizmo;
+    // 起動直後に前へ出すパネル（ドックのタブ）の名前（--focus-panel <name>）。撮影用。
+    std::string focusPanel;
     // P0: Road / 砂利Surface / 歩道Surface の ID。通常のグラフ評価は変更しない。
     graph::GraphId prototypeRoad = 0;
     graph::GraphId surfaceLayoutRoad = 0;

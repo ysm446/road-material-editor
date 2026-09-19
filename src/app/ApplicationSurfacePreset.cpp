@@ -295,7 +295,7 @@ void Application::ProcessLayerPreview() {
         m_layerPreview.RequestShadowResolution(1024);
         if (!m_layerPreview.Initialize(m_device, m_pipelineCache)) { m_layerPreview.Shutdown(m_device); return; }
         m_layerPreviewInitialized = true;
-        m_layerPreview.Light() = m_renderer.Light();
+        m_layerPreview.Light() = m_renderer.WorkLight();
         m_layerPreview.ShowSkybox() = false;
         m_layerPreview.ShowReferenceGrid() = false;
         m_layerPreview.TessellationEnabled() = true;
@@ -377,7 +377,7 @@ void Application::ProcessLayerThumbnails() {
         renderer::CameraState camera;
         camera.yaw = 0.785398f; camera.pitch = 0.61548f; camera.distance = 32; camera.fovY = 0.2f;
         renderer.GetCamera().SetState(camera);
-        renderer.Light() = m_renderer.Light(); renderer.Exposure() = m_renderer.Exposure();
+        renderer.Light() = m_renderer.WorkLight(); renderer.Exposure() = m_renderer.Exposure();
         renderer.SetActiveSky(m_renderer.ActiveSky()); renderer.Tonemap() = m_renderer.Tonemap();
     }
     if (!m_layerThumbnailActive) {

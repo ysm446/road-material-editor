@@ -496,15 +496,16 @@ int Application::Run() {
                 std::clamp(m_selectedMaterial, 0, static_cast<int>(materials.size()) - 1);
             m_materialSphere.Render(m_device, m_pipelineCache, commandList,
                                     materials[static_cast<size_t>(index)], m_textureLibrary,
-                                    m_renderer.GetEnvironment(), m_renderer.ActiveSky().iblIntensity,
-                                    m_renderer.Light(), m_renderer.Exposure().Exposure(),
+                                    m_renderer.GetEnvironment(), m_renderer.EnvironmentIntensity(),
+                                    m_renderer.EffectiveLight(), m_renderer.Exposure().Exposure(),
                                     m_renderer.Tonemap());
         }
 
-        // 天球プレビューの球。**適用中の環境キューブをそのまま引く。**
+        // 天球プレビューの球。**適用中の天球（作業用IBL）の環境キューブをそのまま引く。**
+        // シーンの空で表示していても、編集しているのは作業用IBLなのでそちらを映す。
         if (m_skyPreviewVisible) {
             m_skySphere.Render(m_device, m_pipelineCache, commandList,
-                               m_renderer.GetEnvironment(), m_renderer.ActiveSky().iblIntensity,
+                               m_renderer.WorkEnvironment(), m_renderer.ActiveSky().iblIntensity,
                                m_renderer.Exposure().Exposure(), m_renderer.Tonemap());
         }
 
@@ -569,6 +570,8 @@ bool Application::Headless() const {
 void Application::DrawUi() {
     // ショートカットはメニューを開いていなくても効かせたいので、先に見る。
     HandleShortcuts();
+    // 開発用: 指定したパネル（ドックのタブ）を前に出す。ウィンドウができるまでの数フレームだけ要求する。
+    if (!m_options.focusPanel.empty() && m_frameCounter < 5) ImGui::SetWindowFocus(m_options.focusPanel.c_str());
 
     // メニューバーを先に作ることで、メインビューポートの作業領域が
     // メニューバー分を差し引いた状態になる。既定のパネル配置がこれに依存する。

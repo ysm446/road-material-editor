@@ -177,27 +177,90 @@ void Application::DrawMaterialPanel() {
 
 void Application::DrawLightingPanel() {
     if (ImGui::Begin("ライティング")) {
+        // **作業用IBLとシーンの空は別々に持つ。** 切り替えてもどちらの設定も失わない。
+        if (ui::BeginPropertyTable("lightingModeRows")) {
+            static const char* const kModes[] = {"作業用IBL", "シーンの空"};
+            int mode = m_renderer.AtmosphericMode() ? 1 : 0;
+            if (ui::PropertyCombo("表示環境", &mode, kModes, IM_ARRAYSIZE(kModes), 0,
+                                  "作業用IBLは質感の確認用（天球と作業用のライト）。\n"
+                                  "シーンの空は大気散乱の空と太陽で照らす。太陽の色と空の明るさは大気の計算で決まる")) {
+                m_renderer.AtmosphericMode() = mode == 1;
+            }
+            ui::EndPropertyTable();
+        }
+        const bool atmospheric = m_renderer.AtmosphericMode();
+        if (!atmospheric) ui::HintText("作業用IBLで確認中。シーンの太陽・大気の設定は保持されている");
         renderer::LightSettings& light = m_renderer.Light();
+        const renderer::AtmosphereSettings skyDefaults;
 
-        ui::SectionHeader("ライト");
+        ui::SectionHeader(atmospheric ? "シーンの太陽" : "作業用ライト");
         if (ui::BeginPropertyTable("lightRows")) {
             float azimuthDeg = RadiansToDegrees(light.azimuth);
             if (ui::PropertyFloat("方位角", &azimuthDeg, -180.0f, 180.0f,
-                                  RadiansToDegrees(kDefaultLight.azimuth),
+                                  RadiansToDegrees(atmospheric ? skyDefaults.azimuth : kDefaultLight.azimuth),
                                   "太陽の向き（水平方向）", "%.0f 度")) {
                 light.azimuth = DegreesToRadians(azimuthDeg);
             }
             float elevationDeg = RadiansToDegrees(light.elevation);
-            if (ui::PropertyFloat("仰角", &elevationDeg, -89.0f, 89.0f,
-                                  RadiansToDegrees(kDefaultLight.elevation),
-                                  "太陽の高さ。低いほど影が伸びる", "%.0f 度")) {
+            if (ui::PropertyFloat("仰角", &elevationDeg, atmospheric ? -10.0f : -89.0f, 89.0f,
+                                  RadiansToDegrees(atmospheric ? skyDefaults.elevation : kDefaultLight.elevation),
+                                  atmospheric ? "太陽の高さ。低いほど影が伸び、光と空が赤くなる。地平線より下では直射光が無くなる"
+                                              : "太陽の高さ。低いほど影が伸びる",
+                                  "%.0f 度")) {
                 light.elevation = DegreesToRadians(elevationDeg);
             }
-            ui::PropertyFloat("照度", &light.illuminance, 0.0f, 200000.0f,
-                              kDefaultLight.illuminance,
-                              "lux。晴天の直射日光がおよそ 100000 lux", "%.0f");
-            ui::PropertyColorLinear("光の色", &light.color.x, &kDefaultLight.color.x);
+            if (atmospheric) {
+                ui::PropertyFloat("照度", &light.illuminance, 0.0f, 200000.0f, skyDefaults.illuminance,
+                                  "大気圏外の照度（lux）。地表では大気の透過率で減衰する", "%.0f");
+                const renderer::LightSettings effective = m_renderer.EffectiveLight();
+                ui::PropertyValue("光の色", "大気の透過率から自動計算");
+                ui::PropertyValue("地表の照度", "%.0f lux",
+                                  effective.illuminance *
+                                      (0.2126f * effective.color.x + 0.7152f * effective.color.y + 0.0722f * effective.color.z));
+            } else {
+                ui::PropertyFloat("照度", &light.illuminance, 0.0f, 200000.0f,
+                                  kDefaultLight.illuminance,
+                                  "lux。晴天の直射日光がおよそ 100000 lux", "%.0f");
+                ui::PropertyColorLinear("光の色", &light.color.x, &kDefaultLight.color.x);
+            }
             ui::EndPropertyTable();
+        }
+
+        if (atmospheric) {
+            renderer::AtmosphereSettings& sky = m_renderer.AtmosphericSettings();
+            ui::SectionHeader("大気");
+            if (ui::BeginPropertyTable("atmosphereRows", 150.0f)) {
+                ui::PropertyFloat("レイリー散乱強度", &sky.density, 0.1f, 3.0f, skyDefaults.density,
+                                  "空の青さや夕焼けを生む大気の散乱量。1 が地球の標準。\n"
+                                  "大きくすると散乱と太陽光の減衰が強くなり、空の色と照明が変わる", "%.2f");
+                ui::PropertyFloat("ミー密度", &sky.mie, 0.0f, 2.0f, skyDefaults.mie,
+                                  "エアロゾル（霞・塵）の密度の倍率。大きくすると太陽の周囲や地平線が白っぽく霞み、直射光が弱まる",
+                                  "%.2f");
+                ui::PropertyFloat("ミー異方性", &sky.eccentricity, 0.0f, 0.95f, skyDefaults.eccentricity,
+                                  "ミー散乱の異方性（g）。大きいほど太陽付近の光が鋭く集中する", "%.2f");
+                ui::PropertyFloat("地表の基準標高", &sky.altitude, 0.0f, 10000.0f, skyDefaults.altitude,
+                                  "道路の原点の海抜高度（m）。空と光を計算する基準で、道路やカメラは動かない", "%.0f m");
+                int lowerHemisphere = static_cast<int>(sky.lowerHemisphere);
+                static const char* const kLowerHemisphereLabels[] = {"空の延長", "地面反射"};
+                if (ui::PropertyCombo("下半球", &lowerHemisphere, kLowerHemisphereLabels, 2,
+                                      static_cast<int>(skyDefaults.lowerHemisphere),
+                                      "地平線より下の見え方。空の延長は青空を下へ折り返す見た目のための近似。\n"
+                                      "地面反射は日光と空の光を受けた地表の反射。背景と環境光の両方に効く")) {
+                    sky.lowerHemisphere = static_cast<uint32_t>(lowerHemisphere);
+                }
+                ui::PropertyFloat("グラウンドアルベド", &sky.groundAlbedo, 0.0f, 1.0f, skyDefaults.groundAlbedo,
+                                  "地面反射で日光と空の光を反射する割合（空の延長では下半球の明るさ）。\n"
+                                  "大気の多重散乱にも効く。道路のマテリアルの色は変えない", "%.2f");
+                ui::EndPropertyTable();
+            }
+            ui::SectionHeader("環境光");
+            if (ui::BeginPropertyTable("atmosphericEnvironmentRows", 150.0f)) {
+                ui::PropertyFloat("スカイライト強度", &m_renderer.SkylightIntensity(), 0.0f, 8.0f,
+                                  renderer::PreviewRenderer::kDefaultSkylightIntensity,
+                                  "空と地面反射から届く環境光（IBL）の倍率。1 は大気の計算そのまま。\n"
+                                  "上げると陰側や環境の映り込みが明るくなる。太陽の直射光・背景の空・露出は変えない", "%.2f");
+                ui::EndPropertyTable();
+            }
         }
 
         ui::SectionHeader("露出");
@@ -231,10 +294,10 @@ void Application::DrawLightingPanel() {
 
         // **環境そのもの（何を空にするか）は天球パネルが持つ。**
         // ここに残すのは、天球ではなく見え方に属する設定だけ。
-        ui::SectionHeader("環境 (IBL)");
+        ui::SectionHeader(atmospheric ? "背景" : "環境 (IBL)");
         if (ui::BeginPropertyTable("iblRows")) {
             const renderer::SkyAsset* activeSky = m_skyLibrary.Active();
-            ui::PropertyValue("天球", "%s", (activeSky != nullptr) ? activeSky->name.c_str() : "-");
+            ui::PropertyValue("作業用IBL", "%s", (activeSky != nullptr) ? activeSky->name.c_str() : "-");
             ui::PropertyValue("環境", "%s", m_renderer.GetEnvironment().SourceName().c_str());
             ui::PropertyValue("equirect", "%u x %u", m_renderer.GetEnvironment().EquirectWidth(),
                               m_renderer.GetEnvironment().EquirectHeight());
@@ -250,7 +313,8 @@ void Application::DrawLightingPanel() {
             ImGui::EndDisabled();
             ui::EndPropertyTable();
         }
-        ui::HintText("空の切り替えと輝度は「天球」パネルで設定する");
+        ui::HintText(atmospheric ? "作業用IBL（天球）は「表示環境」を作業用IBLにしたときに使う。天球パネルで切り替えられる"
+                                 : "空の切り替えと輝度は「天球」パネルで設定する");
 
         ui::SectionHeader("トーンマップ");
         if (ui::BeginPropertyTable("tonemapRows")) {

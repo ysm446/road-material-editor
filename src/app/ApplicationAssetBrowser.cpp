@@ -606,7 +606,7 @@ void Application::ProcessAssetWork() {
     }
     PersistLayerThumbnails();
     if (m_assetRefresh) RefreshAssetBrowser();
-    m_assetThumbnails.SetModelLighting({&m_renderer.GetEnvironment(), m_renderer.ActiveSky().iblIntensity, m_renderer.Light(),
+    m_assetThumbnails.SetModelLighting({&m_renderer.GetEnvironment(), m_renderer.EnvironmentIntensity(), m_renderer.EffectiveLight(),
                                         m_renderer.Exposure().Exposure(), m_renderer.Tonemap()});
     m_assetThumbnails.Process(m_device, m_pipelineCache, m_workspace, m_assetDirectory);
 }

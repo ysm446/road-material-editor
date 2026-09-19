@@ -228,7 +228,7 @@ void Application::RenderModelPreviews(ID3D12GraphicsCommandList* commandList) {
         const bool live = m_modelPreviewVisible && asset.id == m_selectedModel;
         if (!live && m_renderedModelThumbnails.contains(asset.id)) continue;
         found->second->Render(m_device, m_pipelineCache, commandList, asset, m_materialLibrary, m_textureLibrary,
-                              m_renderer.GetEnvironment(), m_renderer.ActiveSky().iblIntensity, m_renderer.Light(),
+                              m_renderer.GetEnvironment(), m_renderer.EnvironmentIntensity(), m_renderer.EffectiveLight(),
                               m_renderer.Exposure().Exposure(), m_renderer.Tonemap());
         if (found->second->HasOutput()) m_renderedModelThumbnails.insert(asset.id);
     }

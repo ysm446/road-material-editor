@@ -231,6 +231,12 @@ struct SkyboxConstants {
     uint32_t environmentIndex;
     float mipLevel;
     float pad0[2];
+
+    // 太陽の円盤（シーンの空のときだけ。sunRadiance が 0 なら描かない）。
+    XMFLOAT3 sunDirection;
+    float sunAngularRadius;
+    XMFLOAT3 sunRadiance;
+    float pad1;
 };
 
 // GPU 側の DofConstants と一致させること。
@@ -504,6 +510,7 @@ void PreviewRenderer::Shutdown(rhi::Device& device) {
     ClearMeshScene(device);
     for (auto& map : m_shadowMaps) device.DeferRelease(map);
     m_environment.Shutdown(device);
+    m_atmosphere.Shutdown(device);
     ReleaseTargets(device);
 }
 
@@ -531,6 +538,16 @@ void PreviewRenderer::ProcessPendingWork(rhi::Device& device,
                     TG_LOG_WARN("道路レイヤーの解像度を変更できませんでした");
             }
         }
+    }
+
+    // シーンの空。太陽はライトの節（m_atmosphericLight）が持つので、大気の設定へ写してから作る。
+    // 変わっていなければ何もしない（Atmosphere::Update が比べる）。
+    if (m_atmosphericMode) {
+        AtmosphereSettings settings = m_atmosphereSettings;
+        settings.azimuth = m_atmosphericLight.azimuth;
+        settings.elevation = m_atmosphericLight.elevation;
+        settings.illuminance = m_atmosphericLight.illuminance;
+        m_atmosphere.Update(device, pipelineCache, settings);
     }
 
     if (m_skyRebuildRequested) {
@@ -569,6 +586,11 @@ void PreviewRenderer::ResetSettings() {
     m_camera.SetState(CameraState{});
     m_camera.Frame({0.0f, 0.0f, 0.0f}, kReferenceGridRadius);
     m_light = LightSettings{};
+    m_atmosphericMode = false;
+    m_atmosphereSettings = AtmosphereSettings{};
+    m_atmosphericLight = {m_atmosphereSettings.azimuth, m_atmosphereSettings.elevation,
+                          m_atmosphereSettings.illuminance, {1.0f, 1.0f, 1.0f}};
+    m_skylightIntensity = kDefaultSkylightIntensity;
     m_exposure = ExposureSettings{};
     m_dof = DofSettings{};
 
@@ -610,6 +632,15 @@ float PreviewRenderer::FocusDistance() const {
 
 // 現在のシーンを包む球の半径。カメラの Frame()（A キー）が使う。
 // シーンが無ければ作業グリッドの半径（グリッドだけが見えている状態の基準）。
+LightSettings PreviewRenderer::EffectiveLight() const {
+    if (!m_atmosphericMode) return m_light;
+    LightSettings result = m_atmosphericLight;
+    AtmosphereSettings settings = m_atmosphereSettings;
+    settings.elevation = result.elevation;
+    result.color = AtmosphereSunTransmittance(settings);
+    return result;
+}
+
 float PreviewRenderer::BoundingRadius() const {
     if (m_extraSceneRadius > 0.0f) {
         return std::max(m_meshSceneEnabled ? m_meshSceneRadius : 0.0f, m_extraSceneRadius);
@@ -825,14 +856,17 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     XMStoreFloat4x4(&constants.normalMatrix, XMMatrixIdentity());
 
     constants.cameraPosition = m_camera.Position();
-    constants.lightDirection = m_light.Direction();
-    constants.lightIlluminance = m_light.illuminance;
-    constants.lightColor = m_light.color;
-    constants.iblIntensity = m_environment.IsReady() ? m_activeSky.iblIntensity : 0.0f;
-    constants.prefilteredMipCount = m_environment.PrefilteredMipCount();
-    constants.irradianceIndex = m_environment.IrradianceSrvIndex();
-    constants.prefilteredIndex = m_environment.PrefilteredSrvIndex();
-    constants.brdfLutIndex = m_environment.BrdfLutSrvIndex();
+    // シーンの空では、太陽は大気を通った色と照度、環境は大気の環境（作業用IBLとは別）。
+    const LightSettings light = EffectiveLight();
+    const Environment& environment = GetEnvironment();
+    constants.lightDirection = light.Direction();
+    constants.lightIlluminance = light.illuminance;
+    constants.lightColor = light.color;
+    constants.iblIntensity = environment.IsReady() ? EnvironmentIntensity() : 0.0f;
+    constants.prefilteredMipCount = environment.PrefilteredMipCount();
+    constants.irradianceIndex = environment.IrradianceSrvIndex();
+    constants.prefilteredIndex = environment.PrefilteredSrvIndex();
+    constants.brdfLutIndex = environment.BrdfLutSrvIndex();
 
     // 材質（合成結果）と変位はメッシュごとに決める（下の drawMeshes）。ここでは無しにしておく。
     constants.useMaterialTextures = 0u;
@@ -1049,7 +1083,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         float displacementMargin = 0;
         for (const auto& mesh : m_meshScene.meshes)
             displacementMargin = std::max(displacementMargin, std::abs(mesh.displacementMeters));
-        const auto cascades = BuildShadowCascades(m_camera, m_light.Direction(), BoundingRadius() + displacementMargin,
+        const auto cascades = BuildShadowCascades(m_camera, light.Direction(), BoundingRadius() + displacementMargin,
             float(m_width) / float(std::max(m_height, 1u)), m_shadowResolution, m_shadowCascadeCount);
         constants.shadowNear = cascades.nearDistance;
         for (uint32_t i = 0; i < kShadowCascadeCount; ++i) {
@@ -1163,11 +1197,11 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
         context.shadowBlend = constants.shadowBlend;
         context.shadowNear = constants.shadowNear;
         context.shadowCascadeCount = constants.shadowCascadeCount;
-        context.environment = &m_environment;
-        context.iblIntensity = m_activeSky.iblIntensity;
-        context.lightDirection = m_light.Direction();
-        context.lightIlluminance = m_light.illuminance;
-        context.lightColor = m_light.color;
+        context.environment = &environment;
+        context.iblIntensity = EnvironmentIntensity();
+        context.lightDirection = light.Direction();
+        context.lightIlluminance = light.illuminance;
+        context.lightColor = light.color;
         drawSceneExtras(commandList, context);
         commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
         commandList->SetPipelineState(meshPipeline);
@@ -1209,7 +1243,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
     // メッシュのあとに描く。深度は書かず、まだ何も描かれていない画素だけを埋める。
 
     // チャンネルを覗く表示のときは背景を描かない。値だけを見たいため。
-    if (m_showSkybox && m_environment.IsReady() && IsShadedView(m_debugView)) {
+    if (m_showSkybox && environment.IsReady() && IsShadedView(m_debugView)) {
         rhi::GraphicsPipelineDesc skyboxPipelineDesc;
         skyboxPipelineDesc.shaderPath = L"Skybox.hlsl";
         skyboxPipelineDesc.vertexEntry = L"VsMain";
@@ -1233,17 +1267,29 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
             XMStoreFloat4x4(&skyboxConstants.inverseViewProjection,
                             XMMatrixInverse(nullptr, XMMatrixMultiply(view, projection)));
             skyboxConstants.cameraPosition = m_camera.Position();
-            skyboxConstants.intensity = m_activeSky.iblIntensity;
+            // シーンの空の背景は空の輝度そのもの（スカイライトの強さは IBL だけに掛ける）。
+            skyboxConstants.intensity = m_atmosphericMode ? 1.0f : m_activeSky.iblIntensity;
             if (m_skyboxBlur) {
                 // プリフィルタ済みキューブはラフネス別に GGX で畳み込んである。
                 // 粗いミップを引けば、ぼかしパスを足さずに背景だけを柔らかくできる。
                 // ミップを落とすだけの（箱フィルタの）環境キューブより滑らか。
-                skyboxConstants.environmentIndex = m_environment.PrefilteredSrvIndex();
+                skyboxConstants.environmentIndex = environment.PrefilteredSrvIndex();
                 skyboxConstants.mipLevel = std::min(
-                    kSkyboxBlurMip, static_cast<float>(m_environment.PrefilteredMipCount() - 1));
+                    kSkyboxBlurMip, static_cast<float>(environment.PrefilteredMipCount() - 1));
             } else {
-                skyboxConstants.environmentIndex = m_environment.EnvironmentSrvIndex();
+                skyboxConstants.environmentIndex = environment.EnvironmentSrvIndex();
                 skyboxConstants.mipLevel = 0.0f;
+            }
+            if (m_atmosphericMode && m_atmosphere.IsReady()) {
+                // 太陽の円盤。環境マップには入れていないので、大気を通った照度を円盤の立体角で割った輝度で足す。
+                // 視半径 0.00465 rad（約 0.27 度）。RGBA16F に収まるよう頭を抑える（直接光・IBL はそのまま）。
+                constexpr float kSunAngularRadius = 0.00465f;
+                const float solidAngle = 3.14159265f * kSunAngularRadius * kSunAngularRadius;
+                skyboxConstants.sunDirection = light.Direction();
+                skyboxConstants.sunAngularRadius = kSunAngularRadius;
+                skyboxConstants.sunRadiance = {std::min(light.color.x * light.illuminance / solidAngle, 60000.0f),
+                                               std::min(light.color.y * light.illuminance / solidAngle, 60000.0f),
+                                               std::min(light.color.z * light.illuminance / solidAngle, 60000.0f)};
             }
             std::memcpy(skyboxCb.cpu, &skyboxConstants, sizeof(skyboxConstants));
 

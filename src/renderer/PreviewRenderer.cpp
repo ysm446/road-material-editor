@@ -1427,7 +1427,7 @@ void PreviewRenderer::Render(rhi::Device& device, rhi::PipelineCache& pipelineCa
 void PreviewRenderer::DrawGuideOverlay(rhi::Device& device,
                                        rhi::PipelineCache& pipelineCache,
                                        ID3D12GraphicsCommandList* commandList) {
-    if (!m_showReferenceGrid) {
+    if (!m_showReferenceGrid && m_overlayLines.empty()) {
         return;
     }
 
@@ -1445,9 +1445,68 @@ void PreviewRenderer::DrawGuideOverlay(rhi::Device& device,
     pipelineDesc.alphaBlend = true;
 
     ID3D12PipelineState* pipeline = pipelineCache.GetGraphics(pipelineDesc);
+    if (pipeline == nullptr) {
+        return;
+    }
+
+    PIXBeginEvent(commandList, PIX_COLOR(160, 170, 190), "PreviewReferenceGrid");
+
+    TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    // DoF が有効なフレームでは深度が SRV になっている。DSV として束ね直す
+    // （書き込みは PSO 側で無効にしてある）。
+    TransitionIfNeeded(commandList, m_depth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_output.rtv.cpu;
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsv = m_depth.dsv.cpu;
+    commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+
+    commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
+    commandList->SetPipelineState(pipeline);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+    commandList->IASetVertexBuffers(0, 0, nullptr);
+    commandList->IASetIndexBuffer(nullptr);
+
+    // 端点を定数バッファへ詰めて 1 回描く。上限を超えたら分けて描く。
+    const auto submit = [&](const OverlayLineConstants& constants, uint32_t count) {
+        if (count == 0) return;
+        const rhi::UploadAllocation cb = device.Upload().Allocate(sizeof(OverlayLineConstants), 256);
+        if (!cb.IsValid()) return;
+        std::memcpy(cb.cpu, &constants, sizeof(constants));
+        commandList->SetGraphicsRootConstantBufferView(1, cb.gpuAddress);
+        commandList->DrawInstanced(count, 1, 0, 0);
+        ++m_stats.drawCalls;
+        m_stats.vertices += count;
+    };
+    for (const OverlayLineSet& set : m_overlayLines) {
+        OverlayLineConstants constants = {};
+        XMStoreFloat4x4(&constants.viewProjection,
+                        XMMatrixMultiply(m_camera.ViewMatrix(), m_camera.ProjectionMatrix()));
+        constants.color[0] = set.color.x;
+        constants.color[1] = set.color.y;
+        constants.color[2] = set.color.z;
+        constants.color[3] = set.color.w;
+        uint32_t count = 0;
+        for (size_t i = 0; i + 1 < set.points.size(); i += 2) {
+            if (count + 2 > kOverlayLineMaxVertices) {
+                submit(constants, count);
+                count = 0;
+            }
+            const auto& a = set.points[i];
+            const auto& b = set.points[i + 1];
+            constants.positions[count++] = XMFLOAT4{a.x, a.y, a.z, 1.0f};
+            constants.positions[count++] = XMFLOAT4{b.x, b.y, b.z, 1.0f};
+        }
+        submit(constants, count);
+    }
+    if (!m_showReferenceGrid) {
+        PIXEndEvent(commandList);
+        return;
+    }
+
     const rhi::UploadAllocation cb =
         device.Upload().Allocate(sizeof(OverlayLineConstants), 256);
-    if (pipeline == nullptr || !cb.IsValid()) {
+    if (!cb.IsValid()) {
+        PIXEndEvent(commandList);
         return;
     }
 
@@ -1482,24 +1541,7 @@ void PreviewRenderer::DrawGuideOverlay(rhi::Device& device,
     }
 
     std::memcpy(cb.cpu, &constants, sizeof(constants));
-
-    PIXBeginEvent(commandList, PIX_COLOR(160, 170, 190), "PreviewReferenceGrid");
-
-    TransitionIfNeeded(commandList, m_output, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    // DoF が有効なフレームでは深度が SRV になっている。DSV として束ね直す
-    // （書き込みは PSO 側で無効にしてある）。
-    TransitionIfNeeded(commandList, m_depth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-
-    const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_output.rtv.cpu;
-    const D3D12_CPU_DESCRIPTOR_HANDLE dsv = m_depth.dsv.cpu;
-    commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
-
-    commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
-    commandList->SetPipelineState(pipeline);
     commandList->SetGraphicsRootConstantBufferView(1, cb.gpuAddress);
-    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-    commandList->IASetVertexBuffers(0, 0, nullptr);
-    commandList->IASetIndexBuffer(nullptr);
     commandList->DrawInstanced(count, 1, 0, 0);
     ++m_stats.drawCalls;
     m_stats.vertices += count;

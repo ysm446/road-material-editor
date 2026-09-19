@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-19 21:00
+更新日時: 2026-09-19 21:58
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -28,6 +28,15 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
+
+### 2026-09-19 21:58 — モデル系のノード（Transform / Model Merge）とギズモ
+
+ピンの型 Model を足し、Model / Transform / Model Merge をモデル系として道路系（Mesh）から分けた。Mesh Output に Model 入力を追加。
+`CollectOutputModels` が Model 入力から辿り、Model ごとに通った Transform を返す（同じ Model を複数の経路で出せる）。回転は X / Y / Z の 3 軸（RollPitchYaw）。
+ビューポートで W 移動（軸・平面）/ E 回転（輪、Ctrl で 15 度刻み）のギズモ。ワールド軸で操作し、下流の Transform の座標へ戻して値に足す。
+範囲の枠は `PreviewRenderer::SetOverlayLines` で深度付きの線にした。ノード追加メニューを「道路」「モデル」で分けた。
+Debug ビルド・全 CPU テスト成功。移動ギズモと深度付きの枠（道路シーン）、回転ギズモと Transform・Model Merge（同じ Model を 2 経路で出す）を `--screenshot-ui` で確認。
+ギズモのドラッグ（移動・回転）の対話操作は未確認。
 
 ### 2026-09-19 21:00 — Model ノード（モデルをビューポートに置く）
 

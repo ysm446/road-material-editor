@@ -173,6 +173,7 @@ bool Application::Initialize(const StartupOptions& options) {
         m_pendingModelImports.push_back(options.importModel);
         m_createImportedModelMaterials = true;
     }
+    if (options.gizmoRotate) m_modelGizmoMode = ModelGizmoMode::Rotate;
     if (!options.placeModel.empty()) {
         m_pendingModelPlacements.push_back({std::filesystem::absolute(options.placeModel).lexically_normal(), {}});
     }

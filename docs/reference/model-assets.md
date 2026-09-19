@@ -1,16 +1,16 @@
 # model-assets — 3D モデル（FBX）とマテリアルスロット
 
 作成日時: 2026-09-19 17:30
-更新日時: 2026-09-19 21:00
+更新日時: 2026-09-19 21:58
 
 FBX を読み込んで共有アセット `.tgmodel` にし、FBX のマテリアルごと（スロット）に共有マテリアル `.tgmat` を割り当てる。
 terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationModelPanel`）を移植したもの。
 配置（Model Scatter ノードとインスタンス描画）と、専用の「モデル」一覧パネルは持ってこない。
-一覧はアセットの帯が兼ねる。ビューポートへはグラフの **Model ノード**で置く（下記）。
+一覧はアセットの帯が兼ねる。ビューポートへはグラフのモデル系のノード（Model / Transform / Model Merge）で置く（下記）。
 
 実装: [ModelAsset](../../src/renderer/ModelAsset.h)、[ModelPreview](../../src/renderer/ModelPreview.h)、
 [ModelPreview.hlsl](../../shaders/ModelPreview.hlsl)、[ApplicationModelPanel.cpp](../../src/app/ApplicationModelPanel.cpp)、
-[ApplicationModelPlacement.cpp](../../src/app/ApplicationModelPlacement.cpp)（Model ノード）。
+[ApplicationModelPlacement.cpp](../../src/app/ApplicationModelPlacement.cpp)（モデル系のノード）。
 
 ## 読み込み
 
@@ -61,36 +61,51 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
 
 ## 保存
 
-- シーン（版 28）の Model ノードは `graph.nodes[]` の `model: {model: models[].id | null, position: [x, y, z], rotation, scale}`。
+- シーン（版 28）の Model ノードは `graph.nodes[]` の `model: {model: models[].id | null, position: [x, y, z], rotation: [x, y, z], scale}`、
+  Transform は `transform: {position, rotation, scale}`、Model Merge は設定を持たない。
 - シーン（版 27）の `models[]` は `{id, name, path, scale, materials: [番号 | null]}`。`.tgscene` では `.tgmodel` へ分け、
   `{id, asset: {uid, path}}` になる。形式は [file-format.md](file-format.md)。
 - `.tgmodel`（`terrain-graph.model-asset` 版 1）: `{name, uid, source: {uid, path}, scale, materials: [{uid, path} | null]}`。
   FBX は `.meta` の固定 ID で参照する。見つからない FBX はパスのまま残し、リンク切れとして読み込む（割り当ては失わない）。
 
-## Model ノード
+## モデルの系統のノード
 
-- グラフの **Model** ノード（保存名 `model`、種類 32）。入力は無く、出力は Mesh。Mesh Output か Merge へ繋ぐとビューポートに出る。
-  道路と一緒に出すときは Merge で合流させる。設定（`ModelNodeSettings`）は `{model, position, rotationDegrees, scale}`。
-  model はシーンのモデル一覧の ID（0 = なし）、position はモデルの**底面の中心**（形状の境界ボックスの X・Z の中央、Y の最小）の位置。
-  ワールド行列は 底面中心へ移す → モデルアセットの倍率 × ノードの倍率 → Y 回転 → 平行移動。
-- 道路メッシュの評価器（`EvaluateMeshChain`）は Model ノードを素通りする（道路面が無いだけで失敗にしない。Merge に Model だけ繋いでもエラーにしない）。
-  ビューポートに出す Model ノードは `CollectOutputModelNodes` が Mesh Output から Merge を辿って集める（プレビュー中のメッシュノードがあればその鎖の中だけ）。
+道路系（ピンの型 Mesh）とモデル系（ピンの型 **Model**）はノードを分け、互いには繋がらない。
+Mesh Output は道路の「Mesh」入力とモデルの「Model」入力の 2 本を持つ。
+
+| ノード | 保存名 | ピン | 役割 |
+| --- | --- | --- | --- |
+| Model | `model` | 出力 Model | モデル 1 つ。`{model, position, rotation[3], scale}` |
+| Transform | `transform` | 入力 Model → 出力 Model | 上流のモデルをまとめて動かす。`{position, rotation[3], scale}` |
+| Model Merge | `modelMerge` | 入力 Model（可変）→ 出力 Model | 複数の枝を 1 本に。入力は Merge と同じく繋ぐたびに増える |
+
+- model はシーンのモデル一覧の ID（0 = なし）。Model の position はモデルの**底面の中心**（形状の境界ボックスの X・Z の中央、Y の最小）の位置。
+- 回転は X / Y / Z 軸まわりの度で、Z → X → Y の順に回す（DirectX の RollPitchYaw）。旧データの数値 1 つは Y として読む。
+- ワールド行列は 底面中心へ移す → アセットの倍率 → Model の倍率 → 回転 → 位置 → モデルに近い Transform から順に（倍率 → 回転 → 位置）。
+  Transform は自分の原点まわりに効く。同じ Model を Model Merge の別の入力や別の Transform から繋げば、その数だけ出る。
+- `CollectOutputModels` が Mesh Output の Model 入力から Transform / Model Merge を辿り、Model ごとに通った Transform（近い順）を返す。
+  プレビュー中のノードがモデル系ならその枝だけ（道路は出さない）、道路系ならモデルは出さない。
 - **置き方の変更（位置・回転・倍率・モデル）はグラフの改版を起こさない**（道路を作り直さない）。描画は毎フレーム設定から行う。
   リンクの変更は従来どおり改版する。設定はノードの一部なのでアンドゥ・コピーの対象。
 - 置き方の入口:
   - アセットの帯のモデル（`.tgmodel` / `.fbx`、読み込み前でもよい）をビューポートへドラッグして落とす。落とした所の道路メッシュの面（変位前）、
     当たらなければ地面 y = 0 に、Model ノードを作って置く。複数を落とすと X へ 2 m ずつずらす。
   - モデルプレビューの窓の「ビューポートに置く」（カメラの注視点の真下 y = 0）。
-  - グラフの右クリックメニューの「Model」（モデルはプロパティで選ぶ）。
-  - 作ったノードは Mesh Output へ繋ぐ。Mesh Output が無ければ作り、別のものが繋がっていれば Merge を挟んでまとめ、既に Merge なら空きの入力へ繋ぐ。
-- ビューポートの操作（Path ノード未選択のとき。視点は従来どおり Alt）: クリックでその Model ノードを選ぶ（グラフエディタの選択も合わせる。
-  境界ボックスの枠を重ねる）、ドラッグで掴んだ高さの水平面に沿って移動、Esc でドラッグ前へ戻す / 選択解除、Delete でノードごと削除、F で寄る。
-  設定はグラフパネルのプロパティ欄（モデル / 位置 / 回転 Y / 倍率 / 寸法、モデルを開く）。
+  - グラフの右クリックメニューの「モデル」の項（Model はモデルプレビューで選んでいるモデルが最初から入る）。
+  - 作った Model は Mesh Output の Model 入力へ繋ぐ。Mesh Output が無ければ作り、別のものが繋がっていれば Model Merge を挟み、
+    既に Model Merge なら空きの入力へ繋ぐ。
+- ビューポートの操作（Path ノード未選択のとき。視点は従来どおり Alt）:
+  - モデルのクリックでその Model ノードを選ぶ（グラフエディタの選択も合わせる）。本体のドラッグは水平移動。
+  - 選んだ Model / Transform のギズモ。**W で移動**（X / Y / Z の矢印と YZ / XZ / XY の平面ハンドル）、**E で回転**（X / Y / Z の輪。Ctrl で 15 度刻み）。
+    ギズモの軸はワールド軸で、下流に Transform があればその座標へ戻して値に足す（回転は R' = R・P・Ra・P の逆 を角度へ戻す）。
+    ギズモは画面上で一定の大きさ（90px）、ImGui で重ね描きし深度は見ない。
+  - Esc でドラッグ前へ戻す / 選択解除、Delete でノードごと削除、F で寄る。設定はグラフパネルのプロパティ欄（モデル / 位置 / 回転 / 倍率 / 寸法）。
+- 範囲の枠（モデルの向きに沿った境界ボックス）は `PreviewRenderer::SetOverlayLines` でレンダラが描く。シーンの深度でテストするので奥は隠れる。
+  選んだ Model はそのモデル、選んだ Transform はその枝のモデルすべて（`ImGuiCol_PlotLinesHovered`）、ホバーは `ImGuiCol_PlotLines`。
 - 描画は `PreviewRenderer::drawSceneExtras` から `ModelPreview::RenderInScene` を呼ぶ。本描画は不透明の道路の直後
   （路面の帯と半透明の帯の前）で線形 HDR を書き、道路と同じカスケードシャドウの影を受ける。
   各シャドウカスケードにも深度を書くので、道路へ影を落とす（半透明のパーツは落とさない）。
-  シェーディング / クレイ表示でだけ描く（チャンネルを覗く表示には出ない）。
-  出すモデルを包む球（`SetExtraSceneRadius`）を影の範囲とカメラの距離に含める。
+  シェーディング / クレイ表示でだけ描く（チャンネルを覗く表示には出ない）。出すモデルを包む球（`SetExtraSceneRadius`）を影の範囲とカメラの距離に含める。
 - モデルをシーンから外すと、それを指す Model ノードは「なし」になる（ノードとリンクは残す）。
 - 描くメッシュはモデルプレビューと共有しているので、窓で表示 LOD を変えるとビューポートもその LOD になる。
 - 選択の判定は CPU で、境界ボックス → LOD 0 の三角形の順に調べる。
@@ -100,9 +115,10 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
 - `--import-model <fbx>`: FBX を取り込み、「FBX のマテリアルから作成」まで行ってプレビューを開く。
 - `--open-asset <path>`: ルート内のアセットを帯のダブルクリックと同じ経路で開き、そのフォルダを帯に出す。
 - `--place-model <path>`: モデル（`.tgmodel` / `.fbx`）の Model ノードを作って原点へ置く（帯からビューポートへ落としたのと同じ経路）。
+- `--gizmo-rotate`: ギズモを回転（E）で始める。`--select-node <id>` と合わせて回転ギズモを撮る。
 
 ## 未対応（後続）
 
-- Model ノードの入力（Path / Road に沿った配置・並べ置き。ガードレールの支柱や標識）。移動ギズモと高さ方向のドラッグ。
+- モデル系のノードで Path / Road に沿って置く・並べる（ガードレールの支柱や標識）。倍率のギズモ。
 - UV2（ライトマップ用の 2 つ目の UV）。F16 はライトマップも UV1 なので AO として使えている。
 - スキンメッシュ・アニメーション、埋め込みテクスチャ、FBX 以外の形式（glTF / OBJ）。

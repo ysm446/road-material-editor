@@ -63,22 +63,45 @@ ModelSlotSource ReadSlotSource(const ufbx_material* material, const fs::path& mo
 
 }  // namespace
 
-XMMATRIX ModelInstanceWorld(const ModelAsset& model, const ModelInstance& instance) {
+XMMATRIX ModelPivotMatrix(const ModelAsset& model) {
     if (!model.geometry) return XMMatrixIdentity();
     const auto& lo = model.geometry->minimum;
     const auto& hi = model.geometry->maximum;
-    const XMMATRIX pivot = XMMatrixTranslation(-(lo.x + hi.x) * 0.5f, -lo.y, -(lo.z + hi.z) * 0.5f);
-    const float scale = model.scale * instance.scale;
-    return pivot * XMMatrixScaling(scale, scale, scale) *
-           XMMatrixRotationY(XMConvertToRadians(instance.rotationDegrees)) *
-           XMMatrixTranslation(instance.position.x, instance.position.y, instance.position.z);
+    return XMMatrixTranslation(-(lo.x + hi.x) * 0.5f, -lo.y, -(lo.z + hi.z) * 0.5f) *
+           XMMatrixScaling(model.scale, model.scale, model.scale);
 }
 
-bool ModelInstanceBounds(const ModelAsset& model, const ModelInstance& instance, BoundingBox& bounds) {
+XMMATRIX NodeTransformMatrix(const float position[3], const float rotationDegrees[3], float scale) {
+    return XMMatrixScaling(scale, scale, scale) *
+           XMMatrixRotationRollPitchYaw(XMConvertToRadians(rotationDegrees[0]), XMConvertToRadians(rotationDegrees[1]),
+                                        XMConvertToRadians(rotationDegrees[2])) *
+           XMMatrixTranslation(position[0], position[1], position[2]);
+}
+
+void RotationToDegrees(FXMMATRIX rotation, float degrees[3]) {
+    // RollPitchYaw は Rz * Rx * Ry（行ベクトル）。3 行目が Rx * Ry の 3 行目そのものなので、
+    // そこから X（pitch）と Y（yaw）、1・2 行目の 2 列目から Z（roll）を読む。
+    XMFLOAT3X3 m;
+    XMStoreFloat3x3(&m, rotation);
+    const float pitch = std::asin(std::clamp(-m._32, -1.0f, 1.0f));
+    float yaw = 0.0f, roll = 0.0f;
+    if (std::abs(std::cos(pitch)) > 1e-4f) {
+        yaw = std::atan2(m._31, m._33);
+        roll = std::atan2(m._12, m._22);
+    } else {
+        // 真上・真下を向いたとき（ジンバルロック）は Z を 0 にして Y へ寄せる。
+        yaw = std::atan2(-m._13, m._11);
+    }
+    degrees[0] = XMConvertToDegrees(pitch);
+    degrees[1] = XMConvertToDegrees(yaw);
+    degrees[2] = XMConvertToDegrees(roll);
+}
+
+bool ModelWorldBounds(const ModelAsset& model, FXMMATRIX world, BoundingBox& bounds) {
     if (!model.geometry) return false;
     BoundingBox local;
     BoundingBox::CreateFromPoints(local, XMLoadFloat3(&model.geometry->minimum), XMLoadFloat3(&model.geometry->maximum));
-    local.Transform(bounds, ModelInstanceWorld(model, instance));
+    local.Transform(bounds, world);
     return true;
 }
 

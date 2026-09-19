@@ -74,6 +74,8 @@ struct StartupOptions {
     std::filesystem::path openAsset;
     // 開発用。モデル（.tgmodel / .fbx）を原点へ置く（帯からビューポートへ落としたのと同じ経路）。
     std::filesystem::path placeModel;
+    // 開発用。モデルのギズモを回転（E）で始める。
+    bool gizmoRotate = false;
     // P0: Road / 砂利Surface / 歩道Surface の ID。通常のグラフ評価は変更しない。
     graph::GraphId prototypeRoad = 0;
     graph::GraphId surfaceLayoutRoad = 0;
@@ -189,34 +191,45 @@ private:
     uint64_t ImportModelFile(const std::filesystem::path& inputPath);
     renderer::ModelAsset* FindModel(uint64_t id);
 
-    // --- Model ノード（ApplicationModelPlacement.cpp） ----------------------------
-    // Model ノードを作ってモデルを position（底面の中心）へ置き、Mesh Output へ繋いで選ぶ
-    // （Mesh Output に別のものが繋がっていれば Merge でまとめる）。作ったノードの ID を返す（失敗は 0）。
+    // --- モデルの系統のノード（ApplicationModelPlacement.cpp） --------------------------
+    // Model ノードを作ってモデルを position（底面の中心）へ置き、Mesh Output の Model 入力へ繋いで選ぶ
+    // （既に別のものが繋がっていれば Model Merge でまとめる）。作ったノードの ID を返す（失敗は 0）。
     graph::GraphId PlaceModel(uint64_t modelId, const DirectX::XMFLOAT3& position);
-    // ビューポートに出す Model ノード（Mesh Output へ繋がったもの、またはプレビュー中の鎖の中のもの）。
-    std::vector<graph::GraphId> VisibleModelNodes() const;
-    // Model ノードの設定と、そのモデル・ワールド行列の取り出し。モデルが無ければ偽。
-    bool ModelNodeTransform(graph::GraphId nodeId, const renderer::ModelAsset*& model,
-                            renderer::ModelInstance& instance) const;
-    // 選んでいるノードが Model ノードならその設定。
-    graph::ModelNodeSettings* SelectedModelNode();
-    // レンダラの drawSceneExtras から呼ぶ。ビューポートに出す Model ノードを本描画・シャドウパスへ描く。
+    // ビューポートに出すモデル 1 つぶん（Model ノード、通る Transform、ワールド行列）。
+    struct VisibleModel {
+        graph::GraphId node = 0;
+        std::vector<graph::GraphId> transforms;
+        const renderer::ModelAsset* model = nullptr;
+        DirectX::XMFLOAT4X4 world{};
+    };
+    std::vector<VisibleModel> CollectVisibleModels() const;
+    // Model / Transform ノードの位置・回転・倍率。どちらでもなければ偽。
+    struct NodeTransformRef {
+        float* position = nullptr;
+        float* rotation = nullptr;
+        float* scale = nullptr;
+    };
+    bool NodeTransform(graph::GraphId nodeId, NodeTransformRef& out);
+    // 選んでいる Model / Transform ノードのギズモの基準。pivot はそのノードの原点のワールド位置、
+    // parent は下流の Transform をまとめた行列。ビューポートに出ていなければ偽。
+    bool NodeGizmoFrame(graph::GraphId nodeId, DirectX::XMFLOAT3& pivot, DirectX::XMFLOAT4X4& parent) const;
+    // レンダラの drawSceneExtras から呼ぶ。ビューポートに出すモデルを本描画・シャドウパスへ描く。
     void DrawSceneModels(ID3D12GraphicsCommandList* commandList, const renderer::SceneDrawContext& context);
     // ビューポートに出すモデルを包む球の半径（原点中心）。無ければ 0。
     float ModelInstancesRadius() const;
-    // カーソル直下の Model ノード（と距離）。無ければ 0。
+    // カーソル直下のモデルの Model ノード（と距離）。無ければ 0。
     graph::GraphId PickModelNode(const DirectX::XMFLOAT3& origin, const DirectX::XMFLOAT3& direction, float& distance) const;
     // カーソル位置の地面（道路メッシュ、無ければ高さ planeY の水平面）。当たらなければ偽。
     bool PickGround(const ImVec2& mouse, const ImVec2& viewportMin, const ImVec2& viewportMax, float planeY,
                     bool useMeshes, DirectX::XMFLOAT3& point) const;
-    // Path 未選択のときのモデルのホバー・クリック選択（Model ノードを選ぶ）・ドラッグ移動・Delete。
-    // この入力を使ったら真（メッシュの選択へ渡さない）。
+    // Path 未選択のときのモデルのホバー・クリック選択（Model ノードを選ぶ）・ギズモ（W 移動 / E 回転）・
+    // 本体のドラッグ（水平移動）・Delete。この入力を使ったら真（メッシュの選択へ渡さない）。
     bool HandleModelInstanceInput(bool itemActive, bool itemHovered, const ImVec2& viewportMin, const ImVec2& viewportMax);
-    // ホバー中・選択中の置いたモデルの境界ボックスを重ねる。
+    // 選んでいる Model / Transform ノードのギズモを ImGui で重ね、範囲の枠をレンダラの深度付きの線で出す。
     void DrawModelInstanceOverlay(const ImVec2& viewportMin, const ImVec2& viewportMax);
     // アセットの帯のモデルをビューポートへ落としたときの受け口。
     void ModelDropTarget(const ImVec2& viewportMin, const ImVec2& viewportMax);
-    // Model ノードの設定（グラフパネルのプロパティ欄）。変えたら真。
+    // Model / Transform ノードの設定（グラフパネルのプロパティ欄）。変えたら真。
     bool DrawModelNodeSettings(graph::Node& node);
     bool SelectedModelInstanceFocusTarget(DirectX::XMFLOAT3& target);
     // 天球パネル。一覧で選んだものがそのままビューポートの環境になる。
@@ -515,15 +528,26 @@ private:
     graph::GraphId m_hoveredModelNode = 0;
     // ビューポートからグラフエディタの選択を変える要求（0 は選択を外す）。エディタの描画の中で反映する。
     std::optional<graph::GraphId> m_graphSelectionRequest;
-    // Model ノードのドラッグ移動。掴んだ点からモデルの位置までのずれと、動かす水平面の高さを保つ。
+    // モデルのドラッグ（本体の水平移動とギズモ）。掴んだときの値から置き直す（誤差を溜めない）。
+    // handle: -1 = 本体、0〜2 = 軸（X / Y / Z）、3〜5 = 平面（YZ / XZ / XY。法線の軸の番号 + 3）、6〜8 = 回転の輪（X / Y / Z）。
     struct ModelInstanceDrag {
         bool pending = false;
         bool dragging = false;
+        int handle = -1;
+        graph::GraphId node = 0;
         ImVec2 pressPos{};
-        DirectX::XMFLOAT3 offset{};
-        DirectX::XMFLOAT3 startPosition{};
+        DirectX::XMFLOAT3 pivot{};
+        DirectX::XMFLOAT4X4 parent{};
+        DirectX::XMFLOAT3 pressPoint{};
+        float pressParameter = 0.0f;
+        float startPosition[3] = {};
+        float startRotation[3] = {};
         float planeY = 0.0f;
     } m_modelInstanceDrag;
+    // ギズモの種類（W で移動、E で回転）と、カーソルが乗っているハンドル（-1 = 無し）。
+    enum class ModelGizmoMode { Translate, Rotate };
+    ModelGizmoMode m_modelGizmoMode = ModelGizmoMode::Translate;
+    int m_modelGizmoHover = -1;
     // 帯から落としたモデルの配置。ファイルの読み込みを伴うのでフレームの外で行う。
     struct PendingModelPlacement {
         std::filesystem::path path;

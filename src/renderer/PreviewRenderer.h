@@ -161,6 +161,13 @@ struct PreviewDefaults {
 };
 inline constexpr PreviewDefaults kPreviewDefaults{};
 
+// ビューポートに重ねる 3D の線（モデルの範囲の枠など）。端点を 2 つずつで 1 本。
+// シーンの深度でテストし（奥は隠れる）、トーンマップ後の表示色のまま描く。
+struct OverlayLineSet {
+    DirectX::XMFLOAT4 color{1.0f, 1.0f, 1.0f, 1.0f};
+    std::vector<DirectX::XMFLOAT3> points;
+};
+
 // メッシュシーンとは別に描くもの（配置したモデル）へ渡す、そのパスの描き方。
 // 行列は MeshPbr と同じく**転置せずに**入れてある（シェーダは mul(M, v) で読む）。
 struct SceneDrawContext {
@@ -250,6 +257,8 @@ public:
     // drawSceneExtras が描くものを包む球の半径（原点中心、m）。影の範囲とカメラの距離に使う。0 なら何も無い。
     // **毎フレーム渡してよい。**
     void SetExtraSceneRadius(float radius) { m_extraSceneRadius = radius; }
+    // 重ねる線。**毎フレーム渡す**（渡さなければ前のフレームのまま）。
+    void SetOverlayLines(std::vector<OverlayLineSet> lines) { m_overlayLines = std::move(lines); }
     TonemapMode& Tonemap() { return m_tonemap; }
     DebugView& Debug() { return m_debugView; }
     DebugView Debug() const { return m_debugView; }
@@ -328,6 +337,7 @@ private:
     bool m_meshSceneEnabled = false;
     float m_meshSceneRadius = 0.1f;
     float m_extraSceneRadius = 0.0f;
+    std::vector<OverlayLineSet> m_overlayLines;
 
     rhi::GpuTexture m_sceneColor;  // 線形 HDR
     // 被写界深度を掛けた結果。**トーンマップはこちらを読む。**

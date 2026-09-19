@@ -54,9 +54,17 @@ constexpr std::array<PinDefinition, 2> kCrackPins = {{
     {PinKind::Input, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
-// モデルのピン。入力は無く、Mesh Output / Merge へ繋ぐ Mesh を出す。
+// モデルの系統のピン。どれも Model 型だけを受け渡す（道路の Mesh とは繋がらない）。
 constexpr std::array<PinDefinition, 1> kModelPins = {{
-    {PinKind::Output, ValueType::Mesh, "Mesh"},
+    {PinKind::Output, ValueType::Model, "Model"},
+}};
+constexpr std::array<PinDefinition, 2> kTransformPins = {{
+    {PinKind::Input, ValueType::Model, "Model"},
+    {PinKind::Output, ValueType::Model, "Model"},
+}};
+constexpr std::array<PinDefinition, 2> kModelMergePins = {{
+    {PinKind::Input, ValueType::Model, "Model 1"},
+    {PinKind::Output, ValueType::Model, "Model"},
 }};
 // Merge のピン。入力は可変で、繋ぐたびに空きが 1 本増える（NormalizeVariablePins）。
 constexpr std::array<PinDefinition, 2> kMergePins = {{
@@ -81,15 +89,17 @@ constexpr std::array<PinDefinition, 11> kRoadPins = {{
 constexpr std::array<PinDefinition, 1> kRoadMaskPins = {{
     {PinKind::Output, ValueType::RoadMask, "Mask"},
 }};
-constexpr std::array<PinDefinition, 1> kMeshOutputPins = {{
+// 道路のメッシュと、置いたモデルの 2 系統を受ける。
+constexpr std::array<PinDefinition, 2> kMeshOutputPins = {{
     {PinKind::Input, ValueType::Mesh, "Mesh"},
+    {PinKind::Input, ValueType::Model, "Model"},
 }};
 constexpr std::array<PinDefinition, 2> kRoadMarkingPins = {{
     {PinKind::Input, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 
-constexpr std::array<NodeDefinition, 11> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 13> kNodeDefinitions = {{
     {NodeKind::Road, "road", "Road", kRoadPins},
     {NodeKind::RoadMask, "roadMask", "Road Mask", kRoadMaskPins},
     {NodeKind::Decal, "decal", "Decal", kDecalPins},
@@ -97,6 +107,8 @@ constexpr std::array<NodeDefinition, 11> kNodeDefinitions = {{
     {NodeKind::Merge, "merge", "Merge", kMergePins},
     {NodeKind::Crack, "crack", "Crack", kCrackPins},
     {NodeKind::Model, "model", "Model", kModelPins},
+    {NodeKind::Transform, "transform", "Transform", kTransformPins},
+    {NodeKind::ModelMerge, "modelMerge", "Model Merge", kModelMergePins},
     {NodeKind::RoadMarking, "roadMarking", "Lane Marking", kRoadMarkingPins},
     {NodeKind::MeshOutput, "meshOutput", "Mesh Output", kMeshOutputPins},
     {NodeKind::Surface, "surface", "Surface", kLayerNodePins},
@@ -133,12 +145,20 @@ bool IsLayerNodeKind(NodeKind kind) {
 
 bool IsMeshNodeKind(NodeKind kind) {
     return kind == NodeKind::Road || kind == NodeKind::RoadMarking || kind == NodeKind::Decal ||
-           kind == NodeKind::Shoulder || kind == NodeKind::Merge || kind == NodeKind::Crack || kind == NodeKind::Model;
+           kind == NodeKind::Shoulder || kind == NodeKind::Merge || kind == NodeKind::Crack;
 }
 
 bool IsPreviewableNodeKind(NodeKind kind) {
-    // 道路メッシュのノードだけ。そのノードまでの鎖をメッシュシーンに出す。
-    return IsMeshNodeKind(kind);
+    // 道路メッシュのノードはそのノードまでの鎖、モデルの系統のノードはその枝のモデルだけを出す。
+    return IsMeshNodeKind(kind) || IsModelNodeKind(kind);
+}
+
+bool IsModelNodeKind(NodeKind kind) {
+    return kind == NodeKind::Model || kind == NodeKind::Transform || kind == NodeKind::ModelMerge;
+}
+
+bool IsVariableInputNodeKind(NodeKind kind) {
+    return kind == NodeKind::Merge || kind == NodeKind::ModelMerge;
 }
 
 // --- NodeGraph ------------------------------------------------------------
@@ -280,7 +300,8 @@ bool NodeGraph::DeleteLink(GraphId linkId) {
 
 void NodeGraph::NormalizeVariablePins() {
     for (Node& node : m_nodes) {
-        if (node.kind != NodeKind::Merge) continue;
+        if (!IsVariableInputNodeKind(node.kind)) continue;
+        const bool model = node.kind == NodeKind::ModelMerge;
         // 繋がっている入力を順に残し、末尾に空きを 1 本だけ置く。ラベルは並びで振り直す。
         std::vector<Pin> connected;
         Pin spare;
@@ -294,10 +315,10 @@ void NodeGraph::NormalizeVariablePins() {
         if (spare.id == 0) spare.id = AllocateGraphId();
         spare.nodeId = node.id;
         spare.kind = PinKind::Input;
-        spare.valueType = ValueType::Mesh;
+        spare.valueType = model ? ValueType::Model : ValueType::Mesh;
         connected.push_back(std::move(spare));
         for (size_t i = 0; i < connected.size(); ++i) {
-            connected[i].label = "Mesh " + std::to_string(i + 1);
+            connected[i].label = (model ? "Model " : "Mesh ") + std::to_string(i + 1);
         }
         node.inputs = std::move(connected);
     }
@@ -329,6 +350,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = CrackNodeSettings{};
     } else if (kind == NodeKind::Model) {
         node.settings = ModelNodeSettings{};
+    } else if (kind == NodeKind::Transform) {
+        node.settings = TransformNodeSettings{};
+    } else if (kind == NodeKind::ModelMerge) {
+        node.settings = MergeNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
     } else {

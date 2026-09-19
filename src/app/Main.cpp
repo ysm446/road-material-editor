@@ -21,7 +21,7 @@ namespace {
 //   road_editor.exe [--root <dir>] [--project <path>] [--save-project <path>]
 //                       [--hdri <path>] [--texture <path>]...
 //                       [--screenshot <path>] [--screenshot-ui <path>]
-//                       [--screenshot-frame <n>] [--import-model <fbx>] [--open-asset <path>] [--place-model <path>]
+//                       [--screenshot-frame <n>] [--import-model <fbx>] [--open-asset <path>] [--place-model <path>] [--gizmo-rotate]
 tg::StartupOptions ParseCommandLine() {
     tg::StartupOptions options;
 
@@ -81,6 +81,8 @@ tg::StartupOptions ParseCommandLine() {
             options.editBoundary = static_cast<tg::graph::SurfaceId>(::_wtoi(argv[++i]));
         } else if (argument == L"--import-model" && (i + 1) < argc) {
             options.importModel = argv[++i];
+        } else if (argument == L"--gizmo-rotate") {
+            options.gizmoRotate = true;
         } else if (argument == L"--place-model" && (i + 1) < argc) {
             options.placeModel = argv[++i];
         } else if (argument == L"--open-asset" && (i + 1) < argc) {

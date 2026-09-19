@@ -61,20 +61,15 @@ struct ModelAsset {
     std::string error;
 };
 
-// シーン（ビューポート）に置いたモデル 1 つ。position はモデルの底面の中心（形状の境界ボックスの
-// X・Z の中央、Y の最小）を置く位置（m）。回転は Y 軸まわり（度）、倍率はモデルの倍率に掛ける。
-struct ModelInstance {
-    uint64_t id = 0;
-    uint64_t model = 0;
-    DirectX::XMFLOAT3 position{};
-    float rotationDegrees = 0.0f;
-    float scale = 1.0f;
-};
-
-// 置いたモデルのワールド行列（DirectXMath の行ベクトル規約）。形状が無ければ単位行列。
-DirectX::XMMATRIX ModelInstanceWorld(const ModelAsset& model, const ModelInstance& instance);
-// 置いたモデルのワールド空間の境界ボックス。形状が無ければ偽。
-bool ModelInstanceBounds(const ModelAsset& model, const ModelInstance& instance, DirectX::BoundingBox& bounds);
+// モデルの底面の中心（形状の境界ボックスの X・Z の中央、Y の最小）を原点へ移し、アセットの倍率を掛ける行列
+// （DirectXMath の行ベクトル規約）。これにノードの倍率・回転・位置を掛けるとワールド行列になる。形状が無ければ単位行列。
+DirectX::XMMATRIX ModelPivotMatrix(const ModelAsset& model);
+// 倍率 → 回転（X / Y / Z の度。Z → X → Y の順、RollPitchYaw と同じ）→ 平行移動の行列。
+DirectX::XMMATRIX NodeTransformMatrix(const float position[3], const float rotationDegrees[3], float scale);
+// 回転行列（倍率を含まない 3x3）を NodeTransformMatrix と同じ規約の角度（度）へ戻す。
+void RotationToDegrees(DirectX::FXMMATRIX rotation, float degrees[3]);
+// world を掛けたモデルのワールド空間の境界ボックス。形状が無ければ偽。
+bool ModelWorldBounds(const ModelAsset& model, DirectX::FXMMATRIX world, DirectX::BoundingBox& bounds);
 
 // FBX を読み、右手系 Y-up・メートルへ変換する。失敗したら asset.error に理由を入れて偽を返す
 // （geometry と materials は変えない）。

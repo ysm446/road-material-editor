@@ -85,8 +85,14 @@ struct CompiledMeshGraph {
 // previewNodeId が Road / Lane Marking / Decal を指すときは、そのノードまでの鎖だけを出す
 // （途中経過の確認。Mesh Output は使わない）。
 CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph, GraphId previewNodeId = 0);
-// Mesh Output へ（Merge を通して）繋がっている Model ノード。previewNodeId がメッシュのノードなら、
-// そのノードまでの鎖に含まれるもの（Model ノード自身ならそれだけ）。同じノードは 1 回だけ。
-std::vector<GraphId> CollectOutputModelNodes(const NodeGraph& graph, GraphId previewNodeId = 0);
+// ビューポートに出すモデル 1 つぶん。Model ノードと、そこから出力までに通る Transform（近い順）。
+// 同じ Model ノードも、Model Merge や Transform を別の経路で通れば別のものとして出る。
+struct ModelPlacementPath {
+    GraphId model = 0;
+    std::vector<GraphId> transforms;
+};
+// Mesh Output の Model 入力から辿ったモデル。previewNodeId がモデルの系統のノードならその枝だけ、
+// 道路のメッシュのノードなら何も出さない（道路の途中経過を見ているとき）。
+std::vector<ModelPlacementPath> CollectOutputModels(const NodeGraph& graph, GraphId previewNodeId = 0);
 
 }  // namespace tg::graph

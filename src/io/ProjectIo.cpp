@@ -51,7 +51,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 25: 白線・Decal・CrackのMaterial入力をプロパティへ移す。
 // 26: Decalのハイト加算・画像倍率・帯ワイヤーフレーム。
 // 27: モデル（models）。旧ビルドが読み飛ばして保存し直し、モデルとスロットの割り当てを失うことを防ぐ。
-// 28: model ノード（モデルを置く）。旧ビルドが読み飛ばして Mesh Output / Merge との接続を失うことを防ぐ。
+// 28: model / transform / modelMerge ノードと Mesh Output の Model 入力。旧ビルドが読み飛ばして接続を失うことを防ぐ。
 constexpr int kProjectFormatVersion = 28;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
@@ -735,8 +735,15 @@ json WriteGraph(const graph::NodeGraph& graphData,
         } else if (const auto* model = std::get_if<graph::ModelNodeSettings>(&node.settings)) {
             item["model"] = {{"model", writeModel ? writeModel(model->model) : json()},
                              {"position", json::array({model->position[0], model->position[1], model->position[2]})},
-                             {"rotation", model->rotationDegrees},
+                             {"rotation", json::array({model->rotationDegrees[0], model->rotationDegrees[1],
+                                                       model->rotationDegrees[2]})},
                              {"scale", model->scale}};
+        } else if (const auto* transform = std::get_if<graph::TransformNodeSettings>(&node.settings)) {
+            item["transform"] = {
+                {"position", json::array({transform->position[0], transform->position[1], transform->position[2]})},
+                {"rotation", json::array({transform->rotationDegrees[0], transform->rotationDegrees[1],
+                                          transform->rotationDegrees[2]})},
+                {"scale", transform->scale}};
         }
         nodes.push_back(std::move(item));
     }
@@ -849,13 +856,14 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
             }
             // 入力数が可変のノード（Merge）は、ファイルにある分だけ入力を足す。
             // 型とラベルは最後の入力定義に合わせ、並びは読み込み後に NormalizeVariablePins が整える。
-            if (created.kind == graph::NodeKind::Merge && inputIds != nullptr && inputIds->is_array() &&
+            if (graph::IsVariableInputNodeKind(created.kind) && inputIds != nullptr && inputIds->is_array() &&
                 !created.inputs.empty()) {
                 for (; inputIndex < inputIds->size(); ++inputIndex) {
                     if (!(*inputIds)[inputIndex].is_number_integer()) continue;
                     graph::Pin extra = created.inputs.back();
                     extra.id = (*inputIds)[inputIndex].get<int>();
-                    extra.label = "Mesh " + std::to_string(created.inputs.size() + 1);
+                    extra.label = (created.kind == graph::NodeKind::ModelMerge ? "Model " : "Mesh ") +
+                                  std::to_string(created.inputs.size() + 1);
                     maxId = std::max(maxId, extra.id);
                     created.inputs.push_back(std::move(extra));
                 }
@@ -987,20 +995,41 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
                     settings.layerBlendRange = std::clamp(ReadFloat(*shoulder, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
                 }
                 created.settings = settings;
-            } else if (created.kind == graph::NodeKind::Model) {
-                graph::ModelNodeSettings settings;
-                if (const json* model = FindMember(item, "model"); model && model->is_object()) {
-                    if (const json* reference = FindMember(*model, "model"); reference && readModel)
-                        settings.model = readModel(*reference);
-                    const DirectX::XMFLOAT3 position = ReadFloat3(*model, "position", {});
-                    settings.position[0] = position.x;
-                    settings.position[1] = position.y;
-                    settings.position[2] = position.z;
-                    settings.rotationDegrees = ReadFloat(*model, "rotation", settings.rotationDegrees);
-                    const float scale = ReadFloat(*model, "scale", settings.scale);
-                    settings.scale = std::isfinite(scale) && scale > 0.0f ? scale : 1.0f;
+            } else if (created.kind == graph::NodeKind::Model || created.kind == graph::NodeKind::Transform) {
+                // 位置・回転（X / Y / Z の度。数値 1 つなら Y だけ）・倍率は Model と Transform で共通。
+                float position[3] = {0.0f, 0.0f, 0.0f}, rotation[3] = {0.0f, 0.0f, 0.0f}, scale = 1.0f;
+                const bool isModel = created.kind == graph::NodeKind::Model;
+                const json* values = FindMember(item, isModel ? "model" : "transform");
+                if (values != nullptr && values->is_object()) {
+                    const DirectX::XMFLOAT3 p = ReadFloat3(*values, "position", {});
+                    position[0] = p.x; position[1] = p.y; position[2] = p.z;
+                    if (const json* r = FindMember(*values, "rotation"); r && r->is_number()) {
+                        rotation[1] = r->get<float>();
+                    } else {
+                        const DirectX::XMFLOAT3 value = ReadFloat3(*values, "rotation", {});
+                        rotation[0] = value.x; rotation[1] = value.y; rotation[2] = value.z;
+                    }
+                    const float read = ReadFloat(*values, "scale", 1.0f);
+                    scale = std::isfinite(read) && read > 0.0f ? read : 1.0f;
                 }
-                created.settings = settings;
+                const auto assign = [&](auto& settings) {
+                    std::copy(std::begin(position), std::end(position), settings.position);
+                    std::copy(std::begin(rotation), std::end(rotation), settings.rotationDegrees);
+                    settings.scale = scale;
+                };
+                if (isModel) {
+                    graph::ModelNodeSettings settings;
+                    assign(settings);
+                    if (const json* reference = values ? FindMember(*values, "model") : nullptr; reference && readModel)
+                        settings.model = readModel(*reference);
+                    created.settings = settings;
+                } else {
+                    graph::TransformNodeSettings settings;
+                    assign(settings);
+                    created.settings = settings;
+                }
+            } else if (created.kind == graph::NodeKind::ModelMerge) {
+                created.settings = graph::MergeNodeSettings{};
             } else if (created.kind == graph::NodeKind::RoadMask) {
                 graph::RoadMaskNodeSettings settings;
                 if (const json* mask = FindMember(item, "roadMask"); mask && mask->is_object()) {

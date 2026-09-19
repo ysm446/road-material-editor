@@ -62,6 +62,19 @@ void RunShadowCascadeTests() {
                 "1枚方式がシーン全体を覆う");
         }
     }
+    for (uint32_t count : {2u, 3u}) {
+        // 2・3 カスケード: 使う数で分割し、最後の境界がシーンの奥に届く。使わない境界は 0 のまま。
+        const auto partial = renderer::BuildShadowCascades(camera, light, 25, 2, 2048, count);
+        const auto full = renderer::BuildShadowCascades(camera, light, 25, 2, 2048);
+        bool increasing = partial.splits[0] > partial.nearDistance;
+        for (uint32_t i = 1; i < count; ++i) increasing &= partial.splits[i] > partial.splits[i - 1];
+        bool unused = true;
+        for (uint32_t i = count; i < renderer::kShadowCascadeCount; ++i) unused &= partial.splits[i] == 0.0f;
+        tests::Check(increasing && unused, "カスケード数だけ境界を増える順に作り、残りは使わない");
+        tests::Check(std::abs(partial.splits[count - 1] - full.splits[renderer::kShadowCascadeCount - 1]) < 1e-4f,
+                     "最後のカスケードの境界はカスケード数によらずシーンの奥");
+        tests::Check(partial.splits[0] > full.splits[0], "カスケードが少ないほど最初のカスケードが奥まで受け持つ");
+    }
     for (uint32_t i = 0; i < renderer::kShadowCascadeCount; ++i) {
         const float dx = (after.matrices[i]._41 - before.matrices[i]._41) * 1024;
         const float dy = (after.matrices[i]._42 - before.matrices[i]._42) * 1024;

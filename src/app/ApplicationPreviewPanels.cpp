@@ -70,12 +70,12 @@ void Application::DrawMaterialPanel() {
         if (ui::BeginPropertyTable("shadowRows")) {
             ui::PropertyBool("有効", &m_renderer.ShadowEnabled(), renderer::kPreviewDefaults.shadowEnabled,
                 "太陽の影を表示する。素材のハイトによる凹凸も影に反映する");
-            const char* modes[] = {"1枚", "4カスケード"};
-            int mode = m_renderer.ShadowCascadeCount() == 1 ? 0 : 1;
-            if (ui::PropertyCombo("方式", &mode, modes, 2,
-                renderer::kPreviewDefaults.shadowCascadeCount == 1 ? 0 : 1,
-                "1枚はシーン全体を覆う軽量な方式。4カスケードは近景に解像度を重点配分する"))
-                m_renderer.RequestShadowCascadeCount(mode == 0 ? 1u : renderer::kShadowCascadeCount);
+            int cascades = static_cast<int>(m_renderer.ShadowCascadeCount());
+            if (ui::PropertyInt("カスケード数", &cascades, 1, static_cast<int>(renderer::kShadowCascadeCount),
+                                static_cast<int>(renderer::kPreviewDefaults.shadowCascadeCount),
+                                "影を描くカメラの数。1 はシーン全体を 1 枚で覆う軽量な方式。"
+                                "2 以上は視距離を分けて近景に解像度を重点配分し、増やすほど描画負荷とメモリも増える"))
+                m_renderer.RequestShadowCascadeCount(static_cast<uint32_t>(cascades));
             const char* labels[] = {"1024 × 1024", "2048 × 2048", "4096 × 4096"};
             const uint32_t values[] = {1024, 2048, 4096};
             int selected = 0, defaultIndex = 0;

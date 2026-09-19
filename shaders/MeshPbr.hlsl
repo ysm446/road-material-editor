@@ -592,18 +592,20 @@ float SampleCascadedShadow(float3 worldPosition, float nDotL)
     if (g_mesh.shadowCascadeCount == 1)
         return SampleShadow(worldPosition, nDotL, g_mesh.shadowIndices.x,
             g_mesh.shadowTexelSize, g_mesh.shadowBiases.x, g_mesh.lightViewProjections[0]);
+    // 使うカスケードの数は 1〜4。最後の境界より遠くは影なし。
+    const uint lastCascade = min(g_mesh.shadowCascadeCount, 4u) - 1u;
     const float distance = -mul(g_mesh.view, float4(worldPosition, 1.0f)).z;
-    if (distance > g_mesh.shadowSplits.w) return 1.0f;
+    if (distance > g_mesh.shadowSplits[lastCascade]) return 1.0f;
     uint cascade = 0;
-    while (cascade < 3 && distance > g_mesh.shadowSplits[cascade]) ++cascade;
+    while (cascade < lastCascade && distance > g_mesh.shadowSplits[cascade]) ++cascade;
     const float visibility = SampleShadow(worldPosition, nDotL, g_mesh.shadowIndices[cascade],
         g_mesh.shadowTexelSize, g_mesh.shadowBiases[cascade], g_mesh.lightViewProjections[cascade]);
     const float start = cascade == 0 ? g_mesh.shadowNear : g_mesh.shadowSplits[cascade - 1];
     const float end = g_mesh.shadowSplits[cascade];
     const float blendStart = end - (end - start) * g_mesh.shadowBlend;
     if (distance <= blendStart) return visibility;
-    const uint nextCascade = min(cascade + 1, 3u);
-    const float next = cascade < 3 ? SampleShadow(worldPosition, nDotL, g_mesh.shadowIndices[nextCascade],
+    const uint nextCascade = min(cascade + 1, lastCascade);
+    const float next = cascade < lastCascade ? SampleShadow(worldPosition, nDotL, g_mesh.shadowIndices[nextCascade],
         g_mesh.shadowTexelSize, g_mesh.shadowBiases[nextCascade], g_mesh.lightViewProjections[nextCascade]) : 1.0f;
     return lerp(visibility, next, smoothstep(blendStart, end, distance));
 }

@@ -5,6 +5,7 @@
 #include "graph/NodeGraph.h"
 #include "graph/SurfaceLayout.h"
 #include "io/ProjectWorkspace.h"
+#include "renderer/ModelAsset.h"
 #include "renderer/PreviewRenderer.h"
 #include "renderer/SkyLibrary.h"
 #include "rhi/Device.h"
@@ -29,6 +30,8 @@ struct ProjectRefs {
     bool& previewSurfaceBands;
     bool& connectSurfaceBands;
     bool& displaceConnectedBands;
+    // モデル（.tgmodel）。渡さなければモデルは読み書きしない。
+    std::vector<renderer::ModelAsset>* models = nullptr;
 };
 
 // --- プロジェクト (.tgproj) -----------------------------------------------
@@ -47,10 +50,10 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
                  rhi::PipelineCache& pipelineCache, const ProjectRefs& refs,
                  ProjectWorkspace* workspace = nullptr);
 
-// --- 共有アセット（ルート内の .tgmat / .tgsky / .tglayer / .tgboundary） ------
+// --- 共有アセット（ルート内の .tgmat / .tgsky / .tglayer / .tgboundary / .tgmodel） ------
 //
-// 読み込み済みのマテリアル・天球・レイヤーマテリアル・境界マテリアルをそれぞれのファイルへ書く。
-// 置き場所が未定のものは `Materials/` / `Skies/` / `LayerMaterials/` / `BoundaryMaterials/` に名前から作る。
+// 読み込み済みのマテリアル・天球・レイヤーマテリアル・境界マテリアル・モデルをそれぞれのファイルへ書く。
+// 置き場所が未定のものは `Materials/` / `Skies/` / `LayerMaterials/` / `BoundaryMaterials/` / `Models/` に名前から作る。
 // ただし ID を持たないもの（旧 .tgproj の埋め込みなど）は、
 // 同じ中身の既存アセットがあればそれへ書く（保存し直すたびに連番の複製を作らない）。
 // シーンの保存はこれを先に行う。
@@ -58,10 +61,12 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs);
 // 共有アセット 1 つを現在のライブラリへ足す。同じ ID がすでにあれば足さずにそれを使う
 // （天球は適用する）。参照している画像もその場で読み込む。
 // rescan を false にすると、ルートを走査し直さず手持ちの ID 表で解決する（サムネイルの連続生成用）。
+// .tgmodel は models へ足し（参照するマテリアルもライブラリへ）、models が無ければ失敗する。
 bool LoadSharedAsset(ProjectWorkspace& workspace, const std::filesystem::path& path,
                      rhi::Device& device, rhi::PipelineCache& pipelineCache,
                      compositor::TextureLibrary& textures, compositor::MaterialLibrary& materials,
-                     renderer::SkyLibrary& skies, bool rescan = true);
+                     renderer::SkyLibrary& skies, bool rescan = true,
+                     std::vector<renderer::ModelAsset>* models = nullptr);
 // 共有のレイヤーマテリアル（.tglayer）/ 境界マテリアル（.tgboundary）を 1 つ配置データへ足し、その ID を返す。
 // 同じ固定 ID のものが読み込み済みなら足さずにそれを返す。参照するマテリアルと画像もライブラリへ読み込む。
 // 失敗は 0（配置データは変えない）。

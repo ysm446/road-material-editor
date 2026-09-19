@@ -13,6 +13,7 @@
     "stb",
     "nlohmann-json",
     "tinyexr",
+    "ufbx",
     "imgui-node-editor",
     {
       "name": "imgui",

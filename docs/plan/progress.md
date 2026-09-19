@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-15 12:20
+更新日時: 2026-09-19 22:58
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -28,6 +28,54 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
+
+### 2026-09-19 22:58 — モデルの倍率ギズモ（R）
+
+Model / Transform のギズモに倍率（R）を足した（ハンドル 9〜11 が軸、12 が中心の四角）。倍率は均一なので軸も全体を変え、軸は掴んだ点とピボットの距離の比、中心は画面の移動量の指数で倍率を掛ける。Esc で掴む前の倍率へ戻す。中心の横のモード名の文字は出さないことにした。開発用に `--gizmo-scale` を追加。
+Debug ビルド・全 CPU テスト成功。`--place-model --gizmo-scale` の `--screenshot-ui` で倍率ギズモの見た目を確認（ドラッグ操作そのものは未確認）。GPU ベースバリデーション有効の Debug では最初のフレームまで約 4 分かかった。
+
+### 2026-09-19 22:40 — Merge を道路とモデルで共通にする
+
+Model Merge を削除し、Merge の入力と Mesh Output の入力を型 Any（道路のメッシュとモデルの両方）にした。
+Merge の出力の型は `EffectiveOutputType` が入力から決め（モデルだけ → Model、道路あり → Mesh、空 → Any）、
+型が変わって下流が受けられなくなる接続は `CanCreateLink` が弾き、外して合わなくなったリンクは `NormalizeVariablePins` が外す。
+`Replace` は Merge の型が決まるよう、採れるリンクが無くなるまで繰り返して復元する。道路の評価器は Merge の Model の枝を飛ばす。
+Debug ビルド・全 CPU テスト成功（混在 Merge・モデルだけの Merge から Transform・型が合わない接続の拒否・空にした Merge を追加）。
+道路シーンへのモデルの配置で Merge が挟まり、道路とモデルの両方が出ることを `--screenshot-ui` で確認。
+なお、道路シーンの起動時に GPU ベースバリデーションの「COPY_DEST のテクスチャをピクセルシェーダで読む」が 3 回に 1 回ほど出る。
+モデル無しでも出るので今回の変更とは別の既存の問題（未調査）。
+
+### 2026-09-19 21:58 — モデル系のノード（Transform / Model Merge）とギズモ
+
+ピンの型 Model を足し、Model / Transform / Model Merge をモデル系として道路系（Mesh）から分けた。Mesh Output に Model 入力を追加。
+`CollectOutputModels` が Model 入力から辿り、Model ごとに通った Transform を返す（同じ Model を複数の経路で出せる）。回転は X / Y / Z の 3 軸（RollPitchYaw）。
+ビューポートで W 移動（軸・平面）/ E 回転（輪、Ctrl で 15 度刻み）のギズモ。ワールド軸で操作し、下流の Transform の座標へ戻して値に足す。
+範囲の枠は `PreviewRenderer::SetOverlayLines` で深度付きの線にした。ノード追加メニューを「道路」「モデル」で分けた。
+Debug ビルド・全 CPU テスト成功。移動ギズモと深度付きの枠（道路シーン）、回転ギズモと Transform・Model Merge（同じ Model を 2 経路で出す）を `--screenshot-ui` で確認。
+ギズモのドラッグ（移動・回転）の対話操作は未確認。
+
+### 2026-09-19 21:00 — Model ノード（モデルをビューポートに置く）
+
+グラフに Model ノード（種類 32、出力 Mesh、設定はモデル・底面中心の位置・Y 回転・倍率）を追加し、版28で保存する。
+道路メッシュの評価器は Model を素通りし、`CollectOutputModelNodes` が Mesh Output から Merge を辿って出すノードを集める。
+置き方の変更はグラフの改版を起こさない（道路を作り直さない）。レンダラに `drawSceneExtras` を足し、本描画（不透明の道路の直後、線形 HDR、
+カスケードシャドウを受ける）と各シャドウカスケードの深度で `ModelPreview::RenderInScene` が描く。
+帯からビューポートへのドロップ・モデルの窓の「ビューポートに置く」で Model ノードを作り、Mesh Output へ繋ぐ（必要なら Merge を挟む）。
+ビューポートのクリックで Model ノードを選び（エディタの選択も合わせる）、水平ドラッグ・Esc・Delete・F。
+最初に作ったシーン直置き（`modelInstances`）はノードに置き換えて削除した。
+Debug ビルド・全 CPU テスト成功。`--place-model` で道路シーンへの配置（Merge の挿入）と影、Model → Mesh Output の保存・再読込を `--screenshot-ui` で確認。
+ドロップ・クリック選択・ドラッグ・Delete・アンドゥの対話操作は未確認。詳細は [model-assets.md](../reference/model-assets.md)。
+
+### 2026-09-19 17:30 — 3D モデル（FBX）の読み込みとマテリアルスロット
+
+terrain-graph のモデル機能を移植（配置ノードと一覧パネルは除く）。ufbx を overlay port（`ports/ufbx`）で追加し、
+`ModelAsset`（FBX → 右手系 Y-up・m、スロットは FBX のマテリアル単位）、`ModelPreview` と `ModelPreview.hlsl`（ビューポートと同じ照明、
+マスク抜き・半透明）、モデルプレビューの窓、アセットの帯の `.tgmodel` / `.fbx`（サムネイル・ダブルクリック・シーンから外す）を追加した。
+保存は版27（シーンの `models`、`.tgmodel`）。スロットの割り当てはアンドゥの対象。倍率（`scale`）は形状へ焼き込まない。
+「FBX のマテリアルから作成」は拡散色のテクスチャからマテリアルを作り、アルファのあるものは半透明にする。
+XNA のモデルビューワの F16 を `data/Models/f16/` へ移植（倍率100で 9.73 × 4.43 × 14.97 m、ラフネス = `_multi` の B、AO = `_lightmap` の R）。
+Debug ビルド・全 CPU テスト（モデルの分離保存と展開を追加）成功。取り込み・保存・再読込・帯のサムネイルを `--screenshot-ui` で確認。
+窓のドラッグ操作とスロットのドラッグ割り当ては対話で未確認。シーンへの配置は後続。詳細は [model-assets.md](../reference/model-assets.md)。
 
 ### 2026-09-15 12:20 — アセットの帯の複数選択とまとめて移動
 

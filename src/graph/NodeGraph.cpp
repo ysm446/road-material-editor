@@ -54,10 +54,20 @@ constexpr std::array<PinDefinition, 2> kCrackPins = {{
     {PinKind::Input, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
+// モデルの系統のピン。どれも Model 型だけを受け渡す（道路の Mesh とは繋がらない）。
+constexpr std::array<PinDefinition, 1> kModelPins = {{
+    {PinKind::Output, ValueType::Model, "Model"},
+}};
+constexpr std::array<PinDefinition, 2> kTransformPins = {{
+    {PinKind::Input, ValueType::Model, "Model"},
+    {PinKind::Output, ValueType::Model, "Model"},
+}};
+
 // Merge のピン。入力は可変で、繋ぐたびに空きが 1 本増える（NormalizeVariablePins）。
+// 入力は道路のメッシュとモデルのどちらも受ける。出力の型は入力から決まる（EffectiveOutputType）。
 constexpr std::array<PinDefinition, 2> kMergePins = {{
-    {PinKind::Input, ValueType::Mesh, "Mesh 1"},
-    {PinKind::Output, ValueType::Mesh, "RoadSurface"},
+    {PinKind::Input, ValueType::Any, "Input 1"},
+    {PinKind::Output, ValueType::Any, "Output"},
 }};
 
 // 材質はスロット 1〜4。スロット 2〜4 は道路マスク（Mask 2〜4）で被覆する。
@@ -77,21 +87,24 @@ constexpr std::array<PinDefinition, 11> kRoadPins = {{
 constexpr std::array<PinDefinition, 1> kRoadMaskPins = {{
     {PinKind::Output, ValueType::RoadMask, "Mask"},
 }};
+// 道路のメッシュ・モデル・それらをまとめた Merge のどれでも受ける。
 constexpr std::array<PinDefinition, 1> kMeshOutputPins = {{
-    {PinKind::Input, ValueType::Mesh, "Mesh"},
+    {PinKind::Input, ValueType::Any, "Mesh"},
 }};
 constexpr std::array<PinDefinition, 2> kRoadMarkingPins = {{
     {PinKind::Input, ValueType::Mesh, "RoadSurface"},
     {PinKind::Output, ValueType::Mesh, "RoadSurface"},
 }};
 
-constexpr std::array<NodeDefinition, 10> kNodeDefinitions = {{
+constexpr std::array<NodeDefinition, 12> kNodeDefinitions = {{
     {NodeKind::Road, "road", "Road", kRoadPins},
     {NodeKind::RoadMask, "roadMask", "Road Mask", kRoadMaskPins},
     {NodeKind::Decal, "decal", "Decal", kDecalPins},
     {NodeKind::Shoulder, "shoulder", "Shoulder", kShoulderPins},
     {NodeKind::Merge, "merge", "Merge", kMergePins},
     {NodeKind::Crack, "crack", "Crack", kCrackPins},
+    {NodeKind::Model, "model", "Model", kModelPins},
+    {NodeKind::Transform, "transform", "Transform", kTransformPins},
     {NodeKind::RoadMarking, "roadMarking", "Lane Marking", kRoadMarkingPins},
     {NodeKind::MeshOutput, "meshOutput", "Mesh Output", kMeshOutputPins},
     {NodeKind::Surface, "surface", "Surface", kLayerNodePins},
@@ -132,8 +145,16 @@ bool IsMeshNodeKind(NodeKind kind) {
 }
 
 bool IsPreviewableNodeKind(NodeKind kind) {
-    // 道路メッシュのノードだけ。そのノードまでの鎖をメッシュシーンに出す。
-    return IsMeshNodeKind(kind);
+    // 道路メッシュのノードはそのノードまでの鎖、モデルの系統のノードはその枝のモデルだけを出す。
+    return IsMeshNodeKind(kind) || IsModelNodeKind(kind);
+}
+
+bool IsModelNodeKind(NodeKind kind) {
+    return kind == NodeKind::Model || kind == NodeKind::Transform;
+}
+
+bool IsVariableInputNodeKind(NodeKind kind) {
+    return kind == NodeKind::Merge;
 }
 
 // --- NodeGraph ------------------------------------------------------------
@@ -228,20 +249,89 @@ bool NodeGraph::CanCreateLink(GraphId startPin, GraphId endPin) const {
     }
     const Pin* start = FindPin(startPin);
     const Pin* end = FindPin(endPin);
-    if (start == nullptr || end == nullptr || start->nodeId == end->nodeId ||
-        start->valueType != end->valueType) {
+    if (start == nullptr || end == nullptr || start->nodeId == end->nodeId || start->kind == end->kind) {
         return false;
     }
-    if (start->kind == end->kind) {
-        return false;
-    }
-    // 出力側 → 入力側へ揃えてから循環を見る。
+    // 出力側 → 入力側へ揃えてから型と循環を見る。
     if (start->kind == PinKind::Input) {
         std::swap(start, end);
+    }
+    const ValueType startType = EffectiveOutputType(start->id);
+    if (!TypesCompatible(startType, end->valueType)) {
+        return false;
     }
     // end（消費側）の下流に start（生産側）がいたら、この接続で輪ができる。
     if (ReachesDownstream(end->nodeId, start->nodeId)) {
         return false;
+    }
+    // Merge へ繋ぐと出力の型が変わることがある。下流がその型を受けられなければ繋がない
+    // （モデルだけを Transform へ渡している Merge に道路を足す、など）。
+    if (const Node* consumer = FindNode(end->nodeId); consumer != nullptr && consumer->kind == NodeKind::Merge) {
+        const ValueType next = MergeTypeWith(*consumer, end->id, startType, 0);
+        if (!DownstreamAccepts(*consumer, next, 0)) return false;
+    }
+    return true;
+}
+
+bool NodeGraph::TypesCompatible(ValueType output, ValueType input) {
+    const auto scene = [](ValueType type) {
+        return type == ValueType::Mesh || type == ValueType::Model || type == ValueType::Any;
+    };
+    if (input == ValueType::Any) return scene(output);
+    if (output == ValueType::Any) return input == ValueType::Mesh || input == ValueType::Model;
+    return output == input;
+}
+
+GraphId NodeGraph::FindUpstreamPin(GraphId inputPinId) const {
+    for (const Link& link : m_links)
+        if (link.endPin == inputPinId) return link.startPin;
+    return 0;
+}
+
+ValueType NodeGraph::MergeTypeWith(const Node& merge, GraphId replacedPin, ValueType replacement, int depth) const {
+    bool any = false, modelOnly = true;
+    for (const Pin& pin : merge.inputs) {
+        ValueType type = ValueType::Any;
+        if (pin.id == replacedPin) {
+            type = replacement;
+        } else if (const GraphId upstream = FindUpstreamPin(pin.id); upstream != 0 && depth < 64) {
+            const Pin* source = FindPin(upstream);
+            const Node* producer = source ? FindNode(source->nodeId) : nullptr;
+            type = (producer && producer->kind == NodeKind::Merge) ? MergeTypeWith(*producer, 0, ValueType::Any, depth + 1)
+                                                                  : (source ? source->valueType : ValueType::Any);
+        } else {
+            continue;
+        }
+        if (type == ValueType::Any) continue;
+        any = true;
+        if (type != ValueType::Model) modelOnly = false;
+    }
+    return !any ? ValueType::Any : (modelOnly ? ValueType::Model : ValueType::Mesh);
+}
+
+ValueType NodeGraph::EffectiveOutputType(GraphId outputPin) const {
+    const Pin* pin = FindPin(outputPin);
+    if (pin == nullptr) return ValueType::Any;
+    const Node* node = FindNode(pin->nodeId);
+    if (node != nullptr && node->kind == NodeKind::Merge) return MergeTypeWith(*node, 0, ValueType::Any, 0);
+    return pin->valueType;
+}
+
+bool NodeGraph::DownstreamAccepts(const Node& node, ValueType newType, int depth) const {
+    if (depth > 64) return false;
+    for (const Pin& output : node.outputs) {
+        for (const Link& link : m_links) {
+            if (link.startPin != output.id) continue;
+            const Pin* target = FindPin(link.endPin);
+            if (target == nullptr) continue;
+            if (!TypesCompatible(newType, target->valueType)) return false;
+            // 下流の Merge は、その出力の型も変わり得る。
+            const Node* consumer = FindNode(target->nodeId);
+            if (consumer != nullptr && consumer->kind == NodeKind::Merge &&
+                !DownstreamAccepts(*consumer, MergeTypeWith(*consumer, target->id, newType, depth + 1), depth + 1)) {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -275,7 +365,7 @@ bool NodeGraph::DeleteLink(GraphId linkId) {
 
 void NodeGraph::NormalizeVariablePins() {
     for (Node& node : m_nodes) {
-        if (node.kind != NodeKind::Merge) continue;
+        if (!IsVariableInputNodeKind(node.kind)) continue;
         // 繋がっている入力を順に残し、末尾に空きを 1 本だけ置く。ラベルは並びで振り直す。
         std::vector<Pin> connected;
         Pin spare;
@@ -289,12 +379,31 @@ void NodeGraph::NormalizeVariablePins() {
         if (spare.id == 0) spare.id = AllocateGraphId();
         spare.nodeId = node.id;
         spare.kind = PinKind::Input;
-        spare.valueType = ValueType::Mesh;
+        spare.valueType = ValueType::Any;
         connected.push_back(std::move(spare));
         for (size_t i = 0; i < connected.size(); ++i) {
-            connected[i].label = "Mesh " + std::to_string(i + 1);
+            connected[i].valueType = ValueType::Any;
+            connected[i].label = "Input " + std::to_string(i + 1);
         }
         node.inputs = std::move(connected);
+    }
+    // 入力を外して型が合わなくなった下流のリンクを外す（Merge の出力が Mesh ↔ Model に変わったとき）。
+    // 外すとさらに下流の型が変わり得るので、変化が無くなるまで繰り返す。
+    for (bool removed = true; removed;) {
+        removed = false;
+        for (auto it = m_links.begin(); it != m_links.end(); ++it) {
+            const Pin* end = FindPin(it->endPin);
+            if (end != nullptr && !TypesCompatible(EffectiveOutputType(it->startPin), end->valueType)) {
+                m_links.erase(it);
+                removed = true;
+                break;
+            }
+        }
+    }
+    // Merge の出力ピンの型は表示（ピンの色）用に今の型を入れておく。
+    for (Node& node : m_nodes) {
+        if (node.kind != NodeKind::Merge) continue;
+        for (Pin& output : node.outputs) output.valueType = MergeTypeWith(node, 0, ValueType::Any, 0);
     }
 }
 
@@ -322,6 +431,10 @@ GraphId NodeGraph::CreateNode(NodeKind kind) {
         node.settings = MergeNodeSettings{};
     } else if (kind == NodeKind::Crack) {
         node.settings = CrackNodeSettings{};
+    } else if (kind == NodeKind::Model) {
+        node.settings = ModelNodeSettings{};
+    } else if (kind == NodeKind::Transform) {
+        node.settings = TransformNodeSettings{};
     } else if (kind == NodeKind::Path) {
         node.settings = PathNodeSettings{};
     } else {
@@ -373,17 +486,27 @@ bool NodeGraph::DeleteNode(GraphId nodeId) {
 void NodeGraph::Replace(std::vector<Node> nodes, std::vector<Link> links) {
     m_nodes = std::move(nodes);
     m_links.clear();
-    // 編集時と同じ DAG・入力 1 本の規則を復元時にも適用する。
-    // 順に採用し、循環や入力の重複を作る後続リンクだけを捨てる。
-    for (const Link& link : links) {
-        const Pin* start = FindPin(link.startPin);
-        const Pin* end = FindPin(link.endPin);
-        if (start == nullptr || end == nullptr || start->kind != PinKind::Output ||
-            end->kind != PinKind::Input || FindUpstreamNodeForPin(link.endPin) != nullptr ||
-            !CanCreateLink(link.startPin, link.endPin)) {
-            continue;
+    // 編集時と同じ DAG・入力 1 本・型の規則を復元時にも適用する。循環や入力の重複を作るリンクは捨てる。
+    // Merge の出力の型は入力のリンクで決まるので、ファイルの並びに依らないよう、採れるものが無くなるまで繰り返す。
+    std::vector<Link> pending = std::move(links);
+    for (bool progress = true; progress && !pending.empty();) {
+        progress = false;
+        for (auto it = pending.begin(); it != pending.end();) {
+            const Pin* start = FindPin(it->startPin);
+            const Pin* end = FindPin(it->endPin);
+            if (start == nullptr || end == nullptr || start->kind != PinKind::Output || end->kind != PinKind::Input ||
+                FindUpstreamNodeForPin(it->endPin) != nullptr) {
+                it = pending.erase(it);
+                continue;
+            }
+            if (!CanCreateLink(it->startPin, it->endPin)) {
+                ++it;
+                continue;
+            }
+            m_links.push_back(*it);
+            it = pending.erase(it);
+            progress = true;
         }
-        m_links.push_back(link);
     }
     RebuildNextGraphId();
     NormalizeVariablePins();

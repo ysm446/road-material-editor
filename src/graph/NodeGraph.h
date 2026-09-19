@@ -39,6 +39,11 @@ enum class ValueType : uint32_t {
     Mesh = 3,
     // 道路空間マスク（横位置 × 実距離）。Road Mask ノードが出し、Road のマスク入力が読む。
     RoadMask = 4,
+    // 置いたモデルの集まり。Model / Transform が受け渡す。道路のメッシュ（Mesh）の入力とは繋がらない。
+    Model = 5,
+    // 道路のメッシュとモデルのどちらでも受ける入力（Merge / Mesh Output）。
+    // Merge の出力はこの型にはならず、入力から決まる（NodeGraph::EffectiveOutputType）。
+    Any = 6,
 };
 
 // 数値は保存名ではなくファイルには書かない（定義テーブルの name を書く）が、
@@ -58,6 +63,11 @@ enum class NodeKind : uint32_t {
     Merge = 30,
     // ひび割れ。道路面の上に 3〜6 m の枝分かれした割れ目の塊を乱数で配置し、帯メッシュで貼る。
     Crack = 31,
+    // 3D モデル（.tgmodel）を 1 つ置く。出力（Model 型）を Mesh Output か Merge へ繋ぐとビューポートに出る。
+    // 道路のメッシュとは別系統で、描画は Application が行う（置き方を変えても道路を作り直さない）。
+    Model = 32,
+    // 上流のモデルをまとめて移動・回転・拡大する。Model 型を受けて Model 型を出す。
+    Transform = 33,
     // 材質。Road / Shoulder / Decal などの Material スロットへ渡す。
     Surface = 0,
     // 実寸の 3 次元カーブ。道路の線形や、面上に引いたデカールの経路。ビューポートで編集する。
@@ -184,7 +194,25 @@ struct ShoulderNodeSettings {
     uint32_t layerBlendMode[kRoadMaterialSlots] = {0, 0, 0, 0};
 };
 
-// Merge。設定は持たない。Mesh 1〜4 に繋いだ枝を順に積み、下流の白線・Decal は最初の枝の面に乗る。
+// モデル。model は Application のモデル一覧の ID（0 = なし）。position はモデルの底面の中心の位置（m）、
+// 倍率はモデルアセットの倍率に掛ける。道路には依存しない。
+// 回転は X・Y・Z 軸まわりの角度（度）で、Z → X → Y の順に回す（DirectX の RollPitchYaw と同じ）。
+struct ModelNodeSettings {
+    uint64_t model = 0;
+    float position[3] = {0.0f, 0.0f, 0.0f};
+    float rotationDegrees[3] = {0.0f, 0.0f, 0.0f};
+    float scale = 1.0f;
+};
+
+// Transform。上流のモデルを、倍率 → 回転 → 平行移動の順に動かす（原点まわり）。
+struct TransformNodeSettings {
+    float position[3] = {0.0f, 0.0f, 0.0f};
+    float rotationDegrees[3] = {0.0f, 0.0f, 0.0f};
+    float scale = 1.0f;
+};
+
+// Merge。設定は持たない。道路のメッシュとモデルのどちらも受け、繋いだ枝を順に積む。
+// 下流の白線・Decal は最初の道路の枝の面に乗る。出力の型は入力から決まる（モデルだけなら Model）。
 struct MergeNodeSettings {};
 
 // ひび割れの向き。縦は道路の長さ方向、横は車線を横切る。
@@ -304,7 +332,7 @@ struct CompiledGraph {
 using NodeSettings =
     std::variant<LayerNodeSettings, PathNodeSettings, RoadNodeSettings, RoadMarkingNodeSettings,
                  RoadMaskNodeSettings, DecalNodeSettings, ShoulderNodeSettings, MergeNodeSettings,
-                 CrackNodeSettings, std::monostate>;
+                 CrackNodeSettings, ModelNodeSettings, TransformNodeSettings, std::monostate>;
 
 struct Node {
     GraphId id = 0;
@@ -350,9 +378,17 @@ public:
     // 入力ピンに繋がっている上流ノード。無ければ nullptr。
     const Node* FindUpstreamNodeForPin(GraphId inputPinId) const;
 
-    // 接続できるか。別ノード・型一致・入出力の組み合わせに加えて、
-    // **循環ができる接続は弾く**（評価が回らなくなるため）。
+    // 接続できるか。別ノード・型の相性・入出力の組み合わせに加えて、
+    // **循環ができる接続は弾く**（評価が回らなくなるため）。Merge へ繋いで出力の型が変わるときは、
+    // その下流が新しい型を受けられるかも見る。
     bool CanCreateLink(GraphId startPin, GraphId endPin) const;
+    // 出力ピンが実際に運ぶ型。Merge の出力は、繋がった入力がモデルだけなら Model、道路が 1 本でもあれば Mesh、
+    // 何も無ければ Any（どちらにも繋げる）。それ以外はピンの型そのもの。
+    ValueType EffectiveOutputType(GraphId outputPin) const;
+    // 入力ピンに繋がっている上流の出力ピン。無ければ 0。
+    GraphId FindUpstreamPin(GraphId inputPinId) const;
+    // output 型の出力を input 型の入力へ繋げるか。
+    static bool TypesCompatible(ValueType output, ValueType input);
     // 接続する。入力ピンに既にある接続は置き換える。
     bool CreateLink(GraphId startPin, GraphId endPin);
     bool DeleteLink(GraphId linkId);
@@ -377,7 +413,8 @@ public:
 
     // 変更があったことを記録する。Application はこれを見て再コンパイルする。
     void MarkDirty() { ++m_revision; }
-    // 入力数が可変のノード（Merge）の入力を整える。繋がった入力を順に残し、末尾に空きを 1 本置く。
+    // 入力数が可変のノード（Merge）の入力を整え、出力の型を入力に合わせ直す。
+    // 入力を外して下流と型が合わなくなったリンクはここで外す。繋がった入力を順に残し、末尾に空きを 1 本置く。
     // リンクやノードを変えた後と読み込み後に呼ぶ。
     void NormalizeVariablePins();
     uint64_t Revision() const { return m_revision; }
@@ -390,6 +427,10 @@ private:
     CompiledGraph CompileSurface(const Node* surface) const;
     // producer の出力を辿って target に届くか（循環チェック用）。
     bool ReachesDownstream(GraphId fromNodeId, GraphId targetNodeId) const;
+    // Merge の入力 replacedPin に replacement 型を繋いだとしたときの出力の型。
+    ValueType MergeTypeWith(const Node& merge, GraphId replacedPin, ValueType replacement, int depth) const;
+    // node（Merge）の出力が newType になっても、下流のリンクがすべて受けられるか。
+    bool DownstreamAccepts(const Node& node, ValueType newType, int depth) const;
 
     std::vector<Node> m_nodes;
     std::vector<Link> m_links;
@@ -408,5 +449,9 @@ bool IsMeshNodeKind(NodeKind kind);
 // 選ぶとプレビューの対象になる種類か。Surface と Path、道路メッシュのノード。
 // 道路メッシュのノードはそのノードまでの鎖をメッシュシーンに出す。
 bool IsPreviewableNodeKind(NodeKind kind);
+// モデルの系統の種類か（Model / Transform）。選ぶとその枝のモデルだけをプレビューに出す。
+bool IsModelNodeKind(NodeKind kind);
+// 入力数が可変の種類か（Merge）。
+bool IsVariableInputNodeKind(NodeKind kind);
 
 }  // namespace tg::graph

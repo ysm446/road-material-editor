@@ -4,6 +4,8 @@
 #include "compositor/TextureLibrary.h"
 #include "io/ProjectWorkspace.h"
 #include "io/ThumbnailStore.h"
+#include "renderer/Environment.h"
+#include "renderer/PreviewRenderer.h"
 #include "renderer/SkyLibrary.h"
 #include "rhi/Device.h"
 #include "rhi/PipelineCache.h"
@@ -18,7 +20,8 @@ namespace tg {
 //
 // 画像は CPU で縮小して転送する。マテリアルと天球は、シーンのライブラリとは別の
 // 読み込み領域（m_textures / m_materials / m_skies）へ一時的に読み、既存の球の
-// サムネイルを取り出して使う。シーン側の一覧・ID・アンドゥには一切触れない。
+// サムネイルを取り出して使う。モデル（.tgmodel / .fbx）は同じ領域へ読んで ModelPreview で描く。
+// シーン側の一覧・ID・アンドゥには一切触れない。
 //
 // 生成はフレームの外で 1 フレームに 1 件だけ（GPU 待機と画像の読み込みを伴う）。
 // ルートの走査はマテリアルごとには行わない（ルートの切り替えと Invalidate のときだけ）。
@@ -42,6 +45,16 @@ public:
                  const std::filesystem::path& directory);
     void Destroy(rhi::Device& device);
     static bool Supports(const std::filesystem::path& path);
+    // モデルのサムネイルの照らし方（ビューポートと同じ環境・太陽・露出）。Process の前に渡す。
+    // environment は Process の間だけ参照する。
+    struct ModelLighting {
+        const renderer::Environment* environment = nullptr;
+        float iblIntensity = 1.0f;
+        renderer::LightSettings light;
+        float exposure = 1.0f;
+        renderer::TonemapMode tonemap{};
+    };
+    void SetModelLighting(const ModelLighting& lighting) { m_modelLighting = lighting; }
 
 private:
     struct Entry {
@@ -51,6 +64,8 @@ private:
     };
     void ClearScratch(rhi::Device& device, bool textures = true);
     bool BuildImage(rhi::Device& device, const std::filesystem::path& path, rhi::GpuTexture& output);
+    bool BuildModel(rhi::Device& device, rhi::PipelineCache& pipelines, io::ProjectWorkspace& workspace,
+                    const std::filesystem::path& path, rhi::GpuTexture& output);
     void Store(rhi::Device& device, const std::filesystem::path& path, rhi::GpuTexture texture, bool persist = true);
 
     std::unordered_map<std::filesystem::path, Entry> m_entries;
@@ -64,6 +79,7 @@ private:
     compositor::TextureLibrary m_textures;
     compositor::MaterialLibrary m_materials;
     renderer::SkyLibrary m_skies;
+    ModelLighting m_modelLighting;
 };
 
 }  // namespace tg

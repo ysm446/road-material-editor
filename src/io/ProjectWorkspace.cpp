@@ -39,7 +39,7 @@ fs::path Absolute(const fs::path& path) {
 
 bool IsNative(const fs::path& path) {
     const auto ext = path.extension().wstring();
-    for (const auto* native : {L".tgmat", L".tgsky", L".tglayer", L".tgboundary"})
+    for (const auto* native : {L".tgmat", L".tgsky", L".tglayer", L".tgboundary", L".tgmodel"})
         if (_wcsicmp(ext.c_str(), native) == 0) return true;
     return false;
 }
@@ -356,7 +356,9 @@ bool ProjectWorkspace::SaveScene(const fs::path& path, json& document) {
         return list != layouts->end() && list->is_array() ? &*list : nullptr;
     };
     std::unordered_set<std::string> claimedUids;
-    for (const char* key : {"materials", "skies"})
+    // モデルはモデルを入れる前の文書に無い。operator[] で null のキーを足さないよう、無ければ空の配列にする。
+    if (!document.contains("models")) document["models"] = json::array();
+    for (const char* key : {"materials", "skies", "models"})
         for (const auto& entry : document[key])
             if (const auto uid = String(entry, "uid"); !uid.empty()) claimedUids.insert(uid);
     for (const char* key : {"layerMaterials", "boundaryMaterials"})
@@ -402,6 +404,16 @@ bool ProjectWorkspace::SaveScene(const fs::path& path, json& document) {
         }
         if (!save(entry, "sky-asset", "Skies", ".tgsky")) return false;
     }
+    // モデル。FBX は元ファイルの固定 ID、スロットは .tgmat の参照にして .tgmodel へ分ける。
+    for (auto& entry : document["models"]) {
+        if (!entry.is_object()) return false;
+        entry["source"] = sourceRef(entry.value("path", json()));
+        if (entry["source"].is_null()) return false;
+        entry.erase("path");
+        if (!entry.contains("materials") || !entry["materials"].is_array()) entry["materials"] = json::array();
+        for (auto& slot : entry["materials"]) slot = byNumber(materialRefs)(slot);
+        if (!save(entry, "model-asset", "Models", ".tgmodel")) return false;
+    }
     // レイヤーマテリアルと境界マテリアル。マテリアル・画像の参照を永続 ID へ写してファイルへ分け、
     // 配置データには番号（SurfaceId）と参照だけを残す。区間やプリセットはその番号で指したまま。
     if (auto* list = surfaceAssets("layerMaterials")) {
@@ -439,8 +451,8 @@ bool ProjectWorkspace::ReadScene(const fs::path& path, json& document) {
 }
 
 bool ProjectWorkspace::Expand(json& document) {
-    for (const char* key : {"textures", "materials", "skies"}) {
-        if (!document.contains(key)) document[key] = json::array();
+    for (const char* key : {"textures", "materials", "skies", "models"}) {
+        if (!document.contains(key) || document[key].is_null()) document[key] = json::array();
         if (!document[key].is_array()) return false;
         for (const auto& entry : document[key]) if (!entry.is_object()) return false;
     }
@@ -517,6 +529,24 @@ bool ProjectWorkspace::Expand(json& document) {
                     }
                 }
             }
+        }
+    }
+    // モデル。スロットのマテリアルがシーンの表に無ければ足す（他のシーンで作った共有モデル）。
+    // FBX が見つからなければ元のパスのまま渡し、読み込み器がリンク切れとして残す。
+    for (auto& entry : document["models"]) {
+        if (!read(entry, "model-asset")) return false;
+        const json ref = entry.value("source", json::object());
+        auto source = Resolve(ref);
+        if (source.empty()) {
+            const auto text = String(ref, "path");
+            const fs::path raw = FromUtf8(text);
+            source = text.empty() ? fs::path{} : raw.is_absolute() ? raw : (m_root / raw).lexically_normal();
+        }
+        entry["path"] = ToUtf8Portable(source);
+        if (!entry.contains("materials") || !entry["materials"].is_array()) entry["materials"] = json::array();
+        for (auto& slot : entry["materials"]) {
+            const auto id = materialId(slot);
+            slot = id.is_number_integer() && id.get<int>() > 0 ? id : json();
         }
     }
     for (auto& entry : materials) {

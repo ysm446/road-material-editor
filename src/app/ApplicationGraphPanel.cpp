@@ -55,6 +55,9 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.62f, 0.70f, 0.66f, 1.0f);
         case graph::NodeKind::Crack:
             return ImVec4(0.66f, 0.58f, 0.62f, 1.0f);
+        case graph::NodeKind::Model:
+        case graph::NodeKind::Transform:
+            return ImVec4(0.62f, 0.60f, 0.78f, 1.0f);
         default:
             return ImVec4(0.59f, 0.64f, 0.68f, 1.0f);
     }
@@ -76,6 +79,12 @@ ImVec4 PinTypeColor(graph::ValueType valueType) {
         // 道路空間マスクは茶色寄りのオレンジ。タイル空間のマスク（オレンジ）と区別する。
         case graph::ValueType::RoadMask:
             return ImVec4(0.80f, 0.56f, 0.34f, 1.0f);
+        // モデルは藤色。道路のメッシュ（Mesh）とは繋がらないことを色でも分ける。
+        case graph::ValueType::Model:
+            return ImVec4(0.70f, 0.62f, 0.90f, 1.0f);
+        // どちらも受ける入力（Merge / Mesh Output）と、何も繋がっていない Merge の出力は無彩色。
+        case graph::ValueType::Any:
+            return ImVec4(0.80f, 0.80f, 0.82f, 1.0f);
         case graph::ValueType::Material:
         default:
             return ImVec4(0.70f, 0.93f, 0.78f, 1.0f);
@@ -303,7 +312,7 @@ void Application::SyncMeshGraph() {
     // 途中のメッシュノード（Road / Lane Marking / Decal）を見ているときは、そのノードまでの鎖を出す。
     graph::GraphId previewMeshNode = 0;
     if (const graph::Node* node = m_graph.FindNode(m_previewGraphNode);
-        node != nullptr && graph::IsMeshNodeKind(node->kind)) {
+        node != nullptr && (graph::IsMeshNodeKind(node->kind) || graph::IsModelNodeKind(node->kind))) {
         previewMeshNode = node->id;
     }
     if (m_meshGraphRevision == m_graph.Revision() && m_meshGraphPreviewNode == previewMeshNode) return;
@@ -889,6 +898,9 @@ void Application::DrawGraphEditor() {
                 settings->layer.name +=
                     " " + std::to_string(m_graph.Nodes().size());
             }
+            // Model はモデルプレビューで選んでいるモデルを最初から入れておく。
+            if (auto* model = std::get_if<graph::ModelNodeSettings>(&node->settings); model && FindModel(m_selectedModel))
+                model->model = m_selectedModel;
             node->posX = addNodePosition.x;
             node->posY = addNodePosition.y;
             node->positionValid = true;
@@ -900,14 +912,21 @@ void Application::DrawGraphEditor() {
             // ステータスバーに残す。追加が効いたかを画面で確かめられるようにする。
             TG_LOG_INFO("ノードを追加しました: %s", NodeDisplayName(*node));
         };
+        // 道路系（Mesh を受け渡す）とモデル系（Model を受け渡す）を分けて並べる。互いには繋がらない。
+        ImGui::TextDisabled("道路");
         addNodeMenuItem(graph::NodeKind::Road, "Road — Pathから道路面と左右境界を生成");
         addNodeMenuItem(graph::NodeKind::RoadMarking, "Lane Marking — 道路面に白線の帯を生成");
         addNodeMenuItem(graph::NodeKind::RoadMask, "Road Mask — 轍・端・ムラの道路空間マスク");
         addNodeMenuItem(graph::NodeKind::Decal, "Decal — 面上のPathに沿って模様の帯を貼る");
         addNodeMenuItem(graph::NodeKind::Shoulder, "Shoulder — 道路の境界から外側へ路肩を張る");
-        addNodeMenuItem(graph::NodeKind::Merge, "Merge — 複数のRoadSurfaceを1つにまとめる");
         addNodeMenuItem(graph::NodeKind::Crack, "Crack — ひび割れの塊を乱数で配置する");
-        addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュを表示");
+        ImGui::Separator();
+        ImGui::TextDisabled("モデル");
+        addNodeMenuItem(graph::NodeKind::Model, "Model — 3D モデル（.tgmodel）を 1 つ置く");
+        addNodeMenuItem(graph::NodeKind::Transform, "Transform — 上流のモデルをまとめて移動・回転・拡大");
+        ImGui::Separator();
+        addNodeMenuItem(graph::NodeKind::Merge, "Merge — 道路メッシュとモデルをまとめる（モデルだけなら Transform へ繋げる）");
+        addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュとモデルを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Path, "Path — 実寸の3次元カーブを編集");
         addNodeMenuItem(graph::NodeKind::Surface, "Surface — マテリアルを Road / Shoulder のスロットへ渡す");
@@ -958,6 +977,12 @@ void Application::DrawGraphEditor() {
     // エディタ側の選択がまだ無く、ここで 0 に戻すと「追加 → 選択」が消える
     // （エディタへの選択の反映は次のフレームの流し込みで行う）。
     // コピーは複数選択（枠で囲む）にも効かせたいので、全部控えておく。
+    // ビューポートでモデルを選んだ・外したときは、エディタの選択もそれに合わせる。
+    if (m_graphSelectionRequest) {
+        ed::ClearSelection();
+        if (*m_graphSelectionRequest != 0) ed::SelectNode(ed::NodeId(*m_graphSelectionRequest));
+        m_graphSelectionRequest.reset();
+    }
     ed::NodeId selectedNodes[64];
     const int selectedCount = ed::GetSelectedNodes(selectedNodes, IM_ARRAYSIZE(selectedNodes));
     if (selectedCount > 0) {
@@ -1053,6 +1078,9 @@ void Application::DrawGraphPanel() {
     if (selected == nullptr) {
         ui::HintText("ノードを選ぶと設定が出る。背景の右クリックで追加、"
                      "ピンをドラッグして接続、Ctrl+C / Ctrl+V でコピー");
+    } else if (selected->kind == graph::NodeKind::Model || selected->kind == graph::NodeKind::Transform) {
+        // 置き方の変更は道路を作り直さない（MarkDirty しない）。描画は毎フレーム設定から行う。
+        if (DrawModelNodeSettings(*selected)) m_documentDirty = true;
     } else if (auto* road = std::get_if<graph::RoadNodeSettings>(&selected->settings)) {
         if (DrawSurfaceLayoutSettings(selected->id)) { m_graph.MarkDirty(); MarkDocumentChanged(); }
         const auto* activeBand = graph::FindRoadBand(m_surfaceLayouts, selected->id);

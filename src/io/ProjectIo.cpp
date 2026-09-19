@@ -50,7 +50,9 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 24: 中央線・外側線・車線境界線の線幅を独立させる。
 // 25: 白線・Decal・CrackのMaterial入力をプロパティへ移す。
 // 26: Decalのハイト加算・画像倍率・帯ワイヤーフレーム。
-constexpr int kProjectFormatVersion = 26;
+// 27: モデル（models）。旧ビルドが読み飛ばして保存し直し、モデルとスロットの割り当てを失うことを防ぐ。
+// 28: model / transform ノードと、道路・モデルの両方を受ける Merge / Mesh Output。旧ビルドが接続を失うことを防ぐ。
+constexpr int kProjectFormatVersion = 28;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
 
@@ -125,6 +127,12 @@ bool ReadBool(const json& node, const char* key, bool fallback) {
 std::string ReadString(const json& node, const char* key, const std::string& fallback = {}) {
     const json* member = FindMember(node, key);
     return (member != nullptr && member->is_string()) ? member->get<std::string>() : fallback;
+}
+
+// モデルの倍率。0 以下や非有限は 1（そのまま）に落とす。
+float ReadModelScale(const json& node) {
+    const float scale = ReadFloat(node, "scale", 1.0f);
+    return std::isfinite(scale) && scale > 0.0f ? scale : 1.0f;
 }
 
 json WriteFloat3(const DirectX::XMFLOAT3& value) {
@@ -601,8 +609,10 @@ compositor::MaterialLayer ReadLayer(
 // （「列挙は名前で書く」）。ピンはノードの定義から再生成するので、
 // ファイルには ID の並びだけを持つ（リンクがピン ID を参照するため）。
 
+// writeModel は Model ノードのモデル（実行中の ID）を文書内の番号へ写す。無ければ null を書く。
 json WriteGraph(const graph::NodeGraph& graphData,
-                const std::function<json(compositor::MaterialAssetId)>& writeMaterial) {
+                const std::function<json(compositor::MaterialAssetId)>& writeMaterial,
+                const std::function<json(uint64_t)>& writeModel = {}) {
     json out;
     json nodes = json::array();
     for (const graph::Node& node : graphData.Nodes()) {
@@ -722,6 +732,18 @@ json WriteGraph(const graph::NodeGraph& graphData,
                 item["roadMarking"]["materials"].push_back(material ? WriteLayer(*material, writeMaterial) : json());
         } else if (const auto* path = std::get_if<graph::PathNodeSettings>(&node.settings)) {
             item["path"] = WritePath(path->path);
+        } else if (const auto* model = std::get_if<graph::ModelNodeSettings>(&node.settings)) {
+            item["model"] = {{"model", writeModel ? writeModel(model->model) : json()},
+                             {"position", json::array({model->position[0], model->position[1], model->position[2]})},
+                             {"rotation", json::array({model->rotationDegrees[0], model->rotationDegrees[1],
+                                                       model->rotationDegrees[2]})},
+                             {"scale", model->scale}};
+        } else if (const auto* transform = std::get_if<graph::TransformNodeSettings>(&node.settings)) {
+            item["transform"] = {
+                {"position", json::array({transform->position[0], transform->position[1], transform->position[2]})},
+                {"rotation", json::array({transform->rotationDegrees[0], transform->rotationDegrees[1],
+                                          transform->rotationDegrees[2]})},
+                {"scale", transform->scale}};
         }
         nodes.push_back(std::move(item));
     }
@@ -742,8 +764,10 @@ json WriteGraph(const graph::NodeGraph& graphData,
 
 // 戻り値はノードを 1 つ以上読めたか。空のグラフ節は「グラフ未使用」とみなし、
 // 呼び出し側が旧 layers からの移行に切り替える。
+// readModel は Model ノードの文書内の番号を実行中のモデル ID へ写す（0 = なし）。
 bool ReadGraph(const json& node, graph::NodeGraph& graphData,
-               const std::function<compositor::MaterialAssetId(const json&)>& readMaterial) {
+               const std::function<compositor::MaterialAssetId(const json&)>& readMaterial,
+               const std::function<uint64_t(const json&)>& readModel = {}) {
     std::vector<graph::Node> nodes;
     std::vector<graph::Link> links;
     std::vector<std::pair<graph::GraphId, graph::GraphId>> legacyMaterialInputs;
@@ -832,13 +856,13 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
             }
             // 入力数が可変のノード（Merge）は、ファイルにある分だけ入力を足す。
             // 型とラベルは最後の入力定義に合わせ、並びは読み込み後に NormalizeVariablePins が整える。
-            if (created.kind == graph::NodeKind::Merge && inputIds != nullptr && inputIds->is_array() &&
+            if (graph::IsVariableInputNodeKind(created.kind) && inputIds != nullptr && inputIds->is_array() &&
                 !created.inputs.empty()) {
                 for (; inputIndex < inputIds->size(); ++inputIndex) {
                     if (!(*inputIds)[inputIndex].is_number_integer()) continue;
                     graph::Pin extra = created.inputs.back();
                     extra.id = (*inputIds)[inputIndex].get<int>();
-                    extra.label = "Mesh " + std::to_string(created.inputs.size() + 1);
+                    extra.label = "Input " + std::to_string(created.inputs.size() + 1);
                     maxId = std::max(maxId, extra.id);
                     created.inputs.push_back(std::move(extra));
                 }
@@ -970,6 +994,40 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
                     settings.layerBlendRange = std::clamp(ReadFloat(*shoulder, "layerBlendRange", settings.layerBlendRange), 0.0f, 1.0f);
                 }
                 created.settings = settings;
+            } else if (created.kind == graph::NodeKind::Model || created.kind == graph::NodeKind::Transform) {
+                // 位置・回転（X / Y / Z の度。数値 1 つなら Y だけ）・倍率は Model と Transform で共通。
+                float position[3] = {0.0f, 0.0f, 0.0f}, rotation[3] = {0.0f, 0.0f, 0.0f}, scale = 1.0f;
+                const bool isModel = created.kind == graph::NodeKind::Model;
+                const json* values = FindMember(item, isModel ? "model" : "transform");
+                if (values != nullptr && values->is_object()) {
+                    const DirectX::XMFLOAT3 p = ReadFloat3(*values, "position", {});
+                    position[0] = p.x; position[1] = p.y; position[2] = p.z;
+                    if (const json* r = FindMember(*values, "rotation"); r && r->is_number()) {
+                        rotation[1] = r->get<float>();
+                    } else {
+                        const DirectX::XMFLOAT3 value = ReadFloat3(*values, "rotation", {});
+                        rotation[0] = value.x; rotation[1] = value.y; rotation[2] = value.z;
+                    }
+                    const float read = ReadFloat(*values, "scale", 1.0f);
+                    scale = std::isfinite(read) && read > 0.0f ? read : 1.0f;
+                }
+                const auto assign = [&](auto& settings) {
+                    std::copy(std::begin(position), std::end(position), settings.position);
+                    std::copy(std::begin(rotation), std::end(rotation), settings.rotationDegrees);
+                    settings.scale = scale;
+                };
+                if (isModel) {
+                    graph::ModelNodeSettings settings;
+                    assign(settings);
+                    if (const json* reference = values ? FindMember(*values, "model") : nullptr; reference && readModel)
+                        settings.model = readModel(*reference);
+                    created.settings = settings;
+                } else {
+                    graph::TransformNodeSettings settings;
+                    assign(settings);
+                    created.settings = settings;
+                }
+
             } else if (created.kind == graph::NodeKind::RoadMask) {
                 graph::RoadMaskNodeSettings settings;
                 if (const json* mask = FindMember(item, "roadMask"); mask && mask->is_object()) {
@@ -1508,6 +1566,31 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs,
     }
     document["materials"] = std::move(materials);
 
+    // --- モデル（FBX は参照。スロットのマテリアルは文書内の番号） ----------
+    std::unordered_map<uint64_t, int> modelIndex;
+    if (refs.models != nullptr) {
+        json models = json::array();
+        for (const renderer::ModelAsset& asset : *refs.models) {
+            modelIndex[asset.id] = static_cast<int>(models.size()) + 1;
+            json slots = json::array();
+            for (const compositor::MaterialAssetId id : asset.materials) {
+                const auto found = materialIndex.find(id);
+                slots.push_back(found == materialIndex.end() ? json() : json(found->second));
+            }
+            json node = {{"id", static_cast<int>(models.size()) + 1},
+                         {"name", asset.name},
+                         {"path", RelativePathString(asset.path, baseDir)},
+                         {"scale", asset.scale},
+                         {"materials", std::move(slots)}};
+            if (workspace != nullptr) {
+                node["_assetPath"] = ToUtf8Portable(asset.assetPath);
+                node["uid"] = asset.assetUid;
+            }
+            models.push_back(std::move(node));
+        }
+        document["models"] = std::move(models);
+    }
+
     // --- ノードグラフ -----------------------------------------------------
     // 版 4 から layers 節は書かない。合成の構造はグラフだけが持つ。
     const std::function<json(compositor::MaterialAssetId)> writeMaterial =
@@ -1515,7 +1598,11 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs,
             const auto it = materialIndex.find(id);
             return (it != materialIndex.end()) ? json(it->second) : json();
         };
-    document["graph"] = WriteGraph(refs.graph, writeMaterial);
+    const std::function<json(uint64_t)> writeModel = [&modelIndex](uint64_t id) {
+        const auto found = modelIndex.find(id);
+        return found != modelIndex.end() ? json(found->second) : json();
+    };
+    document["graph"] = WriteGraph(refs.graph, writeMaterial, writeModel);
     auto layouts = WriteSurfaceLayouts(refs.surfaceLayouts);
     if (layouts.is_null()) { TG_LOG_ERROR("レイヤーマテリアルの移行に必要なIDを確保できません"); return false; }
     for (auto& preset : layouts["layerMaterials"]) {
@@ -1719,6 +1806,43 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
         }
     }
 
+    // --- モデル -----------------------------------------------------------
+    // 欠けた FBX も参照を残す（リンク切れとして表示し、別の場所へ保存し直しても割り当てを失わない）。
+    std::unordered_map<int, uint64_t> modelIds;
+    if (refs.models != nullptr) {
+        refs.models->clear();
+        if (const json* models = FindMember(document, "models"); models != nullptr && models->is_array()) {
+            for (const json& node : *models) {
+                if (!node.is_object()) {
+                    continue;
+                }
+                renderer::ModelAsset asset;
+                asset.id = refs.models->size() + 1;
+                asset.name = ReadString(node, "name");
+                asset.assetPath = FromUtf8(ReadString(node, "_assetPath"));
+                asset.assetUid = ReadString(node, "uid");
+                asset.path = ResolvePath(ReadString(node, "path"), baseDir);
+                asset.scale = ReadModelScale(node);
+                if (!renderer::LoadModel(asset.path, asset)) {
+                    TG_LOG_WARN("モデルを読み込めません（%s）: %s", asset.error.c_str(),
+                                ToUtf8Display(asset.path).c_str());
+                }
+                if (const json* slots = FindMember(node, "materials"); slots != nullptr && slots->is_array()) {
+                    asset.materials.resize(std::max(asset.materials.size(), slots->size()),
+                                           compositor::kNoMaterialAsset);
+                    for (size_t i = 0; i < slots->size(); ++i) {
+                        const auto found = (*slots)[i].is_number_integer()
+                                               ? materialIds.find((*slots)[i].get<int>())
+                                               : materialIds.end();
+                        if (found != materialIds.end()) asset.materials[i] = found->second;
+                    }
+                }
+                modelIds[ReadInt(node, "id", 0)] = asset.id;
+                refs.models->push_back(std::move(asset));
+            }
+        }
+    }
+
     // --- ノードグラフ（旧形式は layers[] から移行） -----------------------
     const std::function<compositor::MaterialAssetId(const json&)> readMaterial =
         [&materialIds](const json& value) {
@@ -1760,7 +1884,12 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
     if (graphNode != nullptr && graphNode->is_object()) {
         const bool legacyApply = ReadBool(*graphNode, "apply", version >= 4);
         if (version >= 4 || legacyApply || legacyLayers.empty()) {
-            graphLoaded = ReadGraph(*graphNode, refs.graph, readMaterial);
+            const std::function<uint64_t(const json&)> readModel = [&modelIds](const json& value) -> uint64_t {
+                if (!value.is_number_integer()) return 0;
+                const auto found = modelIds.find(value.get<int>());
+                return found != modelIds.end() ? found->second : 0;
+            };
+            graphLoaded = ReadGraph(*graphNode, refs.graph, readMaterial, readModel);
         }
     }
     if (!graphLoaded) {
@@ -1847,6 +1976,11 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
     for (const compositor::BoundaryMaterial& entry : refs.surfaceLayouts.boundaryMaterials) {
         if (!entry.assetUid.empty()) claimedUids.insert(entry.assetUid);
     }
+    if (refs.models != nullptr) {
+        for (const renderer::ModelAsset& entry : *refs.models) {
+            if (!entry.assetUid.empty()) claimedUids.insert(entry.assetUid);
+        }
+    }
     // 置き場所が未定のものの保存先。ID の無いもの（旧 .tgproj・単体 .tgmat から来たもの）は、
     // 同じ中身の既存アセットがあればそれを使う。無ければ名前から連番で作る。
     const auto placement = [&](json& body, const fs::path& current, const char* kind, const wchar_t* folder,
@@ -1916,6 +2050,30 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
         material.assetPath = assetPath;
         material.assetUid = ReadString(body, "uid");
         claimedUids.insert(material.assetUid);
+    }
+    // モデル。FBX は元ファイルの固定 ID、スロットは上で保存した .tgmat の固定 ID で参照する
+    // （SaveScene が作る本文と一致させ、中身が変わらなければ書き直さない）。
+    if (refs.models != nullptr) {
+        for (renderer::ModelAsset& model : *refs.models) {
+            json slots = json::array();
+            for (const compositor::MaterialAssetId id : model.materials) {
+                const compositor::MaterialAsset* asset = refs.materials.Find(id);
+                json value = (asset != nullptr && !asset->assetPath.empty()) ? workspace.Reference(asset->assetPath) : json();
+                if (asset != nullptr && value.is_null()) valid = false;
+                slots.push_back(std::move(value));
+            }
+            json body = {{"name", model.name}, {"source", source(model.path)}, {"scale", model.scale},
+                         {"materials", std::move(slots)}};
+            body["uid"] = model.assetUid;
+            fs::path assetPath = placement(body, model.assetPath, "model-asset", L"Models", model.name, ".tgmodel");
+            if (!valid || !workspace.SaveAsset(assetPath, "model-asset", body)) {
+                TG_LOG_ERROR("モデルを保存できません: %s", model.name.c_str());
+                return false;
+            }
+            model.assetPath = assetPath;
+            model.assetUid = ReadString(body, "uid");
+            claimedUids.insert(model.assetUid);
+        }
     }
     // 境界マテリアル。画像は元ファイルの固定 ID で参照する。
     for (compositor::BoundaryMaterial& material : refs.surfaceLayouts.boundaryMaterials) {
@@ -2066,7 +2224,8 @@ graph::SurfaceId LoadSharedSurfaceAsset(ProjectWorkspace& workspace, const std::
 bool LoadSharedAsset(ProjectWorkspace& workspace, const std::filesystem::path& path,
                      rhi::Device& device, rhi::PipelineCache& pipelineCache,
                      compositor::TextureLibrary& textures, compositor::MaterialLibrary& materials,
-                     renderer::SkyLibrary& skies, bool rescan) {
+                     renderer::SkyLibrary& skies, bool rescan,
+                     std::vector<renderer::ModelAsset>* models) {
     if (rescan && !workspace.Scan()) {
         return false;
     }
@@ -2081,14 +2240,42 @@ bool LoadSharedAsset(ProjectWorkspace& workspace, const std::filesystem::path& p
     }
     const json reference = {{"uid", assetUid}, {"path", RelativePathString(path, workspace.Root())}};
     const bool isMaterial = _wcsicmp(path.extension().c_str(), L".tgmat") == 0;
+    const bool isModel = _wcsicmp(path.extension().c_str(), L".tgmodel") == 0;
+    if (isModel && models == nullptr) {
+        return false;
+    }
     json document;
-    document[isMaterial ? "materials" : "skies"] = json::array({{{"id", 1}, {"asset", reference}}});
+    document[isMaterial ? "materials" : isModel ? "models" : "skies"] = json::array({{{"id", 1}, {"asset", reference}}});
     if (!workspace.Expand(document)) {
         return false;
     }
     std::unordered_map<int, compositor::TextureId> textureIds;
     std::unordered_map<int, compositor::MaterialAssetId> materialIds;
     AddExpandedLibraries(document, device, pipelineCache, textures, materials, textureIds, materialIds);
+    for (const json& node : document["models"]) {
+        const std::string uid = ReadString(node, "uid");
+        if (std::any_of(models->begin(), models->end(), [&uid](const renderer::ModelAsset& a) { return a.assetUid == uid; })) {
+            continue;
+        }
+        renderer::ModelAsset asset;
+        asset.id = 1;
+        for (const renderer::ModelAsset& existing : *models) asset.id = std::max(asset.id, existing.id + 1);
+        asset.assetUid = uid;
+        asset.assetPath = FromUtf8(ReadString(node, "_assetPath"));
+        asset.name = ReadString(node, "name");
+        asset.path = FromUtf8(ReadString(node, "path"));
+        asset.scale = ReadModelScale(node);
+        if (!renderer::LoadModel(asset.path, asset)) {
+            TG_LOG_WARN("モデルを読み込めません（%s）: %s", asset.error.c_str(), ToUtf8Display(asset.path).c_str());
+        }
+        const json& slots = node.at("materials");
+        asset.materials.resize(std::max(asset.materials.size(), slots.size()), compositor::kNoMaterialAsset);
+        for (size_t i = 0; i < slots.size(); ++i) {
+            const auto found = slots[i].is_number_integer() ? materialIds.find(slots[i].get<int>()) : materialIds.end();
+            if (found != materialIds.end()) asset.materials[i] = found->second;
+        }
+        models->push_back(std::move(asset));
+    }
     for (const json& node : document["skies"]) {
         const std::string uid = ReadString(node, "uid");
         const auto& entries = skies.Entries();

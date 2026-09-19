@@ -12,7 +12,7 @@ namespace tg::io {
 // プロジェクトのルートフォルダ、永続ID、共有アセットの入出力。GPU には依存しない。
 //
 // ルート直下の `project.tgproj`（terrain-graph.workspace 版1）がプロジェクトの目印。
-// シーン (.tgscene) はルート内の任意の場所に置き、マテリアル (.tgmat) と天球 (.tgsky) は
+// シーン (.tgscene) はルート内の任意の場所に置き、マテリアル (.tgmat)・天球 (.tgsky)・モデル (.tgmodel) などは
 // 個別ファイルとして共有する。参照は `{"uid", "path"}` で、走査した ID から現在のパスを引く。
 // 仕様は docs/design/project-workspace.md。
 class ProjectWorkspace {

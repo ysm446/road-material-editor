@@ -927,11 +927,17 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             success = true;
         }
     } else if (node->kind == NodeKind::Merge) {
-        // 繋いだ枝を順に積む。同じノード由来のメッシュは 1 回だけ。下流の部品は最初の枝の面に乗る。
+        // 繋いだ枝を順に積む。同じノード由来のメッシュは 1 回だけ。下流の部品は最初の道路の枝の面に乗る。
+        // モデルの枝（型が Model）は道路のメッシュを持たないので飛ばす（Application が別に描く）。
         bool first = true;
+        bool hasModel = false;
         for (const Pin& pin : node->inputs) {
             const Node* upstream = graph.FindUpstreamNodeForPin(pin.id);
             if (!upstream) continue;
+            if (graph.EffectiveOutputType(graph.FindUpstreamPin(pin.id)) == ValueType::Model) {
+                hasModel = true;
+                continue;
+            }
             MeshChain branch;
             if (!EvaluateMeshChain(graph, upstream, branch, errors, visiting)) continue;
             const std::vector<int> remap = MergeChainMeshes(chain, branch);
@@ -942,7 +948,7 @@ bool EvaluateMeshChain(const NodeGraph& graph, const Node* node, MeshChain& chai
             }
             success = true;
         }
-        if (!success) error = "Mesh 1 に RoadSurface を接続してください";
+        if (!success && !hasModel) error = "Input 1 に道路のメッシュかモデルを接続してください";
     } else if (const auto* marking = std::get_if<RoadMarkingNodeSettings>(&node->settings)) {
         const Node* upstream = node->inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node->inputs.front().id);
         if (!upstream) {
@@ -1121,9 +1127,15 @@ const Node* FindSurfaceRoad(const NodeGraph& graph, const Node& pathNode) {
     const Node* current = graph.FindUpstreamNodeForPin(pathNode.inputs.front().id);
     for (int depth = 0; current != nullptr && depth < 64; ++depth) {
         if (current->kind == NodeKind::Road) return current;
-        // Lane Marking / Decal は RoadSurface を素通しする。最初の Mesh 入力をたどる。
+        // Lane Marking / Decal は RoadSurface を素通しする。最初の Mesh 入力をたどる（Merge は最初の道路の枝）。
         const Pin* meshInput = nullptr;
-        for (const auto& pin : current->inputs) if (pin.valueType == ValueType::Mesh) { meshInput = &pin; break; }
+        for (const auto& pin : current->inputs) {
+            if (pin.valueType != ValueType::Mesh && pin.valueType != ValueType::Any) continue;
+            if (pin.valueType == ValueType::Any &&
+                graph.EffectiveOutputType(graph.FindUpstreamPin(pin.id)) != ValueType::Mesh) continue;
+            meshInput = &pin;
+            break;
+        }
         current = meshInput ? graph.FindUpstreamNodeForPin(meshInput->id) : nullptr;
     }
     return nullptr;
@@ -1523,10 +1535,10 @@ CompiledMeshGraph CompileMeshGraph(const NodeGraph& graph, GraphId previewNodeId
         for (const auto& node : graph.Nodes()) {
             if (node.kind != NodeKind::MeshOutput) continue;
             compiled.active = true;
-            // 道路のメッシュの入力が空でも、モデルだけを繋いだ Mesh Output はエラーにしない。
-            const Node* upstream = node.inputs.empty() ? nullptr : graph.FindUpstreamNodeForPin(node.inputs.front().id);
-            const bool hasModel = node.inputs.size() > 1 && graph.FindUpstreamNodeForPin(node.inputs[1].id) != nullptr;
-            if (upstream == nullptr && hasModel) continue;
+            // モデル（またはモデルだけをまとめた Merge）を繋いだ Mesh Output は道路を積まない。エラーにもしない。
+            const GraphId input = node.inputs.empty() ? 0 : node.inputs.front().id;
+            const Node* upstream = input ? graph.FindUpstreamNodeForPin(input) : nullptr;
+            if (upstream != nullptr && graph.EffectiveOutputType(graph.FindUpstreamPin(input)) == ValueType::Model) continue;
             appendChain(upstream);
         }
     }
@@ -1552,17 +1564,19 @@ std::vector<ModelPlacementPath> CollectOutputModels(const NodeGraph& graph, Grap
             transforms.push_back(node->id);
             if (!node->inputs.empty()) self(self, graph.FindUpstreamNodeForPin(node->inputs.front().id), depth + 1);
             transforms.pop_back();
-        } else if (node->kind == NodeKind::ModelMerge) {
+        } else if (node->kind == NodeKind::Merge) {
+            // 道路とモデルをまとめた Merge。道路の部品（白線など）の入力は道路面なので、そこから先は見ない。
             for (const Pin& pin : node->inputs) self(self, graph.FindUpstreamNodeForPin(pin.id), depth + 1);
         }
     };
     if (const Node* preview = graph.FindNode(previewNodeId); preview != nullptr) {
-        if (IsModelNodeKind(preview->kind)) visit(visit, preview, 0);
+        // モデルの系統か Merge ならその枝のモデル、ほかの道路のノードならモデルは出さない。
+        if (IsModelNodeKind(preview->kind) || preview->kind == NodeKind::Merge) visit(visit, preview, 0);
         if (IsModelNodeKind(preview->kind) || IsMeshNodeKind(preview->kind)) return result;
     }
     for (const auto& node : graph.Nodes()) {
-        if (node.kind == NodeKind::MeshOutput && node.inputs.size() > 1)
-            visit(visit, graph.FindUpstreamNodeForPin(node.inputs[1].id), 0);
+        if (node.kind == NodeKind::MeshOutput && !node.inputs.empty())
+            visit(visit, graph.FindUpstreamNodeForPin(node.inputs.front().id), 0);
     }
     return result;
 }

@@ -51,7 +51,7 @@ constexpr const char* kMaterialFormat = "terrain-graph.material";
 // 25: 白線・Decal・CrackのMaterial入力をプロパティへ移す。
 // 26: Decalのハイト加算・画像倍率・帯ワイヤーフレーム。
 // 27: モデル（models）。旧ビルドが読み飛ばして保存し直し、モデルとスロットの割り当てを失うことを防ぐ。
-// 28: model / transform / modelMerge ノードと Mesh Output の Model 入力。旧ビルドが読み飛ばして接続を失うことを防ぐ。
+// 28: model / transform ノードと、道路・モデルの両方を受ける Merge / Mesh Output。旧ビルドが接続を失うことを防ぐ。
 constexpr int kProjectFormatVersion = 28;
 // マテリアル単体 (.tgmat) の版。中身は変わっていないので 3 のまま。
 constexpr int kMaterialFormatVersion = 3;
@@ -862,8 +862,7 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
                     if (!(*inputIds)[inputIndex].is_number_integer()) continue;
                     graph::Pin extra = created.inputs.back();
                     extra.id = (*inputIds)[inputIndex].get<int>();
-                    extra.label = (created.kind == graph::NodeKind::ModelMerge ? "Model " : "Mesh ") +
-                                  std::to_string(created.inputs.size() + 1);
+                    extra.label = "Input " + std::to_string(created.inputs.size() + 1);
                     maxId = std::max(maxId, extra.id);
                     created.inputs.push_back(std::move(extra));
                 }
@@ -1028,8 +1027,7 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
                     assign(settings);
                     created.settings = settings;
                 }
-            } else if (created.kind == graph::NodeKind::ModelMerge) {
-                created.settings = graph::MergeNodeSettings{};
+
             } else if (created.kind == graph::NodeKind::RoadMask) {
                 graph::RoadMaskNodeSettings settings;
                 if (const json* mask = FindMember(item, "roadMask"); mask && mask->is_object()) {

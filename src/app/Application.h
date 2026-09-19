@@ -76,6 +76,7 @@ struct StartupOptions {
     std::filesystem::path placeModel;
     // 開発用。モデルのギズモを回転（E）で始める。
     bool gizmoRotate = false;
+    bool gizmoScale = false;
     // P0: Road / 砂利Surface / 歩道Surface の ID。通常のグラフ評価は変更しない。
     graph::GraphId prototypeRoad = 0;
     graph::GraphId surfaceLayoutRoad = 0;
@@ -192,8 +193,8 @@ private:
     renderer::ModelAsset* FindModel(uint64_t id);
 
     // --- モデルの系統のノード（ApplicationModelPlacement.cpp） --------------------------
-    // Model ノードを作ってモデルを position（底面の中心）へ置き、Mesh Output の Model 入力へ繋いで選ぶ
-    // （既に別のものが繋がっていれば Model Merge でまとめる）。作ったノードの ID を返す（失敗は 0）。
+    // Model ノードを作ってモデルを position（底面の中心）へ置き、Mesh Output へ繋いで選ぶ
+    // （既に別のものが繋がっていれば Merge でまとめる）。作ったノードの ID を返す（失敗は 0）。
     graph::GraphId PlaceModel(uint64_t modelId, const DirectX::XMFLOAT3& position);
     // ビューポートに出すモデル 1 つぶん（Model ノード、通る Transform、ワールド行列）。
     struct VisibleModel {
@@ -542,10 +543,11 @@ private:
         float pressParameter = 0.0f;
         float startPosition[3] = {};
         float startRotation[3] = {};
+        float startScale = 1.0f;
         float planeY = 0.0f;
     } m_modelInstanceDrag;
-    // ギズモの種類（W で移動、E で回転）と、カーソルが乗っているハンドル（-1 = 無し）。
-    enum class ModelGizmoMode { Translate, Rotate };
+    // ギズモの種類（W で移動、E で回転、R で倍率）と、カーソルが乗っているハンドル（-1 = 無し）。
+    enum class ModelGizmoMode { Translate, Rotate, Scale };
     ModelGizmoMode m_modelGizmoMode = ModelGizmoMode::Translate;
     int m_modelGizmoHover = -1;
     // 帯から落としたモデルの配置。ファイルの読み込みを伴うのでフレームの外で行う。

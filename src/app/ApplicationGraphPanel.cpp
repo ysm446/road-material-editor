@@ -57,7 +57,6 @@ ImVec4 NodeAccentColor(graph::NodeKind kind) {
             return ImVec4(0.66f, 0.58f, 0.62f, 1.0f);
         case graph::NodeKind::Model:
         case graph::NodeKind::Transform:
-        case graph::NodeKind::ModelMerge:
             return ImVec4(0.62f, 0.60f, 0.78f, 1.0f);
         default:
             return ImVec4(0.59f, 0.64f, 0.68f, 1.0f);
@@ -83,6 +82,9 @@ ImVec4 PinTypeColor(graph::ValueType valueType) {
         // モデルは藤色。道路のメッシュ（Mesh）とは繋がらないことを色でも分ける。
         case graph::ValueType::Model:
             return ImVec4(0.70f, 0.62f, 0.90f, 1.0f);
+        // どちらも受ける入力（Merge / Mesh Output）と、何も繋がっていない Merge の出力は無彩色。
+        case graph::ValueType::Any:
+            return ImVec4(0.80f, 0.80f, 0.82f, 1.0f);
         case graph::ValueType::Material:
         default:
             return ImVec4(0.70f, 0.93f, 0.78f, 1.0f);
@@ -917,14 +919,13 @@ void Application::DrawGraphEditor() {
         addNodeMenuItem(graph::NodeKind::RoadMask, "Road Mask — 轍・端・ムラの道路空間マスク");
         addNodeMenuItem(graph::NodeKind::Decal, "Decal — 面上のPathに沿って模様の帯を貼る");
         addNodeMenuItem(graph::NodeKind::Shoulder, "Shoulder — 道路の境界から外側へ路肩を張る");
-        addNodeMenuItem(graph::NodeKind::Merge, "Merge — 複数の道路メッシュを1つにまとめる");
         addNodeMenuItem(graph::NodeKind::Crack, "Crack — ひび割れの塊を乱数で配置する");
         ImGui::Separator();
         ImGui::TextDisabled("モデル");
         addNodeMenuItem(graph::NodeKind::Model, "Model — 3D モデル（.tgmodel）を 1 つ置く");
         addNodeMenuItem(graph::NodeKind::Transform, "Transform — 上流のモデルをまとめて移動・回転・拡大");
-        addNodeMenuItem(graph::NodeKind::ModelMerge, "Model Merge — 複数のモデルを1つにまとめる");
         ImGui::Separator();
+        addNodeMenuItem(graph::NodeKind::Merge, "Merge — 道路メッシュとモデルをまとめる（モデルだけなら Transform へ繋げる）");
         addNodeMenuItem(graph::NodeKind::MeshOutput, "Mesh Output — 道路メッシュとモデルを表示");
         ImGui::Separator();
         addNodeMenuItem(graph::NodeKind::Path, "Path — 実寸の3次元カーブを編集");

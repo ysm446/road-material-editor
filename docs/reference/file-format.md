@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-19 21:58
+更新日時: 2026-09-19 22:40
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -17,7 +17,7 @@ Road Editor への移行初期は、この既存形式を継続利用する。�
 [プロジェクトルートと共有アセット](../design/project-workspace.md) を参照する。
 版5でメッシュ入力 scene、版6〜7で実寸Path、版8〜9でRoadノードの設定とMaterial入力、版10で白線ノード、版11で Path の縦断・バンク、版12で Road の材質スロットと Road Mask、版13で面上の Path と Decal を追加した（「Road Editor で追加した版」）。
 版14でShoulder、版15でMerge、版16でCrack、版17で埋込プリセットと配置記述、版18でプリセット内部の多層材質を追加した。
-版27でモデル（`models[]`）、版28でモデル系のノード（`model` / `transform` / `modelMerge`）を追加した。`.tgscene` では `.tgmodel` へ分ける（下記「版27: モデル」）。
+版27でモデル（`models[]`）、版28でモデル系のノード（`model` / `transform`）を追加し、Merge / Mesh Output が道路とモデルの両方を受けるようにした。`.tgscene` では `.tgmodel` へ分ける（下記「版27: モデル」）。
 道路専用の拡張子は後続で設計する。
 
 ## 版27: モデル
@@ -34,11 +34,11 @@ FBX が見つからなくても項目は残し、リンク切れとして読む�
 
 ## 版28: モデル系のノード
 
-ピンの型 Model（道路の Mesh とは繋がらない）と、`model` / `transform` / `modelMerge` ノードを追加した。Mesh Output の入力は「Mesh」「Model」の 2 本になった。
+ピンの型 Model（道路の Mesh の入力とは繋がらない）と、`model` / `transform` ノードを追加した。
+`merge` の入力（`Input N`）と `meshOutput` の入力は道路のメッシュとモデルの両方を受ける。Merge の出力の型は入力から決まる（モデルだけなら Model）。
 - `model`: 出力 Model。設定は `model` 節 `{model, position: [x, y, z], rotation: [x, y, z], scale}`。
   `model` は `models[].id`（文書内の番号）か `null`（なし）、`position` はモデルの底面の中心の位置（m）。
 - `transform`: 入力 Model → 出力 Model。設定は `transform` 節 `{position, rotation, scale}`。
-- `modelMerge`: 入力 Model（可変。Merge と同じく `inputs` にある分だけ入力を足す）→ 出力 Model。設定は無い。
 - 回転は X / Y / Z 軸まわりの度（Z → X → Y の順）。数値 1 つなら Y として読む。`scale` は 0 以下を 1 として読む。
 
 版27以前のアプリが読み飛ばして接続を失うことを防ぐため版を上げる。

@@ -1,12 +1,12 @@
 # model-assets — 3D モデル（FBX）とマテリアルスロット
 
 作成日時: 2026-09-19 17:30
-更新日時: 2026-09-19 21:58
+更新日時: 2026-09-19 22:58
 
 FBX を読み込んで共有アセット `.tgmodel` にし、FBX のマテリアルごと（スロット）に共有マテリアル `.tgmat` を割り当てる。
 terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationModelPanel`）を移植したもの。
 配置（Model Scatter ノードとインスタンス描画）と、専用の「モデル」一覧パネルは持ってこない。
-一覧はアセットの帯が兼ねる。ビューポートへはグラフのモデル系のノード（Model / Transform / Model Merge）で置く（下記）。
+一覧はアセットの帯が兼ねる。ビューポートへはグラフのモデル系のノード（Model / Transform）で置き、道路と共通の Merge でまとめる（下記）。
 
 実装: [ModelAsset](../../src/renderer/ModelAsset.h)、[ModelPreview](../../src/renderer/ModelPreview.h)、
 [ModelPreview.hlsl](../../shaders/ModelPreview.hlsl)、[ApplicationModelPanel.cpp](../../src/app/ApplicationModelPanel.cpp)、
@@ -62,7 +62,7 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
 ## 保存
 
 - シーン（版 28）の Model ノードは `graph.nodes[]` の `model: {model: models[].id | null, position: [x, y, z], rotation: [x, y, z], scale}`、
-  Transform は `transform: {position, rotation, scale}`、Model Merge は設定を持たない。
+  Transform は `transform: {position, rotation, scale}`。Merge は設定を持たない。
 - シーン（版 27）の `models[]` は `{id, name, path, scale, materials: [番号 | null]}`。`.tgscene` では `.tgmodel` へ分け、
   `{id, asset: {uid, path}}` になる。形式は [file-format.md](file-format.md)。
 - `.tgmodel`（`terrain-graph.model-asset` 版 1）: `{name, uid, source: {uid, path}, scale, materials: [{uid, path} | null]}`。
@@ -70,21 +70,28 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
 
 ## モデルの系統のノード
 
-道路系（ピンの型 Mesh）とモデル系（ピンの型 **Model**）はノードを分け、互いには繋がらない。
-Mesh Output は道路の「Mesh」入力とモデルの「Model」入力の 2 本を持つ。
+道路系（ピンの型 Mesh）とモデル系（ピンの型 **Model**）はノードを分け、道路系の入力とモデル系の入力は互いに繋がらない。
+まとめるのは両方に共通の **Merge** で、入力（型 Any）は道路のメッシュもモデルも受ける。Mesh Output の入力も Any。
 
 | ノード | 保存名 | ピン | 役割 |
 | --- | --- | --- | --- |
 | Model | `model` | 出力 Model | モデル 1 つ。`{model, position, rotation[3], scale}` |
 | Transform | `transform` | 入力 Model → 出力 Model | 上流のモデルをまとめて動かす。`{position, rotation[3], scale}` |
-| Model Merge | `modelMerge` | 入力 Model（可変）→ 出力 Model | 複数の枝を 1 本に。入力は Merge と同じく繋ぐたびに増える |
+| Merge（共通） | `merge` | 入力 Any（可変）→ 出力（入力で決まる） | 道路とモデルの枝を 1 本に。入力は繋ぐたびに増える |
+
+- **Merge の出力の型**（`NodeGraph::EffectiveOutputType`）: 繋がった入力がモデルだけなら Model（Transform へ繋げる）、
+  道路が 1 本でもあれば Mesh（Lane Marking などの道路系へ繋げる。中のモデルはそのまま出る）、何も無ければ Any（どちらにも繋げる）。
+  Merge へ繋いで出力の型が変わり、下流が受けられなくなる接続は作れない（Transform へ渡している Merge に道路を足す、など）。
+  入力を外して型が合わなくなった下流のリンクは外す。読み込み時は Merge の型が決まるよう、採れるリンクが無くなるまで繰り返して復元する。
+- 道路の評価器は Merge のうち型が Model の枝を飛ばす（道路のメッシュを持たないだけでエラーにしない）。下流の白線・Decal は最初の道路の枝の面に乗る。
 
 - model はシーンのモデル一覧の ID（0 = なし）。Model の position はモデルの**底面の中心**（形状の境界ボックスの X・Z の中央、Y の最小）の位置。
 - 回転は X / Y / Z 軸まわりの度で、Z → X → Y の順に回す（DirectX の RollPitchYaw）。旧データの数値 1 つは Y として読む。
 - ワールド行列は 底面中心へ移す → アセットの倍率 → Model の倍率 → 回転 → 位置 → モデルに近い Transform から順に（倍率 → 回転 → 位置）。
-  Transform は自分の原点まわりに効く。同じ Model を Model Merge の別の入力や別の Transform から繋げば、その数だけ出る。
-- `CollectOutputModels` が Mesh Output の Model 入力から Transform / Model Merge を辿り、Model ごとに通った Transform（近い順）を返す。
-  プレビュー中のノードがモデル系ならその枝だけ（道路は出さない）、道路系ならモデルは出さない。
+  Transform は自分の原点まわりに効く。同じ Model を Merge の別の入力や別の Transform から繋げば、その数だけ出る。
+- `CollectOutputModels` が Mesh Output から Merge / Transform を辿り、Model ごとに通った Transform（近い順）を返す。
+  プレビュー中のノードがモデル系か Merge ならその枝のモデル、ほかの道路系ならモデルは出さない。
+  Model / Transform をプレビューしているときは道路を出さない。
 - **置き方の変更（位置・回転・倍率・モデル）はグラフの改版を起こさない**（道路を作り直さない）。描画は毎フレーム設定から行う。
   リンクの変更は従来どおり改版する。設定はノードの一部なのでアンドゥ・コピーの対象。
 - 置き方の入口:
@@ -92,11 +99,12 @@ Mesh Output は道路の「Mesh」入力とモデルの「Model」入力の 2 �
     当たらなければ地面 y = 0 に、Model ノードを作って置く。複数を落とすと X へ 2 m ずつずらす。
   - モデルプレビューの窓の「ビューポートに置く」（カメラの注視点の真下 y = 0）。
   - グラフの右クリックメニューの「モデル」の項（Model はモデルプレビューで選んでいるモデルが最初から入る）。
-  - 作った Model は Mesh Output の Model 入力へ繋ぐ。Mesh Output が無ければ作り、別のものが繋がっていれば Model Merge を挟み、
-    既に Model Merge なら空きの入力へ繋ぐ。
+  - 作った Model は Mesh Output へ繋ぐ。Mesh Output が無ければ作り、別のもの（道路など）が繋がっていれば Merge を挟み、
+    既に Merge なら空きの入力へ繋ぐ。
 - ビューポートの操作（Path ノード未選択のとき。視点は従来どおり Alt）:
   - モデルのクリックでその Model ノードを選ぶ（グラフエディタの選択も合わせる）。本体のドラッグは水平移動。
-  - 選んだ Model / Transform のギズモ。**W で移動**（X / Y / Z の矢印と YZ / XZ / XY の平面ハンドル）、**E で回転**（X / Y / Z の輪。Ctrl で 15 度刻み）。
+  - 選んだ Model / Transform のギズモ。**W で移動**（X / Y / Z の矢印と YZ / XZ / XY の平面ハンドル）、**E で回転**（X / Y / Z の輪。Ctrl で 15 度刻み）、
+    **R で倍率**（先が四角の X / Y / Z の軸と中心の四角。倍率は均一なので、どれを掴んでも全体が変わる。軸は掴んだ点とピボットの距離の比、中心の四角は右か上へ動かすほど大きくなる。Ctrl で 0.1 刻み）。
     ギズモの軸はワールド軸で、下流に Transform があればその座標へ戻して値に足す（回転は R' = R・P・Ra・P の逆 を角度へ戻す）。
     ギズモは画面上で一定の大きさ（90px）、ImGui で重ね描きし深度は見ない。
   - Esc でドラッグ前へ戻す / 選択解除、Delete でノードごと削除、F で寄る。設定はグラフパネルのプロパティ欄（モデル / 位置 / 回転 / 倍率 / 寸法）。
@@ -116,9 +124,10 @@ Mesh Output は道路の「Mesh」入力とモデルの「Model」入力の 2 �
 - `--open-asset <path>`: ルート内のアセットを帯のダブルクリックと同じ経路で開き、そのフォルダを帯に出す。
 - `--place-model <path>`: モデル（`.tgmodel` / `.fbx`）の Model ノードを作って原点へ置く（帯からビューポートへ落としたのと同じ経路）。
 - `--gizmo-rotate`: ギズモを回転（E）で始める。`--select-node <id>` と合わせて回転ギズモを撮る。
+- `--gizmo-scale`: ギズモを倍率（R）で始める。
 
 ## 未対応（後続）
 
-- モデル系のノードで Path / Road に沿って置く・並べる（ガードレールの支柱や標識）。倍率のギズモ。
+- モデル系のノードで Path / Road に沿って置く・並べる（ガードレールの支柱や標識）。
 - UV2（ライトマップ用の 2 つ目の UV）。F16 はライトマップも UV1 なので AO として使えている。
 - スキンメッシュ・アニメーション、埋め込みテクスチャ、FBX 以外の形式（glTF / OBJ）。

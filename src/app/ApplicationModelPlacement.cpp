@@ -1,5 +1,5 @@
-// モデルの系統のノード（Model / Transform / Model Merge）。ノードの追加と Mesh Output への接続、描画、
-// ビューポートでの選択・ギズモ（W 移動 / E 回転）・ドラッグ移動、範囲の枠、プロパティ。
+// モデルの系統のノード（Model / Transform。まとめるのは道路と共通の Merge）。ノードの追加と Mesh Output への接続、描画、
+// ビューポートでの選択・ギズモ（W 移動 / E 回転 / R 倍率）・ドラッグ移動、範囲の枠、プロパティ。
 // 描画はレンダラの drawSceneExtras から呼ばれ、道路と同じシャドウマップ・照明で描く。
 // 置き方（位置・回転・倍率）の変更は道路のメッシュに関係しないので、グラフの改版（道路の再生成）を起こさない。
 // 仕様は docs/reference/model-assets.md の「モデルの系統のノード」。
@@ -32,10 +32,15 @@ namespace {
 constexpr float kGizmoLengthPixels = 90.0f;
 constexpr float kGizmoPickPixels = 7.0f;
 constexpr int kRingSegments = 64;
+// 倍率ギズモの中心の四角と、軸の先の四角の半分の大きさ（px、拡大率を掛ける前）。
+constexpr float kScaleCenterPixels = 7.0f;
+constexpr float kScaleTipPixels = 5.0f;
 // ハンドルの番号。Application::ModelInstanceDrag::handle と同じ。
 constexpr int kHandleAxis = 0;     // 0〜2: X / Y / Z 軸
 constexpr int kHandlePlane = 3;    // 3〜5: 法線が X / Y / Z の平面（YZ / XZ / XY）
 constexpr int kHandleRing = 6;     // 6〜8: X / Y / Z 軸まわりの回転
+constexpr int kHandleScale = 9;    // 9〜11: X / Y / Z 軸の倍率（倍率は均一なので、どの軸でも全体が変わる）
+constexpr int kHandleScaleAll = 12;  // 12: 中心の四角（全体の倍率）
 // 座標軸ギズモと同じ色（X = 赤、Y = 緑、Z = 青）。意味を持つ色なのでテーマから引かない。
 constexpr ImU32 kAxisColors[3] = {IM_COL32(226, 96, 96, 255), IM_COL32(124, 196, 104, 255), IM_COL32(96, 146, 226, 255)};
 const XMFLOAT3 kAxes[3] = {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
@@ -140,13 +145,28 @@ GizmoScreen BuildGizmo(const renderer::Camera& camera, const XMFLOAT3& pivot, co
     return gizmo;
 }
 
+// ギズモの種類。Application::ModelGizmoMode と同じ並び。
+enum class GizmoKind { Translate, Rotate, Scale };
+
 // カーソルが乗っているハンドル。無ければ -1。
-int HitGizmo(const GizmoScreen& gizmo, bool translate, const ImVec2& mouse) {
+int HitGizmo(const GizmoScreen& gizmo, GizmoKind kind, const ImVec2& mouse) {
     if (!gizmo.valid) return -1;
     const float pick = ui::Scaled(kGizmoPickPixels);
     int best = -1;
     float bestDistance = pick;
-    if (translate) {
+    if (kind == GizmoKind::Scale) {
+        // 中心の四角を軸より優先する（軸の根元と重なるため）。
+        const float half = ui::Scaled(kScaleCenterPixels);
+        if (std::abs(mouse.x - gizmo.center.x) <= half && std::abs(mouse.y - gizmo.center.y) <= half) return kHandleScaleAll;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!gizmo.axisVisible[axis]) continue;
+            const float d = DistanceToSegment(mouse, gizmo.center, gizmo.tips[axis]);
+            if (d < bestDistance) {
+                bestDistance = d;
+                best = kHandleScale + axis;
+            }
+        }
+    } else if (kind == GizmoKind::Translate) {
         // 平面ハンドルを軸より優先する（軸の根元と重なるため）。
         for (int axis = 0; axis < 3; ++axis)
             if (PointInQuad(mouse, gizmo.planes[axis])) return kHandlePlane + axis;
@@ -213,7 +233,7 @@ graph::GraphId Application::PlaceModel(uint64_t modelId, const XMFLOAT3& positio
     settings.position[2] = position.z;
     m_graphNodesToPlace.push_back(nodeId);
 
-    // Mesh Output の Model 入力へ繋ぐ。無ければ作る。既に別のものが繋がっていれば Model Merge でまとめる。
+    // Mesh Output へ繋ぐ。無ければ作る。既に別のもの（道路など）が繋がっていれば Merge でまとめる。
     graph::GraphId outputId = 0;
     for (const graph::Node& candidate : m_graph.Nodes())
         if (candidate.kind == graph::NodeKind::MeshOutput) { outputId = candidate.id; break; }
@@ -236,10 +256,10 @@ graph::GraphId Application::PlaceModel(uint64_t modelId, const XMFLOAT3& positio
         created->positionValid = true;
     }
     const graph::Node* output = m_graph.FindNode(outputId);
-    if (output->inputs.size() < 2) return nodeId;
-    const graph::GraphId outputInput = output->inputs[1].id;
+    if (output->inputs.empty()) return nodeId;
+    const graph::GraphId outputInput = output->inputs.front().id;
     const graph::GraphId modelOutput = m_graph.FindNode(nodeId)->outputs.front().id;
-    // エディタ上の置き場所。Mesh Output の左下（Model Merge を足したらさらに左）へずらす。
+    // エディタ上の置き場所。Mesh Output の左下（Merge を足したらさらに左）へずらす。
     const float baseX = output->posX - 320.0f;
     const float baseY = output->posY + 160.0f;
     const auto placeNear = [&](graph::GraphId id, float dx, float dy) {
@@ -253,7 +273,7 @@ graph::GraphId Application::PlaceModel(uint64_t modelId, const XMFLOAT3& positio
     if (upstream == nullptr) {
         m_graph.CreateLink(modelOutput, outputInput);
         placeNear(nodeId, 0.0f, 0.0f);
-    } else if (upstream->kind == graph::NodeKind::ModelMerge) {
+    } else if (upstream->kind == graph::NodeKind::Merge) {
         const graph::GraphId mergeId = upstream->id;
         m_graph.NormalizeVariablePins();
         for (const graph::Pin& pin : m_graph.FindNode(mergeId)->inputs) {
@@ -269,11 +289,11 @@ graph::GraphId Application::PlaceModel(uint64_t modelId, const XMFLOAT3& positio
             self->positionValid = true;
         }
     } else {
-        // 今繋がっている出力ピンを Model Merge の Model 1 へ、新しいモデルを Model 2 へ。Model Merge を Mesh Output へ。
+        // 今繋がっている出力ピンを Merge の Input 1 へ、新しいモデルを Input 2 へ。Merge を Mesh Output へ。
         graph::GraphId previousPin = 0;
         for (const graph::Link& link : m_graph.Links())
             if (link.endPin == outputInput) previousPin = link.startPin;
-        const graph::GraphId mergeId = m_graph.CreateNode(graph::NodeKind::ModelMerge);
+        const graph::GraphId mergeId = m_graph.CreateNode(graph::NodeKind::Merge);
         m_graphNodesToPlace.push_back(mergeId);
         m_graph.CreateLink(previousPin, m_graph.FindNode(mergeId)->inputs.front().id);
         m_graph.NormalizeVariablePins();
@@ -485,6 +505,7 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
             if (drag.dragging) {
                 std::copy(std::begin(drag.startPosition), std::end(drag.startPosition), target.position);
                 std::copy(std::begin(drag.startRotation), std::end(drag.startRotation), target.rotation);
+                *target.scale = drag.startScale;
                 m_documentDirty = true;
             }
             drag = {};
@@ -521,6 +542,25 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
             XMFLOAT3 hit;
             if (IntersectPlane(rayOrigin, rayDirection, pivot, XMLoadFloat3(&kAxes[axisIndex]), hit))
                 applyTranslation(XMVectorSubtract(XMLoadFloat3(&hit), XMLoadFloat3(&drag.pressPoint)));
+        } else if (drag.handle >= kHandleScale) {
+            // 軸は、ピボットから掴んだ点までの長さとの比。中心の四角は、右か上へ動かすほど大きくなる。
+            float factor = 1.0f;
+            if (drag.handle == kHandleScaleAll) {
+                const float pixels = (io.MousePos.x - drag.pressPos.x) - (io.MousePos.y - drag.pressPos.y);
+                factor = std::exp(pixels / ui::Scaled(kGizmoLengthPixels));
+            } else {
+                float t = 0.0f;
+                if (!ClosestOnLine(rayOrigin, rayDirection, pivot, XMLoadFloat3(&kAxes[drag.handle - kHandleScale]), t) ||
+                    std::abs(drag.pressParameter) < 1e-6f) return true;
+                factor = t / drag.pressParameter;
+            }
+            float scale = std::clamp(drag.startScale * factor, 0.01f, 100.0f);
+            // Ctrl で 0.1 刻み。
+            if (io.KeyCtrl) scale = std::max(0.1f, std::round(scale * 10.0f) / 10.0f);
+            if (scale != *target.scale) {
+                *target.scale = scale;
+                m_documentDirty = true;
+            }
         } else if (drag.handle >= kHandleRing) {
             // 画面上でピボットのまわりに回した角度。軸がカメラを向いていれば反時計回りが正（右手系）。
             const auto& camera = m_renderer.GetCamera();
@@ -561,10 +601,11 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
     if (itemHovered && !io.WantTextInput && !io.KeyCtrl && !io.KeyAlt && hasGizmo) {
         if (ImGui::IsKeyPressed(ImGuiKey_W, false)) m_modelGizmoMode = ModelGizmoMode::Translate;
         if (ImGui::IsKeyPressed(ImGuiKey_E, false)) m_modelGizmoMode = ModelGizmoMode::Rotate;
+        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) m_modelGizmoMode = ModelGizmoMode::Scale;
     }
     if (hasGizmo && itemHovered) {
         const GizmoScreen gizmo = BuildGizmo(m_renderer.GetCamera(), pivot, viewportMin, viewportMax);
-        m_modelGizmoHover = HitGizmo(gizmo, m_modelGizmoMode == ModelGizmoMode::Translate, io.MousePos);
+        m_modelGizmoHover = HitGizmo(gizmo, static_cast<GizmoKind>(m_modelGizmoMode), io.MousePos);
     }
     const auto beginDrag = [&](graph::GraphId nodeId, int handle) {
         NodeTransformRef target;
@@ -580,9 +621,12 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
         drag.parent = frameParent;
         std::copy(target.position, target.position + 3, drag.startPosition);
         std::copy(target.rotation, target.rotation + 3, drag.startRotation);
+        drag.startScale = *target.scale;
         const XMVECTOR p = XMLoadFloat3(&framePivot);
         if (handle >= kHandleAxis && handle < kHandlePlane) {
             ClosestOnLine(rayOrigin, rayDirection, p, XMLoadFloat3(&kAxes[handle - kHandleAxis]), drag.pressParameter);
+        } else if (handle >= kHandleScale && handle < kHandleScaleAll) {
+            ClosestOnLine(rayOrigin, rayDirection, p, XMLoadFloat3(&kAxes[handle - kHandleScale]), drag.pressParameter);
         } else if (handle < 0 || (handle >= kHandlePlane && handle < kHandleRing)) {
             const int axisIndex = handle < 0 ? 1 : handle - kHandlePlane;
             if (!IntersectPlane(rayOrigin, rayDirection, p, XMLoadFloat3(&kAxes[axisIndex]), drag.pressPoint)) {
@@ -722,6 +766,27 @@ void Application::DrawModelInstanceOverlay(const ImVec2& viewportMin, const ImVe
             const char* labels[] = {"X", "Y", "Z"};
             draw->AddText(ImVec2(tip.x + ui::Scaled(5.0f), tip.y), lineColor, labels[axis]);
         }
+    } else if (m_modelGizmoMode == ModelGizmoMode::Scale) {
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!gizmo.axisVisible[axis]) continue;
+            const bool on = active == kHandleScale + axis || active == kHandleScaleAll;
+            const ImU32 lineColor = on ? hoverColor : kAxisColors[axis];
+            const float width = ui::Scaled(on ? 3.0f : 2.0f);
+            const ImVec2 tip = gizmo.tips[axis];
+            draw->AddLine(gizmo.center, tip, shadow, width + ui::Scaled(2.0f));
+            draw->AddLine(gizmo.center, tip, lineColor, width);
+            // 先端の四角。
+            const float half = ui::Scaled(kScaleTipPixels);
+            draw->AddRectFilled(ImVec2(tip.x - half, tip.y - half), ImVec2(tip.x + half, tip.y + half), lineColor);
+            const char* labels[] = {"X", "Y", "Z"};
+            draw->AddText(ImVec2(tip.x + half + ui::Scaled(3.0f), tip.y), lineColor, labels[axis]);
+        }
+        // 中心の四角（全体の倍率）。
+        const bool on = active == kHandleScaleAll;
+        const float half = ui::Scaled(kScaleCenterPixels);
+        const ImVec2 lo(gizmo.center.x - half, gizmo.center.y - half), hi(gizmo.center.x + half, gizmo.center.y + half);
+        draw->AddRectFilled(lo, hi, on ? ((hoverColor & ~IM_COL32_A_MASK) | (160u << IM_COL32_A_SHIFT)) : IM_COL32(235, 235, 235, 70));
+        draw->AddRect(lo, hi, on ? hoverColor : IM_COL32(235, 235, 235, 230), 0.0f, 0, ui::Scaled(1.0f));
     } else {
         for (int axis = 0; axis < 3; ++axis) {
             const bool on = active == kHandleRing + axis;
@@ -735,10 +800,6 @@ void Application::DrawModelInstanceOverlay(const ImVec2& viewportMin, const ImVe
         }
     }
     draw->AddCircleFilled(gizmo.center, ui::Scaled(3.0f), IM_COL32(235, 235, 235, 230));
-    // 今のモード。W / E の切り替えを画面で確かめられるように。
-    const char* modeLabel = m_modelGizmoMode == ModelGizmoMode::Translate ? "移動 (W)" : "回転 (E)";
-    draw->AddText(ImVec2(gizmo.center.x + ui::Scaled(8.0f), gizmo.center.y + ui::Scaled(8.0f)),
-                  ImGui::GetColorU32(ImGuiCol_Text), modeLabel);
     draw->PopClipRect();
 }
 
@@ -806,8 +867,8 @@ bool Application::DrawModelNodeSettings(graph::Node& node) {
             changed = true;
         }
         changed |= ui::PropertyFloat("倍率", transform.scale, 0.01f, 100.0f, 1.0f,
-                                     settings ? "このノードで掛ける倍率。モデルアセットの倍率に掛かる"
-                                              : "上流のモデルをまとめて拡大・縮小する（原点まわり）",
+                                     settings ? "このノードで掛ける倍率。モデルアセットの倍率に掛かる。R の倍率ギズモでも変わる（Ctrl で 0.1 刻み）"
+                                              : "上流のモデルをまとめて拡大・縮小する（原点まわり）。R の倍率ギズモでも変わる（Ctrl で 0.1 刻み）",
                                      "%.3f", ImGuiSliderFlags_Logarithmic);
         *transform.scale = std::clamp(*transform.scale, 0.01f, 100.0f);
         if (model != nullptr && model->geometry) {
@@ -825,8 +886,8 @@ bool Application::DrawModelNodeSettings(graph::Node& node) {
     XMFLOAT3 pivot;
     XMFLOAT4X4 parent;
     if (!NodeGizmoFrame(node.id, pivot, parent))
-        ui::HintText("Mesh Output の Model 入力へ（Transform / Model Merge を通して）繋ぐとビューポートに出る");
-    ui::HintText("ビューポートで W: 移動ギズモ / E: 回転ギズモ。モデルのクリックで選び、本体のドラッグで水平に移動、Delete でノードごと削除");
+        ui::HintText("Mesh Output へ（Transform / Merge を通して）繋ぐとビューポートに出る");
+    ui::HintText("ビューポートで W: 移動ギズモ / E: 回転ギズモ / R: 倍率ギズモ。モデルのクリックで選び、本体のドラッグで水平に移動、Delete でノードごと削除");
     return changed;
 }
 

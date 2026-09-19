@@ -174,6 +174,7 @@ bool Application::Initialize(const StartupOptions& options) {
         m_createImportedModelMaterials = true;
     }
     if (options.gizmoRotate) m_modelGizmoMode = ModelGizmoMode::Rotate;
+    if (options.gizmoScale) m_modelGizmoMode = ModelGizmoMode::Scale;
     if (!options.placeModel.empty()) {
         m_pendingModelPlacements.push_back({std::filesystem::absolute(options.placeModel).lexically_normal(), {}});
     }

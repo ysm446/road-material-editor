@@ -1199,11 +1199,11 @@ void RunRoadTests() {
         mg.CreateLink(mg.FindNode(mRoad)->outputs[1].id, mg.FindNode(mLeft)->inputs[0].id);
         mg.CreateLink(mg.FindNode(mRoad)->outputs[2].id, mg.FindNode(mRight)->inputs[0].id);
         mg.CreateLink(mg.FindNode(mRoad)->outputs[0].id, mg.FindNode(mMarking)->inputs[0].id);
-        Check(mg.FindNode(mMerge)->inputs.size() == 1 && mg.FindNode(mMerge)->inputs[0].label == "Mesh 1",
+        Check(mg.FindNode(mMerge)->inputs.size() == 1 && mg.FindNode(mMerge)->inputs[0].label == "Input 1",
               "new Merge starts with one free input");
         // 繋ぐたびに空きが 1 本増える。
         Check(mg.CreateLink(mg.FindNode(mMarking)->outputs[0].id, mg.FindNode(mMerge)->inputs[0].id) &&
-              mg.FindNode(mMerge)->inputs.size() == 2 && mg.FindNode(mMerge)->inputs[1].label == "Mesh 2",
+              mg.FindNode(mMerge)->inputs.size() == 2 && mg.FindNode(mMerge)->inputs[1].label == "Input 2",
               "connecting Mesh 1 adds a free Mesh 2");
         Check(mg.CreateLink(mg.FindNode(mLeft)->outputs[0].id, mg.FindNode(mMerge)->inputs[1].id) &&
               mg.CreateLink(mg.FindNode(mRight)->outputs[0].id, mg.FindNode(mMerge)->inputs[2].id) &&
@@ -1229,12 +1229,41 @@ void RunRoadTests() {
         for (const auto& link : mg.Links()) if (link.endPin == mg.FindNode(mMerge)->inputs[1].id) leftLink = link.id;
         mg.DeleteLink(leftLink);
         const auto* mergeNode = mg.FindNode(mMerge);
-        Check(mergeNode->inputs.size() == 4 && mergeNode->inputs[3].label == "Mesh 4", "disconnecting compacts the inputs and keeps one free");
+        Check(mergeNode->inputs.size() == 4 && mergeNode->inputs[3].label == "Input 4", "disconnecting compacts the inputs and keeps one free");
         Check(graph::CompileMeshGraph(mg).scene.meshes.size() == 3, "disconnected shoulder leaves the merge");
         // 空きピンの並びは Replace（読み込み・アンドゥ）でも保たれる。
         auto nodes = mg.Nodes(); auto links = mg.Links();
         mg.Replace(nodes, links);
         Check(mg.FindNode(mMerge)->inputs.size() == 4 && graph::CompileMeshGraph(mg).scene.meshes.size() == 3,
               "Replace keeps the connected inputs and one free input");
+
+        // Merge は道路とモデルの両方をまとめる。出力の型は入力で決まる。
+        const auto model = mg.CreateNode(graph::NodeKind::Model);
+        std::get<graph::ModelNodeSettings>(mg.FindMutableNode(model)->settings).model = 7;
+        Check(!mg.CanCreateLink(mg.FindNode(model)->outputs[0].id, mg.FindNode(mMarking)->inputs[0].id),
+              "a Model cannot feed a road-only input");
+        Check(mg.CreateLink(mg.FindNode(model)->outputs[0].id, mg.FindNode(mMerge)->inputs.back().id) &&
+                  mg.EffectiveOutputType(mg.FindNode(mMerge)->outputs[0].id) == graph::ValueType::Mesh,
+              "a Merge with a road and a model carries Mesh");
+        Check(graph::CompileMeshGraph(mg).error.empty() && graph::CompileMeshGraph(mg).scene.meshes.size() == 3 &&
+                  graph::CollectOutputModels(mg).size() == 1 && graph::CollectOutputModels(mg)[0].model == model,
+              "the mixed Merge keeps the road meshes and outputs the model");
+        const auto modelMerge = mg.CreateNode(graph::NodeKind::Merge);
+        const auto transform = mg.CreateNode(graph::NodeKind::Transform);
+        Check(mg.CreateLink(mg.FindNode(model)->outputs[0].id, mg.FindNode(modelMerge)->inputs[0].id) &&
+                  mg.EffectiveOutputType(mg.FindNode(modelMerge)->outputs[0].id) == graph::ValueType::Model &&
+                  mg.CreateLink(mg.FindNode(modelMerge)->outputs[0].id, mg.FindNode(transform)->inputs[0].id),
+              "a model-only Merge carries Model and feeds a Transform");
+        Check(!mg.CanCreateLink(mg.FindNode(mRoad)->outputs[0].id, mg.FindNode(modelMerge)->inputs.back().id),
+              "a road cannot join a Merge whose output feeds a Transform");
+        Check(mg.CreateLink(mg.FindNode(transform)->outputs[0].id, mg.FindNode(mOut2)->inputs[0].id) &&
+                  graph::CompileMeshGraph(mg).error.empty() && graph::CollectOutputModels(mg).size() == 2,
+              "a Mesh Output can take a Transform of models without a road error");
+        graph::GraphId modelLink = 0;
+        for (const auto& link : mg.Links()) if (link.endPin == mg.FindNode(modelMerge)->inputs[0].id) modelLink = link.id;
+        mg.DeleteLink(modelLink);
+        Check(mg.FindUpstreamNodeForPin(mg.FindNode(transform)->inputs[0].id) != nullptr &&
+                  mg.EffectiveOutputType(mg.FindNode(modelMerge)->outputs[0].id) == graph::ValueType::Any,
+              "an emptied Merge still connects to the Transform");
     }
 }

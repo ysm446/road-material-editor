@@ -79,6 +79,8 @@ struct StartupOptions {
     bool gizmoScale = false;
     // --place-model で置いたモデルの FBX のノードに足す回転（--model-node-rotation <node> <x> <y> <z>）。
     std::vector<renderer::ModelNodeRotation> modelNodeRotations;
+    // ノード用のギズモをオンにして、そのノードを選ぶ（--model-node-gizmo <node>）。
+    std::string modelNodeGizmo;
     // P0: Road / 砂利Surface / 歩道Surface の ID。通常のグラフ評価は変更しない。
     graph::GraphId prototypeRoad = 0;
     graph::GraphId surfaceLayoutRoad = 0;
@@ -222,8 +224,20 @@ private:
     void DrawSceneModels(ID3D12GraphicsCommandList* commandList, const renderer::SceneDrawContext& context);
     // ビューポートに出すモデルを包む球の半径（原点中心）。無ければ 0。
     float ModelInstancesRadius() const;
-    // カーソル直下のモデルの Model ノード（と距離）。無ければ 0。
-    graph::GraphId PickModelNode(const DirectX::XMFLOAT3& origin, const DirectX::XMFLOAT3& direction, float& distance) const;
+    // カーソル直下のモデルの Model ノード（と距離）。無ければ 0。modelNode を渡すと、当たった部品の FBX のノードの番号も返す。
+    graph::GraphId PickModelNode(const DirectX::XMFLOAT3& origin, const DirectX::XMFLOAT3& direction, float& distance,
+                                 int* modelNode = nullptr) const;
+    // ノード用のギズモ（選んでいる Model ノードの、m_selectedModelNodeName の FBX のノードを回す）の基準。
+    // origin はノードの原点のワールド位置、axes は回転の軸（モデルの軸を親の回転と置き方に合わせたもの。ワールド）。
+    // ノード用のギズモを出さない状態なら偽。
+    struct ModelNodeGizmo {
+        graph::ModelNodeSettings* settings = nullptr;
+        const VisibleModel* visible = nullptr;
+        size_t node = 0;
+        DirectX::XMFLOAT3 origin{};
+        DirectX::XMFLOAT3 axes[3]{};
+    };
+    bool ModelNodeGizmoFrame(const std::vector<VisibleModel>& visible, ModelNodeGizmo& out);
     // カーソル位置の地面（道路メッシュ、無ければ高さ planeY の水平面）。当たらなければ偽。
     bool PickGround(const ImVec2& mouse, const ImVec2& viewportMin, const ImVec2& viewportMax, float planeY,
                     bool useMeshes, DirectX::XMFLOAT3& point) const;
@@ -551,11 +565,21 @@ private:
         float startRotation[3] = {};
         float startScale = 1.0f;
         float planeY = 0.0f;
+        // ノード用のギズモで FBX のノードを回しているとき。軸はワールド、角度は掴んだときのノードの回転（度）。
+        bool nodeRotation = false;
+        std::string modelNodeName;
+        DirectX::XMFLOAT3 nodeAxes[3]{};
+        float startNodeRotation[3] = {};
     } m_modelInstanceDrag;
     // ギズモの種類（W で移動、E で回転、R で倍率）と、カーソルが乗っているハンドル（-1 = 無し）。
     enum class ModelGizmoMode { Translate, Rotate, Scale };
     ModelGizmoMode m_modelGizmoMode = ModelGizmoMode::Translate;
     int m_modelGizmoHover = -1;
+    // ノード用のギズモ（プロパティの「ノード」の「ギズモ」）。オンの間は、選んでいる Model ノードの
+    // FBX のノード（m_selectedModelNodeName）を回す輪を出し、部品のクリックでノードを選ぶ。W / E / R で外れる。
+    bool m_modelNodeGizmo = false;
+    // ノード用のギズモでカーソルが乗っている部品のノード（枠の表示用。無ければ空）。
+    std::string m_hoveredModelNodeName;
     // 帯から落としたモデルの配置。ファイルの読み込みを伴うのでフレームの外で行う。
     struct PendingModelPlacement {
         std::filesystem::path path;

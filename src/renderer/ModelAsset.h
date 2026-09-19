@@ -40,6 +40,8 @@ struct ModelPart {
     MeshData mesh;
     uint32_t slot = 0;
     uint32_t node = 0;
+    // ノードの座標での範囲（ノードを選んだときの枠）。
+    DirectX::XMFLOAT3 minimum{}, maximum{};
 };
 
 struct ModelLod {

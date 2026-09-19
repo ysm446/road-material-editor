@@ -1,5 +1,5 @@
 // モデルの系統のノード（Model / Transform。まとめるのは道路と共通の Merge）。ノードの追加と Mesh Output への接続、描画、
-// ビューポートでの選択・ギズモ（W 移動 / E 回転 / R 倍率）・ドラッグ移動、範囲の枠、プロパティ。
+// ビューポートでの選択・ギズモ（W 移動 / E 回転 / R 倍率、FBX のノードを回すノード用の輪）・ドラッグ移動、範囲の枠、プロパティ。
 // 描画はレンダラの drawSceneExtras から呼ばれ、道路と同じシャドウマップ・照明で描く。
 // 置き方（位置・回転・倍率）の変更は道路のメッシュに関係しないので、グラフの改版（道路の再生成）を起こさない。
 // 仕様は docs/reference/model-assets.md の「モデルの系統のノード」。
@@ -97,8 +97,9 @@ struct GizmoScreen {
     std::array<bool, kRingSegments + 1> ringBack[3]{};
 };
 
+// axes はギズモの 3 軸（ワールド、単位長）。既定はワールドの X / Y / Z。
 GizmoScreen BuildGizmo(const renderer::Camera& camera, const XMFLOAT3& pivot, const ImVec2& viewportMin,
-                       const ImVec2& viewportMax) {
+                       const ImVec2& viewportMax, const XMFLOAT3* axes = kAxes) {
     GizmoScreen gizmo;
     const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
     if (size.x <= 0.0f || size.y <= 0.0f) return gizmo;
@@ -119,13 +120,13 @@ GizmoScreen BuildGizmo(const renderer::Camera& camera, const XMFLOAT3& pivot, co
     gizmo.center = c.screen;
     const XMVECTOR toEye = XMVector3Normalize(XMVectorSubtract(XMLoadFloat3(&eye), center));
     for (int axis = 0; axis < 3; ++axis) {
-        const XMVECTOR a = XMLoadFloat3(&kAxes[axis]);
+        const XMVECTOR a = XMLoadFloat3(&axes[axis]);
         const ProjectedPoint tip = project(XMVectorAdd(center, XMVectorScale(a, length)));
         gizmo.axisVisible[axis] = tip.visible;
         gizmo.tips[axis] = tip.screen;
         // 平面ハンドル。残りの 2 軸の 0.2〜0.4 の四角。
-        const XMVECTOR u = XMLoadFloat3(&kAxes[(axis + 1) % 3]);
-        const XMVECTOR v = XMLoadFloat3(&kAxes[(axis + 2) % 3]);
+        const XMVECTOR u = XMLoadFloat3(&axes[(axis + 1) % 3]);
+        const XMVECTOR v = XMLoadFloat3(&axes[(axis + 2) % 3]);
         const float lo = length * 0.2f, hi = length * 0.4f;
         const float corners[4][2] = {{lo, lo}, {hi, lo}, {hi, hi}, {lo, hi}};
         for (int i = 0; i < 4; ++i) {
@@ -216,6 +217,28 @@ bool IntersectPlane(const XMFLOAT3& origin, const XMFLOAT3& direction, FXMVECTOR
     const float t = XMVectorGetX(XMVector3Dot(n, XMVectorSubtract(p, o))) / denominator;
     if (t <= 0.0f || t > 100000.0f) return false;
     XMStoreFloat3(&hit, XMVectorAdd(o, XMVectorScale(r, t)));
+    return true;
+}
+
+// Model ノードの設定の、FBX のノードの回転を書く。すべて 0 なら項目を消す。変わったら真。
+bool SetModelNodeRotation(graph::ModelNodeSettings& settings, const std::string& node, const float degrees[3]) {
+    const auto found = std::find_if(settings.nodeRotations.begin(), settings.nodeRotations.end(),
+                                    [&](const renderer::ModelNodeRotation& r) { return r.node == node; });
+    const bool isZero = degrees[0] == 0.0f && degrees[1] == 0.0f && degrees[2] == 0.0f;
+    if (isZero) {
+        if (found == settings.nodeRotations.end()) return false;
+        settings.nodeRotations.erase(found);
+        return true;
+    }
+    if (found != settings.nodeRotations.end()) {
+        if (std::equal(degrees, degrees + 3, found->rotationDegrees)) return false;
+        std::copy(degrees, degrees + 3, found->rotationDegrees);
+        return true;
+    }
+    renderer::ModelNodeRotation added;
+    added.node = node;
+    std::copy(degrees, degrees + 3, added.rotationDegrees);
+    settings.nodeRotations.push_back(std::move(added));
     return true;
 }
 
@@ -389,6 +412,42 @@ bool Application::NodeGizmoFrame(graph::GraphId nodeId, XMFLOAT3& pivot, XMFLOAT
     return false;
 }
 
+bool Application::ModelNodeGizmoFrame(const std::vector<VisibleModel>& visible, ModelNodeGizmo& out) {
+    if (!m_modelNodeGizmo) return false;
+    graph::Node* node = m_graph.FindMutableNode(m_selectedGraphNode);
+    auto* settings = node ? std::get_if<graph::ModelNodeSettings>(&node->settings) : nullptr;
+    if (settings == nullptr) return false;
+    const auto found = std::find_if(visible.begin(), visible.end(),
+                                    [&](const VisibleModel& v) { return v.node == m_selectedGraphNode; });
+    if (found == visible.end() || !found->model->geometry) return false;
+    const auto& nodes = found->model->geometry->nodes;
+    const auto index = std::find_if(nodes.begin(), nodes.end(),
+                                    [&](const renderer::ModelNode& n) { return n.name == m_selectedModelNodeName; });
+    if (nodes.size() < 2 || index == nodes.end()) return false;
+    out.settings = settings;
+    out.visible = &*found;
+    out.node = static_cast<size_t>(index - nodes.begin());
+    // ノード自身の回転を外した姿勢で、原点と回転の軸を求める。軸はモデルの軸を読んだままの姿勢のノードの座標へ
+    // 移し（A⁻¹）、今の姿勢（親の回転と置き方）で運んだもの（ModelNodeWorlds の A · R · A⁻¹ と同じ基準）。
+    std::vector<renderer::ModelNodeRotation> others;
+    for (const auto& rotation : settings->nodeRotations)
+        if (rotation.node != m_selectedModelNodeName) others.push_back(rotation);
+    std::vector<XMFLOAT4X4> worlds, bindWorlds;
+    renderer::ModelNodeWorlds(*found->model->geometry, others, worlds);
+    renderer::ModelNodeWorlds(*found->model->geometry, {}, bindWorlds);
+    const XMMATRIX current = XMLoadFloat4x4(&worlds[out.node]) * XMLoadFloat4x4(&found->world);
+    XMVECTOR scale, orientation, translation;
+    if (!XMMatrixDecompose(&scale, &orientation, &translation, XMLoadFloat4x4(&bindWorlds[out.node])))
+        orientation = XMQuaternionIdentity();
+    const XMMATRIX toNode = XMMatrixTranspose(XMMatrixRotationQuaternion(orientation));
+    XMStoreFloat3(&out.origin, XMVector3TransformCoord(XMVectorZero(), current));
+    for (int axis = 0; axis < 3; ++axis) {
+        const XMVECTOR local = XMVector3TransformNormal(XMLoadFloat3(&kAxes[axis]), toNode);
+        XMStoreFloat3(&out.axes[axis], XMVector3Normalize(XMVector3TransformNormal(local, current)));
+    }
+    return true;
+}
+
 float Application::ModelInstancesRadius() const {
     float radius = 0.0f;
     for (const VisibleModel& visible : CollectVisibleModels()) {
@@ -414,8 +473,10 @@ void Application::DrawSceneModels(ID3D12GraphicsCommandList* commandList, const 
     }
 }
 
-graph::GraphId Application::PickModelNode(const XMFLOAT3& origin, const XMFLOAT3& direction, float& distance) const {
+graph::GraphId Application::PickModelNode(const XMFLOAT3& origin, const XMFLOAT3& direction, float& distance,
+                                         int* modelNode) const {
     graph::GraphId hit = 0;
+    if (modelNode != nullptr) *modelNode = -1;
     distance = FLT_MAX;
     const XMVECTOR rayOrigin = XMLoadFloat3(&origin);
     const XMVECTOR rayDirection = XMLoadFloat3(&direction);
@@ -451,6 +512,7 @@ graph::GraphId Application::PickModelNode(const XMFLOAT3& origin, const XMFLOAT3
                 if (worldDistance < distance) {
                     distance = worldDistance;
                     hit = visible.node;
+                    if (modelNode != nullptr) *modelNode = static_cast<int>(part.node);
                 }
             }
         }
@@ -510,7 +572,12 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             // 掴む前の値へ戻す。
-            if (drag.dragging) {
+            if (drag.dragging && drag.nodeRotation) {
+                graph::Node* node = m_graph.FindMutableNode(drag.node);
+                if (auto* settings = node ? std::get_if<graph::ModelNodeSettings>(&node->settings) : nullptr)
+                    SetModelNodeRotation(*settings, drag.modelNodeName, drag.startNodeRotation);
+                m_documentDirty = true;
+            } else if (drag.dragging) {
                 std::copy(std::begin(drag.startPosition), std::end(drag.startPosition), target.position);
                 std::copy(std::begin(drag.startRotation), std::end(drag.startRotation), target.rotation);
                 *target.scale = drag.startScale;
@@ -523,6 +590,38 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
         m_modelGizmoHover = drag.handle;
         m_hoveredModelNode = drag.handle < 0 ? drag.node : 0;
         if (!drag.dragging || !hasRay) return true;
+        if (drag.nodeRotation) {
+            // ノード用の輪。画面上でノードの原点のまわりに回した角度（モデルの輪と同じ式）を、掴んだときの回転に足す。
+            // ノードの回転 S はモデルの軸の基準で掛かるので、軸 k まわりの Ra を後ろから掛ける（S' = S · Ra）。
+            graph::Node* node = m_graph.FindMutableNode(drag.node);
+            auto* settings = node ? std::get_if<graph::ModelNodeSettings>(&node->settings) : nullptr;
+            if (settings == nullptr) return true;
+            const auto& camera = m_renderer.GetCamera();
+            const ImVec2 size(viewportMax.x - viewportMin.x, viewportMax.y - viewportMin.y);
+            const ProjectedPoint center = ProjectToViewport(camera.ViewMatrix() * camera.ProjectionMatrix(), drag.pivot,
+                                                            viewportMin, size);
+            if (!center.visible) return true;
+            const int axisIndex = drag.handle - kHandleRing;
+            const float angleNow = std::atan2(io.MousePos.y - center.screen.y, io.MousePos.x - center.screen.x);
+            const float anglePress = std::atan2(drag.pressPos.y - center.screen.y, drag.pressPos.x - center.screen.x);
+            const XMVECTOR worldAxis = XMLoadFloat3(&drag.nodeAxes[axisIndex]);
+            const XMFLOAT3 eye = camera.Position();
+            const float facing =
+                XMVectorGetX(XMVector3Dot(worldAxis, XMVectorSubtract(XMLoadFloat3(&eye), XMLoadFloat3(&drag.pivot)))) >= 0.0f
+                    ? 1.0f : -1.0f;
+            float angle = -(angleNow - anglePress) * facing;
+            if (io.KeyCtrl) angle = std::round(angle / XMConvertToRadians(15.0f)) * XMConvertToRadians(15.0f);
+            const float zero[3] = {0.0f, 0.0f, 0.0f};
+            const XMMATRIX start = renderer::NodeTransformMatrix(zero, drag.startNodeRotation, 1.0f);
+            const XMMATRIX rotated = start * XMMatrixRotationAxis(XMLoadFloat3(&kAxes[axisIndex]), angle);
+            float degrees[3];
+            renderer::RotationToDegrees(rotated, degrees);
+            // 0 付近は 0 に揃える（すべて 0 なら項目を消す）。
+            for (float& value : degrees)
+                if (std::abs(value) < 1e-3f) value = 0.0f;
+            if (SetModelNodeRotation(*settings, drag.modelNodeName, degrees)) m_documentDirty = true;
+            return true;
+        }
         const XMMATRIX parent = XMLoadFloat4x4(&drag.parent);
         const XMVECTOR pivot = XMLoadFloat3(&drag.pivot);
         // ワールドでの移動量を、ノードの親（下流の Transform）の座標へ戻して足す。
@@ -607,11 +706,22 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
     XMFLOAT4X4 parent{};
     const bool hasGizmo = NodeTransform(m_selectedGraphNode, selected) && NodeGizmoFrame(m_selectedGraphNode, pivot, parent);
     if (itemHovered && !io.WantTextInput && !io.KeyCtrl && !io.KeyAlt && hasGizmo) {
-        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) m_modelGizmoMode = ModelGizmoMode::Translate;
-        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) m_modelGizmoMode = ModelGizmoMode::Rotate;
-        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) m_modelGizmoMode = ModelGizmoMode::Scale;
+        // W / E / R はモデルのギズモ。ノード用のギズモから戻る。
+        const auto choose = [&](ModelGizmoMode mode) {
+            m_modelGizmoMode = mode;
+            m_modelNodeGizmo = false;
+        };
+        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) choose(ModelGizmoMode::Translate);
+        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) choose(ModelGizmoMode::Rotate);
+        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) choose(ModelGizmoMode::Scale);
     }
-    if (hasGizmo && itemHovered) {
+    const std::vector<VisibleModel> visibleModels = CollectVisibleModels();
+    ModelNodeGizmo nodeGizmo;
+    const bool hasNodeGizmo = hasGizmo && ModelNodeGizmoFrame(visibleModels, nodeGizmo);
+    if (hasNodeGizmo && itemHovered) {
+        const GizmoScreen gizmo = BuildGizmo(m_renderer.GetCamera(), nodeGizmo.origin, viewportMin, viewportMax, nodeGizmo.axes);
+        m_modelGizmoHover = HitGizmo(gizmo, GizmoKind::Rotate, io.MousePos);
+    } else if (hasGizmo && itemHovered) {
         const GizmoScreen gizmo = BuildGizmo(m_renderer.GetCamera(), pivot, viewportMin, viewportMax);
         m_modelGizmoHover = HitGizmo(gizmo, static_cast<GizmoKind>(m_modelGizmoMode), io.MousePos);
     }
@@ -645,15 +755,41 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
         return true;
     };
 
+    m_hoveredModelNodeName.clear();
     if (!itemHovered || !hasRay) return false;
+    int hoveredPart = -1;
     if (m_modelGizmoHover < 0) {
         float distance = 0.0f;
-        m_hoveredModelNode = PickModelNode(rayOrigin, rayDirection, distance);
+        m_hoveredModelNode = PickModelNode(rayOrigin, rayDirection, distance, &hoveredPart);
+        // ノード用のギズモでは、選んでいるモデルの部品にカーソルが乗ったらそのノードを示す。
+        if (hasNodeGizmo && m_hoveredModelNode == m_selectedGraphNode && hoveredPart >= 0)
+            m_hoveredModelNodeName = nodeGizmo.visible->model->geometry->nodes[static_cast<size_t>(hoveredPart)].name;
     }
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (m_modelGizmoHover >= 0 && hasNodeGizmo) {
+            // ノードの輪を掴む。
+            drag = {};
+            drag.pending = true;
+            drag.handle = m_modelGizmoHover;
+            drag.node = m_selectedGraphNode;
+            drag.pressPos = io.MousePos;
+            drag.pivot = nodeGizmo.origin;
+            drag.nodeRotation = true;
+            drag.modelNodeName = m_selectedModelNodeName;
+            std::copy(std::begin(nodeGizmo.axes), std::end(nodeGizmo.axes), drag.nodeAxes);
+            for (const auto& rotation : nodeGizmo.settings->nodeRotations)
+                if (rotation.node == m_selectedModelNodeName)
+                    std::copy(std::begin(rotation.rotationDegrees), std::end(rotation.rotationDegrees), drag.startNodeRotation);
+            return true;
+        }
         if (m_modelGizmoHover >= 0) {
             beginDrag(m_selectedGraphNode, m_modelGizmoHover);
+            return true;
+        }
+        if (!m_hoveredModelNodeName.empty()) {
+            // ノード用のギズモでは、部品のクリックはそのノードを選ぶ（モデル全体は動かさない）。
+            m_selectedModelNodeName = m_hoveredModelNodeName;
             return true;
         }
         if (m_hoveredModelNode == 0) {
@@ -728,6 +864,36 @@ void Application::DrawModelInstanceOverlay(const ImVec2& viewportMin, const ImVe
         if (inSelection) boxLines(model, selectedSet);
         else if (model.node == m_hoveredModelNode) boxLines(model, hovered);
     }
+    // ノード用のギズモ: 選んだノードの部品の枠（選択の色）と、カーソルが乗った部品のノードの枠（ホバーの色）。
+    ModelNodeGizmo nodeGizmo;
+    const bool hasNodeGizmo = modelSelected && ModelNodeGizmoFrame(visible, nodeGizmo);
+    if (hasNodeGizmo) {
+        selectedSet.points.clear();
+        const auto& geometry = *nodeGizmo.visible->model->geometry;
+        std::vector<XMFLOAT4X4> nodeWorlds;
+        renderer::ModelNodeWorlds(geometry, nodeGizmo.settings->nodeRotations, nodeWorlds);
+        const auto nodeBox = [&](const std::string& name, renderer::OverlayLineSet& set) {
+            for (const auto& part : geometry.lods[0].parts) {
+                if (part.node >= geometry.nodes.size() || geometry.nodes[part.node].name != name) continue;
+                const XMMATRIX world = XMLoadFloat4x4(&nodeWorlds[part.node]) * XMLoadFloat4x4(&nodeGizmo.visible->world);
+                XMFLOAT3 corners[8];
+                for (int i = 0; i < 8; ++i) {
+                    const XMFLOAT3 corner{(i & 1) ? part.maximum.x : part.minimum.x, (i & 2) ? part.maximum.y : part.minimum.y,
+                                          (i & 4) ? part.maximum.z : part.minimum.z};
+                    XMStoreFloat3(&corners[i], XMVector3TransformCoord(XMLoadFloat3(&corner), world));
+                }
+                static constexpr int kEdges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3},
+                                                      {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+                for (const auto& edge : kEdges) {
+                    set.points.push_back(corners[edge[0]]);
+                    set.points.push_back(corners[edge[1]]);
+                }
+            }
+        };
+        nodeBox(m_selectedModelNodeName, selectedSet);
+        if (!m_hoveredModelNodeName.empty() && m_hoveredModelNodeName != m_selectedModelNodeName)
+            nodeBox(m_hoveredModelNodeName, hovered);
+    }
     if (!hovered.points.empty()) lines.push_back(std::move(hovered));
     if (!selectedSet.points.empty()) lines.push_back(std::move(selectedSet));
     m_renderer.SetOverlayLines(std::move(lines));
@@ -736,14 +902,17 @@ void Application::DrawModelInstanceOverlay(const ImVec2& viewportMin, const ImVe
     XMFLOAT3 pivot{};
     XMFLOAT4X4 parent{};
     if (!modelSelected || !NodeGizmoFrame(m_selectedGraphNode, pivot, parent)) return;
-    const GizmoScreen gizmo = BuildGizmo(m_renderer.GetCamera(), pivot, viewportMin, viewportMax);
+    const GizmoScreen gizmo = hasNodeGizmo
+        ? BuildGizmo(m_renderer.GetCamera(), nodeGizmo.origin, viewportMin, viewportMax, nodeGizmo.axes)
+        : BuildGizmo(m_renderer.GetCamera(), pivot, viewportMin, viewportMax);
     if (!gizmo.valid) return;
     auto* draw = ImGui::GetWindowDrawList();
     draw->PushClipRect(viewportMin, viewportMax, true);
     const ImU32 hoverColor = ImGui::GetColorU32(ImGuiCol_PlotLinesHovered);
     const ImU32 shadow = IM_COL32(0, 0, 0, 140);
     const int active = m_modelGizmoHover;
-    if (m_modelGizmoMode == ModelGizmoMode::Translate) {
+    const ModelGizmoMode mode = hasNodeGizmo ? ModelGizmoMode::Rotate : m_modelGizmoMode;
+    if (mode == ModelGizmoMode::Translate) {
         for (int axis = 0; axis < 3; ++axis) {
             const bool on = active == kHandlePlane + axis;
             const ImU32 base = kAxisColors[axis];
@@ -774,7 +943,7 @@ void Application::DrawModelInstanceOverlay(const ImVec2& viewportMin, const ImVe
             const char* labels[] = {"X", "Y", "Z"};
             draw->AddText(ImVec2(tip.x + ui::Scaled(5.0f), tip.y), lineColor, labels[axis]);
         }
-    } else if (m_modelGizmoMode == ModelGizmoMode::Scale) {
+    } else if (mode == ModelGizmoMode::Scale) {
         for (int axis = 0; axis < 3; ++axis) {
             if (!gizmo.axisVisible[axis]) continue;
             const bool on = active == kHandleScale + axis || active == kHandleScaleAll;
@@ -918,6 +1087,9 @@ bool Application::DrawModelNodeSettings(graph::Node& node) {
                 ImGui::EndCombo();
             }
             ui::PropertyEnd();
+            ui::PropertyBool("ギズモ", &m_modelNodeGizmo, false,
+                             "入れると、ビューポートのギズモを選んだノードを回す輪にする。部品のクリックでノードを選ぶ。"
+                             "W / E / R でモデルのギズモに戻る（Ctrl で 15 度刻み、Esc で掴む前に戻す）");
             float degrees[3] = {0.0f, 0.0f, 0.0f};
             if (const auto found = rotationOf(m_selectedModelNodeName); found != settings->nodeRotations.end())
                 std::copy(std::begin(found->rotationDegrees), std::end(found->rotationDegrees), degrees);
@@ -925,19 +1097,7 @@ bool Application::DrawModelNodeSettings(graph::Node& node) {
             if (ui::PropertyFloat3Input("回転 (度)", degrees, zero,
                                         "選んだノードを、その原点を中心にモデルの X / Y / Z 軸まわりに回す"
                                         "（Z → X → Y の順）。子のノードも一緒に回る") != 0) {
-                const auto found = rotationOf(m_selectedModelNodeName);
-                const bool isZero = degrees[0] == 0.0f && degrees[1] == 0.0f && degrees[2] == 0.0f;
-                if (isZero) {
-                    if (found != settings->nodeRotations.end()) settings->nodeRotations.erase(found);
-                } else if (found != settings->nodeRotations.end()) {
-                    std::copy(std::begin(degrees), std::end(degrees), found->rotationDegrees);
-                } else {
-                    renderer::ModelNodeRotation added;
-                    added.node = m_selectedModelNodeName;
-                    std::copy(std::begin(degrees), std::end(degrees), added.rotationDegrees);
-                    settings->nodeRotations.push_back(std::move(added));
-                }
-                changed = true;
+                changed |= SetModelNodeRotation(*settings, m_selectedModelNodeName, degrees);
             }
             ui::EndPropertyTable();
         }
@@ -954,7 +1114,7 @@ bool Application::DrawModelNodeSettings(graph::Node& node) {
     XMFLOAT4X4 parent;
     if (!NodeGizmoFrame(node.id, pivot, parent))
         ui::HintText("Mesh Output へ（Transform / Merge を通して）繋ぐとビューポートに出る");
-    ui::HintText("ビューポートで W: 移動ギズモ / E: 回転ギズモ / R: 倍率ギズモ。モデルのクリックで選び、本体のドラッグで水平に移動、Delete でノードごと削除");
+    ui::HintText("ビューポートで W: 移動ギズモ / E: 回転ギズモ / R: 倍率ギズモ（「ノード」の「ギズモ」でノードを回す輪）。モデルのクリックで選び、本体のドラッグで水平に移動、Delete でノードごと削除");
     return changed;
 }
 

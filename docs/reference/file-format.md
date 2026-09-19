@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-20 03:25
+更新日時: 2026-09-20 03:55
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -579,6 +579,14 @@ UV を 2 つ持つのはモデル（FBX の 2 つ目の UV）だけで、道路�
 `preview.shadowResolution` は1024／2048／4096。省略・不正値は2048を使用する。既存の `preview.shadow` は有効・無効として維持する。省略可能なプレビュー設定の追加のため、プロジェクト版18を維持する。
 
 `preview.shadowCascadeCount` は1（1枚）〜4（カスケード数）。省略と0は4、5以上は4として読む。`preview.shadowResolution` は1枚あたりの解像度。どちらも省略可能で、プロジェクト版18を維持する。
+
+## シーンの空（大気散乱）
+
+`preview.lightingMode` は表示環境（`ibl` = 作業用IBL、`atmospheric` = シーンの空）。省略・不正値は `ibl`。
+`preview.light` は作業用のライト（作業用IBLで使う）のまま。
+`preview.atmosphere` はシーンの空と太陽 `{azimuth, elevation（ラジアン）, illuminance（大気圏外照度 lux）, density, mie, eccentricity,
+altitude（m）, groundAlbedo, lowerHemisphere（"ground" / "sky"）, skylightIntensity}`。省略した項目は既定値、範囲外は範囲に収める。
+省略可能な項目の追加なので版は上げない（古いアプリは読み飛ばし、作業用IBLで開く）。
 
 ## 沿道のプレビュー設定
 

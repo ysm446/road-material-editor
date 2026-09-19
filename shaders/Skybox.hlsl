@@ -15,6 +15,13 @@ struct SkyboxConstants
     // 引くミップ。小数を許すのは、ぼかしの強さを段の間で決められるようにするため。
     float mipLevel;
     float2 pad0;
+
+    // 太陽の円盤（シーンの空のときだけ）。環境マップには太陽を入れないので、ここで解析的に足す。
+    // sunRadiance は円盤の輝度（大気を通った照度 / 立体角）。0 なら描かない。
+    float3 sunDirection;
+    float sunAngularRadius;
+    float3 sunRadiance;
+    float pad1;
 };
 
 ConstantBuffer<SkyboxConstants> g_skybox : register(b1);
@@ -47,7 +54,15 @@ float4 PsMain(VsOutput input) : SV_Target
 {
     TextureCube<float4> environment = ResourceDescriptorHeap[g_skybox.environmentIndex];
     const float3 direction = normalize(input.direction);
-    const float3 radiance =
-        environment.SampleLevel(g_samplerLinearClamp, direction, g_skybox.mipLevel).rgb;
-    return float4(radiance * g_skybox.intensity, 1.0f);
+    float3 radiance =
+        environment.SampleLevel(g_samplerLinearClamp, direction, g_skybox.mipLevel).rgb * g_skybox.intensity;
+    if (g_skybox.sunAngularRadius > 0.0f)
+    {
+        const float angle = acos(clamp(dot(direction, normalize(g_skybox.sunDirection)), -1.0f, 1.0f));
+        const float edge = fwidth(angle);
+        const float disc = 1.0f - smoothstep(g_skybox.sunAngularRadius - edge, g_skybox.sunAngularRadius + edge, angle);
+        radiance += g_skybox.sunRadiance * disc;
+    }
+    // RGBA16F の範囲を守る。
+    return float4(min(radiance, 65000.0f), 1.0f);
 }

@@ -186,6 +186,8 @@ set(tg_sources
     src/renderer/ShadowCascades.h
     src/renderer/Camera.cpp
     src/renderer/Camera.h
+    src/renderer/Atmosphere.cpp
+    src/renderer/Atmosphere.h
     src/renderer/Environment.cpp
     src/renderer/Environment.h
     src/renderer/MaterialSphere.cpp

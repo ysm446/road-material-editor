@@ -1,7 +1,7 @@
 # rendering — PBR プレビューの設計
 
 作成日時: 2026-08-31 12:09
-更新日時: 2026-09-20 03:25
+更新日時: 2026-09-20 03:55
 
 この文書は移行前の PBR プレビュー実装を説明する。ハイトマップ平面・正規化 Height の
 記述は旧描画経路に限り、道路メッシュの仕様には適用しない。移行方針は [plan](../plan/plan.md)。
@@ -393,6 +393,34 @@ EnvBrdfLut → 環境 BRDF の LUT 256^2 (RG16F)
   エイリアスとファイアフライの原因になる。
 
 キューブマップの面の並びは D3D の規約に従う（0: +X, 1: -X, 2: +Y, 3: -Y, 4: +Z, 5: -Z）。
+
+## シーンの空（大気散乱）と作業用IBL
+
+terrain-graph の大気散乱スカイ（Nishita / Hillaire の散乱モデル）を、雲・月と星空・ゴッドレイを除いて移植した。
+ライティングの「表示環境」で **作業用IBL**（天球と作業用のライト。質感の確認用）と **シーンの空**（大気散乱の空と太陽）を切り替える。
+どちらの設定も `PreviewRenderer` が別々に持ち、切り替えても失わない（作業用ライトは `WorkLight()`、シーンの太陽は `SceneSunLight()`、
+編集中の方式のライトは `Light()`）。
+
+```
+多重散乱の LUT 32^2（AtmosphereMultiScatter.hlsl。大気の濃さと地面の反射率だけで決まる）
+    ↓
+地面反射の輝度 1 画素（AtmosphereGround.hlsl。空の照度 + 大気を通った太陽の直射を Lambert 反射）
+    ↓
+空の正距円筒 512x256（AtmosphereEnvironment.hlsl。太陽の円盤は入れない）
+    ↓  Environment::BuildFromEquirect（作業用IBLと同じ IBL の生成）
+環境キューブ・irradiance・プリフィルタ → 地形・モデル・マテリアルの球の IBL と、背景（スカイボックス）
+```
+
+- 作り直しは `Atmosphere::Update`（`PreviewRenderer::ProcessPendingWork`、フレームの外）。設定が変わったときだけで、太陽を動かすたびに走る。
+- **太陽の直射光の色と照度**は、大気を通った透過率を CPU で積分して決める（`AtmosphereSunTransmittance`、シェーダの `AtmComputeSunTransmittance` と同じ式）。
+  照度の設定は大気圏外照度（既定 120000 lux）で、地表の照度は透過率を掛けたもの。地平線より下は直射光 0。
+- **背景**はシーンの空の環境キューブをそのまま引き（スカイライト強度は掛けない）、太陽の円盤（視半径 0.00465 rad）を
+  `Skybox.hlsl` が解析的に足す（照度 / 円盤の立体角、RGBA16F に収まるよう 60000 で頭打ち）。
+- **スカイライト強度**は IBL（環境光）だけの倍率。太陽の直射光・背景・露出は変えない。
+- 下半球は「地面反射」（地表に当たる視線へ地面反射の輝度を足す）か「空の延長」（上半球の折り返し。見た目の近似）。
+- 天球プレビューの球と天球パネルは作業用IBLを扱う。レイヤーのプレビューは作業用IBLと作業用のライトで描く。
+- 保存はシーンの `preview.lightingMode` と `preview.atmosphere`（[file-format.md](../reference/file-format.md) の「シーンの空」）。
+  作業用IBL（天球）は従来どおりシーンの `activeSky`。terrain-graph のようにルートの作業設定へ分けるのは後続。
 
 ## ラフネスの下限
 

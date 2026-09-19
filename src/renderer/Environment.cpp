@@ -1,4 +1,5 @@
 #include "renderer/Environment.h"
+#include "renderer/Atmosphere.h"
 
 #include "core/ImageIo.h"
 #include "core/Log.h"
@@ -54,7 +55,7 @@ void InsertUavBarrier(ID3D12GraphicsCommandList* commandList, const rhi::GpuText
 
 }  // namespace
 
-bool Environment::Initialize(rhi::Device& device, rhi::PipelineCache& pipelineCache) {
+bool Environment::Initialize(rhi::Device& device, rhi::PipelineCache& pipelineCache, bool buildDefaultSky) {
     rhi::TextureDesc brdfDesc;
     brdfDesc.width = kBrdfLutSize;
     brdfDesc.height = kBrdfLutSize;
@@ -70,7 +71,7 @@ bool Environment::Initialize(rhi::Device& device, rhi::PipelineCache& pipelineCa
         return false;
     }
 
-    return BuildFromSky(device, pipelineCache, SkySettings{});
+    return !buildDefaultSky || BuildFromSky(device, pipelineCache, SkySettings{});
 }
 
 void Environment::Shutdown(rhi::Device& device) {
@@ -327,6 +328,40 @@ bool Environment::BuildFromEquirect(rhi::Device& device, rhi::PipelineCache& pip
 
     m_ready = true;
     return true;
+}
+
+bool Environment::BuildFromAtmosphere(rhi::Device& device, rhi::PipelineCache& pipelineCache,
+                                      const AtmosphereSettings& settings, uint32_t lutIndex, uint32_t groundIndex) {
+    ID3D12PipelineState* pipeline = pipelineCache.GetCompute(L"AtmosphereEnvironment.hlsl", L"CsMain");
+    if (pipeline == nullptr) return false;
+    // 太陽を動かすたびに作り直すので、同じ大きさならターゲットを使い回す（毎回の再確保を避ける）。
+    constexpr uint32_t kWidth = 512, kHeight = 256;
+    if ((!m_ready || m_equirect.width != kWidth || m_equirect.height != kHeight) &&
+        !CreateTargets(device, kWidth, kHeight)) {
+        return false;
+    }
+    struct Constants {
+        AtmosphereSettings settings;
+        uint32_t output, lut, ground, width;
+        uint32_t height, pad[3];
+    };
+    const Constants constants{settings, m_equirect.UavIndex(), lutIndex, groundIndex, kWidth, kHeight, {0, 0, 0}};
+    const auto allocation = device.Upload().Allocate(sizeof(Constants), 256);
+    if (!allocation.IsValid()) return false;
+    std::memcpy(allocation.cpu, &constants, sizeof(constants));
+    if (!device.ExecuteImmediate([&](ID3D12GraphicsCommandList* commandList) {
+            PIXBeginEvent(commandList, PIX_COLOR(120, 180, 255), "AtmosphereEnvironment");
+            TransitionIfNeeded(commandList, m_equirect, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            commandList->SetComputeRootSignature(pipelineCache.GlobalRootSignature());
+            commandList->SetPipelineState(pipeline);
+            commandList->SetComputeRootConstantBufferView(1, allocation.gpuAddress);
+            commandList->Dispatch(DispatchCount(kWidth), DispatchCount(kHeight), 1);
+            PIXEndEvent(commandList);
+        })) {
+        return false;
+    }
+    m_sourceName = "シーンの空（大気散乱）";
+    return BuildFromEquirect(device, pipelineCache, 1.0f);
 }
 
 bool Environment::BuildFromSky(rhi::Device& device, rhi::PipelineCache& pipelineCache,

@@ -1269,13 +1269,31 @@ json WritePreview(renderer::PreviewRenderer& renderer) {
     cameraNode["fovY"] = camera.fovY;
     node["camera"] = std::move(cameraNode);
 
-    const renderer::LightSettings& light = renderer.Light();
+    // light は作業用のライト（作業用IBL）。シーンの空の太陽と大気は別に持つ。
+    const renderer::LightSettings& light = renderer.WorkLight();
     json lightNode;
     lightNode["azimuth"] = light.azimuth;
     lightNode["elevation"] = light.elevation;
     lightNode["illuminance"] = light.illuminance;
     lightNode["color"] = WriteFloat3(light.color);
     node["light"] = std::move(lightNode);
+
+    // シーンの空（大気散乱）。lightingMode は表示環境（ibl = 作業用IBL、atmospheric = シーンの空）。
+    node["lightingMode"] = renderer.AtmosphericMode() ? "atmospheric" : "ibl";
+    {
+        const renderer::LightSettings& sun = renderer.SceneSunLight();
+        const renderer::AtmosphereSettings& sky = renderer.AtmosphericSettings();
+        node["atmosphere"] = {{"azimuth", sun.azimuth},
+                              {"elevation", sun.elevation},
+                              {"illuminance", sun.illuminance},
+                              {"density", sky.density},
+                              {"mie", sky.mie},
+                              {"eccentricity", sky.eccentricity},
+                              {"altitude", sky.altitude},
+                              {"groundAlbedo", sky.groundAlbedo},
+                              {"lowerHemisphere", sky.lowerHemisphere != 0 ? "ground" : "sky"},
+                              {"skylightIntensity", renderer.SkylightIntensity()}};
+    }
 
     const renderer::ExposureSettings& exposure = renderer.Exposure();
     json exposureNode;
@@ -1336,12 +1354,35 @@ void ReadPreview(const json& node, renderer::PreviewRenderer& renderer) {
 
     {
         const json& light = section("light");
-        renderer::LightSettings& target = renderer.Light();
+        renderer::LightSettings& target = renderer.WorkLight();
         const renderer::LightSettings defaults;
         target.azimuth = ReadFloat(light, "azimuth", defaults.azimuth);
         target.elevation = ReadFloat(light, "elevation", defaults.elevation);
         target.illuminance = ReadFloat(light, "illuminance", defaults.illuminance);
         target.color = ReadFloat3(light, "color", defaults.color);
+    }
+
+    {
+        // シーンの空。無ければ（古いファイル）既定値で、表示環境は作業用IBL。
+        renderer.AtmosphericMode() = ReadString(node, "lightingMode", "ibl") == "atmospheric";
+        const json& atmosphere = section("atmosphere");
+        const renderer::AtmosphereSettings defaults;
+        renderer::LightSettings& sun = renderer.SceneSunLight();
+        sun.azimuth = ReadFloat(atmosphere, "azimuth", defaults.azimuth);
+        sun.elevation = std::clamp(ReadFloat(atmosphere, "elevation", defaults.elevation), -1.5f, 1.5f);
+        sun.illuminance = std::max(ReadFloat(atmosphere, "illuminance", defaults.illuminance), 0.0f);
+        sun.color = {1.0f, 1.0f, 1.0f};
+        renderer::AtmosphereSettings& sky = renderer.AtmosphericSettings();
+        sky = defaults;
+        sky.density = std::clamp(ReadFloat(atmosphere, "density", defaults.density), 0.1f, 3.0f);
+        sky.mie = std::clamp(ReadFloat(atmosphere, "mie", defaults.mie), 0.0f, 2.0f);
+        sky.eccentricity = std::clamp(ReadFloat(atmosphere, "eccentricity", defaults.eccentricity), 0.0f, 0.95f);
+        sky.altitude = std::clamp(ReadFloat(atmosphere, "altitude", defaults.altitude), 0.0f, 10000.0f);
+        sky.groundAlbedo = std::clamp(ReadFloat(atmosphere, "groundAlbedo", defaults.groundAlbedo), 0.0f, 1.0f);
+        sky.lowerHemisphere =
+            ReadString(atmosphere, "lowerHemisphere", defaults.lowerHemisphere != 0 ? "ground" : "sky") == "sky" ? 0u : 1u;
+        renderer.SkylightIntensity() = std::clamp(
+            ReadFloat(atmosphere, "skylightIntensity", renderer::PreviewRenderer::kDefaultSkylightIntensity), 0.0f, 8.0f);
     }
 
     {

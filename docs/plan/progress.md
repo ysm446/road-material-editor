@@ -1,7 +1,7 @@
 # progress — Road Editor の進捗と注意点
 
 作成日時: 2026-08-31 05:46
-更新日時: 2026-09-20 03:25
+更新日時: 2026-09-20 03:55
 
 完了した作業は新しい順に並べる。受入条件と実装順序は [plan.md](plan.md) を参照する。
 
@@ -28,6 +28,13 @@ R3 は白線（中央線と外側線の帯ポリゴン、矢印、摩耗マス�
 - 設計で確定する項目（型と所有権、区間キャッシュ、道路データの保存形式）は plan.md の「次の設計で確定すること」を参照する。
 
 ## 完了した作業
+
+### 2026-09-20 03:55 — シーンの空（大気散乱）と作業用IBLの分離
+
+terrain-graph の大気散乱スカイを、雲・月と星空・ゴッドレイ・アニメーションを除いて移植した（`renderer/Atmosphere`、`AtmosphereScattering.hlsli` / `AtmosphereMultiScatter.hlsl` は写し、`AtmosphereCommon.hlsli` / `AtmosphereGround.hlsl` / `AtmosphereEnvironment.hlsl` は雲を抜いて書き直し）。背景は専用の合成パスを持たず、スカイボックスが大気の環境を引いて太陽の円盤を足す。
+`PreviewRenderer` は作業用IBL（天球・作業用ライト）とシーンの空（大気・太陽・スカイライト強度）を別々に持ち、`EffectiveLight()` / `GetEnvironment()` / `EnvironmentIntensity()` で描画・マテリアルの球・モデルのプレビューへ渡す。ライティングのパネルに「表示環境」と「シーンの太陽」「大気」「環境光」の節。保存はシーンの `preview.lightingMode` / `preview.atmosphere`。開発用に `--focus-panel <name>`。
+Debug / Release ビルド・全 CPU テスト成功、追加・変更したシェーダを DXC で単体コンパイル。Release の `--screenshot-ui` で、昼（仰角 30 度）の青空・夕方（3 度）の暖色の空と光・太陽の円盤（計算どおりの位置）・ライティングのパネル・保存の往復を確認し、作業用IBLの描画が変更前と同じことを確認（違いは統計表示の文字だけ）。スライダーなどの対話操作は未確認。
+未対応: 作業用IBLをルートの作業設定へ分ける（terrain-graph の `workEnvironment`）、`.tgatmosphere` アセット、雲・夜空。
 
 ### 2026-09-20 03:25 — 影のカスケード数のスライダー
 

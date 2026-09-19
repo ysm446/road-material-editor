@@ -3,6 +3,7 @@
 
 #include "compositor/MaterialEvaluator.h"
 #include "compositor/TextureLibrary.h"
+#include "renderer/Atmosphere.h"
 #include "renderer/Camera.h"
 #include "renderer/Environment.h"
 #include "renderer/SkyLibrary.h"
@@ -257,7 +258,24 @@ public:
     Camera& GetCamera() { return m_camera; }
     const Camera& GetCamera() const { return m_camera; }
     ExposureSettings& Exposure() { return m_exposure; }
-    LightSettings& Light() { return m_light; }
+    // ライティングの方式。偽なら作業用IBL（天球と作業用のライト）、真ならシーンの空（大気散乱と太陽）。
+    // どちらの設定も保持し、切り替えても失わない。
+    bool& AtmosphericMode() { return m_atmosphericMode; }
+    bool AtmosphericMode() const { return m_atmosphericMode; }
+    // 今の方式で編集するライト（UI とギズモ）。シーンの空では太陽の方位・仰角・大気圏外照度（色は大気から決まる）。
+    LightSettings& Light() { return m_atmosphericMode ? m_atmosphericLight : m_light; }
+    LightSettings& WorkLight() { return m_light; }
+    LightSettings& SceneSunLight() { return m_atmosphericLight; }
+    const LightSettings& SceneSunLight() const { return m_atmosphericLight; }
+    AtmosphereSettings& AtmosphericSettings() { return m_atmosphereSettings; }
+    const AtmosphereSettings& AtmosphericSettings() const { return m_atmosphereSettings; }
+    // 描画に使うライト。シーンの空では、大気を通った太陽の色と照度（地平線より下は 0）。
+    LightSettings EffectiveLight() const;
+    // シーンの空の環境光（IBL）の倍率。背景の明るさは変えない。
+    static constexpr float kDefaultSkylightIntensity = 1.0f;
+    float& SkylightIntensity() { return m_skylightIntensity; }
+    // 環境光（IBL）の倍率。作業用IBLは天球の値、シーンの空はスカイライトの強さ。
+    float EnvironmentIntensity() const { return m_atmosphericMode ? m_skylightIntensity : m_activeSky.iblIntensity; }
     // シーンを包む球の半径（原点中心）。カメラの Frame() が使う。シーンが無ければ作業グリッドの半径。
     // 配置したモデル（SetExtraSceneRadius）も含む。
     float BoundingRadius() const;
@@ -272,7 +290,11 @@ public:
     TonemapMode& Tonemap() { return m_tonemap; }
     DebugView& Debug() { return m_debugView; }
     DebugView Debug() const { return m_debugView; }
-    const Environment& GetEnvironment() const { return m_environment; }
+    // 描画に使う環境。シーンの空で大気の環境ができていればそれ、ほかは作業用IBL。
+    const Environment& GetEnvironment() const {
+        return m_atmosphericMode && m_atmosphere.IsReady() ? m_atmosphere.GetEnvironment() : m_environment;
+    }
+    const Environment& WorkEnvironment() const { return m_environment; }
     bool& ShowSkybox() { return m_showSkybox; }
     // 背景だけをぼかす。**IBL の寄与は変えない。**
     // プリフィルタ済みキューブの粗いミップを引くだけなので、追加のパスは要らない。
@@ -376,6 +398,13 @@ private:
     std::chrono::steady_clock::time_point m_meterTime{};
     LightSettings m_light;
     Environment m_environment;
+    // シーンの空（大気散乱）。作業用IBL（m_environment / m_activeSky / m_light）とは別に持つ。
+    bool m_atmosphericMode = false;
+    AtmosphereSettings m_atmosphereSettings;
+    LightSettings m_atmosphericLight = {AtmosphereSettings{}.azimuth, AtmosphereSettings{}.elevation,
+                                        AtmosphereSettings{}.illuminance, {1.0f, 1.0f, 1.0f}};
+    float m_skylightIntensity = kDefaultSkylightIntensity;
+    Atmosphere m_atmosphere;
     // ビューポートに適用している天球の中身。**Environment の元になっているもの。**
     // 既定値は Environment::Initialize が作る環境と一致させてあるので、
     // 起動直後は作り直しが要らない。

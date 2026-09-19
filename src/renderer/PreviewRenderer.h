@@ -281,7 +281,9 @@ public:
     bool& ShadowEnabled() { return m_shadowEnabled; }
     uint32_t ShadowCascadeCount() const { return m_requestedShadowCascadeCount; }
     void RequestShadowCascadeCount(uint32_t count) {
-        m_requestedShadowCascadeCount = count == 1 ? 1 : kPreviewDefaults.shadowCascadeCount;
+        // 1 はシーン全体を覆う 1 枚、2〜4 は視距離で分けるカスケード。0（不正値）は既定、5 以上は 4。
+        m_requestedShadowCascadeCount =
+            count == 0 ? kPreviewDefaults.shadowCascadeCount : std::min(count, kShadowCascadeCount);
     }
     uint32_t ShadowResolution() const { return m_requestedShadowResolution; }
     void RequestShadowResolution(uint32_t resolution) {

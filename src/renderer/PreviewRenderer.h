@@ -14,6 +14,7 @@
 #include <DirectXMath.h>
 
 #include <array>
+#include <chrono>
 #include <functional>
 
 namespace tg::renderer {
@@ -56,6 +57,15 @@ enum class TonemapMode : uint32_t {
 //   EV100    = log2(N^2 / t) - log2(ISO / 100)
 //   exposure = 1 / (1.2 * 2^EV100)
 struct ExposureSettings {
+    // 自動露出。シーンカラーの輝度ヒストグラムから測った EV100 に補正を足して使う。
+    // 自動のときは useManualEv と物理カメラの値を露出には使わない（F 値は被写界深度に残る）。
+    bool automatic = false;
+    float compensation = 0.0f;           // 露出補正（EV）。
+    float minEv100 = -4.0f, maxEv100 = 18.0f;
+    float adaptationSpeed = 2.0f;        // 1 秒あたりの追従率。大きいほど速く追従する。
+    float autoEv100 = 15.0f;             // 実行時のみ。平滑化した測光値。
+    bool autoValid = false;              // 実行時のみ。測光値を一度でも受け取ったか。
+
     bool useManualEv = false;
     float manualEv100 = 15.0f;
     float aperture = 16.0f;              // N（F 値）
@@ -317,6 +327,10 @@ private:
 
     // ライトから見たビュー×投影。プレビューの被写体を囲む平行投影。
     void ReleaseTargets(rhi::Device& device);
+    // 自動露出の測光。シーンカラーのヒストグラムから EV100 を求め、読み戻しバッファへ写す。
+    void MeterExposure(rhi::Device& device, rhi::PipelineCache& pipelineCache, ID3D12GraphicsCommandList* commandList);
+    // 前回この枠で記録した測光値を読み、順応の速さで平滑化して autoEv100 へ入れる。
+    void ReadExposureMeter(rhi::Device& device);
     // 作業グリッドの線。トーンマップ後の表示用テクスチャへ、シーンの深度でテストして描く。
     void DrawGuideOverlay(rhi::Device& device, rhi::PipelineCache& pipelineCache,
                           ID3D12GraphicsCommandList* commandList);
@@ -355,6 +369,9 @@ private:
 
     Camera m_camera;
     ExposureSettings m_exposure;
+    rhi::GpuBuffer m_meterHistogram, m_meterResult, m_meterReadback;
+    bool m_meterPending[rhi::kFrameCount] = {};
+    std::chrono::steady_clock::time_point m_meterTime{};
     LightSettings m_light;
     Environment m_environment;
     // ビューポートに適用している天球の中身。**Environment の元になっているもの。**

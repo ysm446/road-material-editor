@@ -18,6 +18,14 @@ namespace fs = std::filesystem;
 
 std::string ToString(const ufbx_string& value) { return std::string(value.data, value.length); }
 
+// ufbx の 3x4（列ベクトル）を DirectXMath の行ベクトルの規約の 4x4 へ。
+XMFLOAT4X4 ToXm(const ufbx_matrix& m) {
+    return XMFLOAT4X4(float(m.cols[0].x), float(m.cols[0].y), float(m.cols[0].z), 0.0f,
+                      float(m.cols[1].x), float(m.cols[1].y), float(m.cols[1].z), 0.0f,
+                      float(m.cols[2].x), float(m.cols[2].y), float(m.cols[2].z), 0.0f,
+                      float(m.cols[3].x), float(m.cols[3].y), float(m.cols[3].z), 1.0f);
+}
+
 // FBX のテクスチャの実ファイルを探す。書かれた絶対パスは作者の PC のものであることが多いので、
 // FBX からの相対パス → 絶対パス → FBX と同じフォルダの同名の順に試す。
 fs::path FindTexture(const ufbx_texture* texture, const fs::path& modelDirectory) {
@@ -105,6 +113,41 @@ bool ModelWorldBounds(const ModelAsset& model, FXMMATRIX world, BoundingBox& bou
     return true;
 }
 
+void ModelNodeWorlds(const ModelGeometry& geometry, const std::vector<ModelNodeRotation>& rotations,
+                     std::vector<XMFLOAT4X4>& worlds) {
+    const size_t count = geometry.nodes.size();
+    worlds.resize(count);
+    // 読んだままの姿勢のワールド。回転の軸をモデルの軸に合わせるのに使う。
+    std::vector<XMFLOAT4X4> bindWorlds(count);
+    for (size_t i = 0; i < count; ++i) {
+        const ModelNode& node = geometry.nodes[i];
+        const XMMATRIX local = XMLoadFloat4x4(&node.bindLocal);
+        XMStoreFloat4x4(&bindWorlds[i],
+                        node.parent >= 0 ? local * XMLoadFloat4x4(&bindWorlds[static_cast<size_t>(node.parent)]) : local);
+    }
+    const float zero[3] = {0.0f, 0.0f, 0.0f};
+    for (size_t i = 0; i < count; ++i) {
+        const ModelNode& node = geometry.nodes[i];
+        XMMATRIX local = XMLoadFloat4x4(&node.bindLocal);
+        for (const ModelNodeRotation& rotation : rotations) {
+            if (rotation.node != node.name) continue;
+            // 回転の軸はモデルの軸（読んだままの姿勢で見た X / Y / Z）。FBX のノード自身の軸は書き出したツール
+            // （Blender なら Z-up）のままのことがあるので使わない。中心はノードの原点。
+            // モデルの軸での回転 R をノードの座標へ移す（行ベクトル: A · R · A⁻¹、A は読んだままの姿勢の回転）。
+            XMVECTOR scale, orientation, translation;
+            if (!XMMatrixDecompose(&scale, &orientation, &translation, XMLoadFloat4x4(&bindWorlds[i])))
+                orientation = XMQuaternionIdentity();
+            const XMMATRIX axes = XMMatrixRotationQuaternion(orientation);
+            const XMMATRIX spin = NodeTransformMatrix(zero, rotation.rotationDegrees, 1.0f);
+            local = axes * spin * XMMatrixTranspose(axes) * local;
+            break;
+        }
+        const XMMATRIX world =
+            node.parent >= 0 ? local * XMLoadFloat4x4(&worlds[static_cast<size_t>(node.parent)]) : local;
+        XMStoreFloat4x4(&worlds[i], world);
+    }
+}
+
 bool LoadModel(const fs::path& path, ModelAsset& asset) {
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
     if (!stream) {
@@ -140,6 +183,26 @@ bool LoadModel(const fs::path& path, ModelAsset& asset) {
     const float limit = std::numeric_limits<float>::max();
     geometry->minimum = {limit, limit, limit};
     geometry->maximum = {-limit, -limit, -limit};
+    // --- ノードの階層 -----------------------------------------------------------
+    // ufbx の根（is_root）は持たず、その子を一番上にする。一番上の bindLocal は根の変換（Y-up・m への変換）を含む。
+    // 深さ順に並べて、親が必ず子より前に来るようにする。
+    std::vector<ufbx_node*> sortedNodes(scene->nodes.data, scene->nodes.data + scene->nodes.count);
+    std::stable_sort(sortedNodes.begin(), sortedNodes.end(),
+                     [](const ufbx_node* a, const ufbx_node* b) { return a->node_depth < b->node_depth; });
+    std::unordered_map<uint32_t, int> nodeIndices;
+    for (ufbx_node* node : sortedNodes) {
+        if (node->is_root) continue;
+        ModelNode entry;
+        entry.name = ToString(node->name);
+        const auto parent = node->parent != nullptr && !node->parent->is_root ? nodeIndices.find(node->parent->typed_id)
+                                                                                : nodeIndices.end();
+        const bool top = parent == nodeIndices.end();
+        entry.parent = top ? -1 : parent->second;
+        entry.bindLocal = ToXm(top ? node->node_to_world : node->node_to_parent);
+        nodeIndices.emplace(node->typed_id, static_cast<int>(geometry->nodes.size()));
+        geometry->nodes.push_back(std::move(entry));
+    }
+
     // FBX のマテリアル（typed_id）→ スロット番号。同じ名前でも別のマテリアルは別のスロットにする。
     std::unordered_map<uint32_t, uint32_t> slotIds;
     for (ufbx_node* node : scene->nodes) {
@@ -156,8 +219,14 @@ bool LoadModel(const fs::path& path, ModelAsset& asset) {
         geometry->lods.resize(std::max(geometry->lods.size(), lod + 1));
         auto& level = geometry->lods[lod];
         const ufbx_mesh& mesh = *node->mesh;
-        const auto normalMatrix = ufbx_matrix_for_normals(&node->geometry_to_world);
+        const auto found = nodeIndices.find(node->typed_id);
+        if (found == nodeIndices.end()) continue;
+        const uint32_t nodeIndex = static_cast<uint32_t>(found->second);
+        // 頂点はノードの座標で持つ。範囲と面の向きの判定は読んだままの姿勢のワールドで行う。
+        const auto normalMatrix = ufbx_matrix_for_normals(&node->geometry_to_node);
+        const auto worldNormalMatrix = ufbx_matrix_for_normals(&node->geometry_to_world);
         std::vector<uint32_t> indices(mesh.max_face_triangles * 3);
+        // スロット → このノードの部品。
         std::unordered_map<uint32_t, size_t> parts;
         for (size_t faceIndex = 0; faceIndex < mesh.faces.count; ++faceIndex) {
             const auto face = mesh.faces.data[faceIndex];
@@ -169,16 +238,24 @@ bool LoadModel(const fs::path& path, ModelAsset& asset) {
             auto [slot, added] = slotIds.emplace(materialId, static_cast<uint32_t>(geometry->slots.size()));
             if (added) geometry->slots.push_back(ReadSlotSource(material, modelDirectory));
             auto [part, newPart] = parts.emplace(slot->second, level.parts.size());
-            if (newPart) level.parts.push_back({{}, slot->second});
+            if (newPart) level.parts.push_back({{}, slot->second, nodeIndex});
             auto& dst = level.parts[part->second].mesh;
             for (uint32_t t = 0; t < count; ++t) {
                 MeshVertex vertices[3]{};
+                XMFLOAT3 worldPositions[3]{};
+                XMFLOAT3 worldNormal{};
                 for (uint32_t j = 0; j < 3; ++j) {
                     const uint32_t index = indices[t * 3 + j];
-                    const auto p = ufbx_transform_position(&node->geometry_to_world,
-                                                           ufbx_get_vertex_vec3(&mesh.vertex_position, index));
-                    const auto n = ufbx_transform_direction(&normalMatrix,
-                                                            ufbx_get_vertex_vec3(&mesh.vertex_normal, index));
+                    const auto position = ufbx_get_vertex_vec3(&mesh.vertex_position, index);
+                    const auto normal = ufbx_get_vertex_vec3(&mesh.vertex_normal, index);
+                    const auto p = ufbx_transform_position(&node->geometry_to_node, position);
+                    const auto n = ufbx_transform_direction(&normalMatrix, normal);
+                    const auto w = ufbx_transform_position(&node->geometry_to_world, position);
+                    worldPositions[j] = {float(w.x), float(w.y), float(w.z)};
+                    if (j == 0) {
+                        const auto wn = ufbx_transform_direction(&worldNormalMatrix, normal);
+                        worldNormal = {float(wn.x), float(wn.y), float(wn.z)};
+                    }
                     auto& v = vertices[j];
                     v.position = {float(p.x), float(p.y), float(p.z)};
                     v.normal = {float(n.x), float(n.y), float(n.z)};
@@ -197,8 +274,8 @@ bool LoadModel(const fs::path& path, ModelAsset& asset) {
                         v.roadUv = v.uv;
                     }
                     for (int k = 0; k < 3; ++k) {
-                        const float value = (&v.position.x)[k];
-                        if (!std::isfinite(value)) {
+                        const float value = (&worldPositions[j].x)[k];
+                        if (!std::isfinite(value) || !std::isfinite((&v.position.x)[k])) {
                             asset.error = "頂点座標が不正です";
                             return false;
                         }
@@ -206,13 +283,15 @@ bool LoadModel(const fs::path& path, ModelAsset& asset) {
                         (&geometry->maximum.x)[k] = std::max((&geometry->maximum.x)[k], value);
                     }
                 }
-                // 負のスケールも含め、面の向きを変換後の法線へ合わせる。
+                // 負のスケールも含め、面の向きを変換後（ワールド）の法線へ合わせる。
+                {
+                    const auto we1 = XMVectorSubtract(XMLoadFloat3(&worldPositions[1]), XMLoadFloat3(&worldPositions[0]));
+                    const auto we2 = XMVectorSubtract(XMLoadFloat3(&worldPositions[2]), XMLoadFloat3(&worldPositions[0]));
+                    if (XMVectorGetX(XMVector3Dot(XMVector3Cross(we1, we2), XMLoadFloat3(&worldNormal))) < 0)
+                        std::swap(vertices[1], vertices[2]);
+                }
                 auto e1 = XMVectorSubtract(XMLoadFloat3(&vertices[1].position), XMLoadFloat3(&vertices[0].position));
                 auto e2 = XMVectorSubtract(XMLoadFloat3(&vertices[2].position), XMLoadFloat3(&vertices[0].position));
-                if (XMVectorGetX(XMVector3Dot(XMVector3Cross(e1, e2), XMLoadFloat3(&vertices[0].normal))) < 0) {
-                    std::swap(vertices[1], vertices[2]);
-                    std::swap(e1, e2);
-                }
                 const float du1 = vertices[1].uv.x - vertices[0].uv.x, dv1 = vertices[1].uv.y - vertices[0].uv.y;
                 const float du2 = vertices[2].uv.x - vertices[0].uv.x, dv2 = vertices[2].uv.y - vertices[0].uv.y;
                 const float det = du1 * dv2 - du2 * dv1;

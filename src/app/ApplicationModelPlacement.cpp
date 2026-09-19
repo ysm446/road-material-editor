@@ -337,6 +337,7 @@ std::vector<Application::VisibleModel> Application::CollectVisibleModels() const
         visible.node = path.model;
         visible.transforms = path.transforms;
         visible.model = &*model;
+        visible.rotations = &settings->nodeRotations;
         XMStoreFloat4x4(&visible.world, world);
         result.push_back(std::move(visible));
     }
@@ -401,8 +402,9 @@ float Application::ModelInstancesRadius() const {
 
 void Application::DrawSceneModels(ID3D12GraphicsCommandList* commandList, const renderer::SceneDrawContext& context) {
     // 同じモデルはまとめて描く（メッシュとパイプラインの切り替えを減らす）。
-    std::unordered_map<uint64_t, std::vector<XMFLOAT4X4>> worlds;
-    for (const VisibleModel& visible : CollectVisibleModels()) worlds[visible.model->id].push_back(visible.world);
+    std::unordered_map<uint64_t, std::vector<renderer::ModelInstanceDraw>> worlds;
+    for (const VisibleModel& visible : CollectVisibleModels())
+        worlds[visible.model->id].push_back({visible.world, visible.rotations});
     for (const auto& [modelId, list] : worlds) {
         const auto preview = m_modelPreviews.find(modelId);
         const renderer::ModelAsset* model = FindModel(modelId);
@@ -423,13 +425,19 @@ graph::GraphId Application::PickModelNode(const XMFLOAT3& origin, const XMFLOAT3
         float boxDistance = 0.0f;
         if (!renderer::ModelWorldBounds(*visible.model, world, bounds) ||
             !bounds.Intersects(rayOrigin, rayDirection, boxDistance) || boxDistance >= distance) continue;
-        // 三角形はモデルの座標で調べ、当たった点をワールドへ戻して距離を比べる。
-        XMVECTOR determinant;
-        const XMMATRIX inverse = XMMatrixInverse(&determinant, world);
-        if (XMVectorGetX(determinant) == 0.0f) continue;
-        const XMVECTOR localOrigin = XMVector3TransformCoord(rayOrigin, inverse);
-        const XMVECTOR localDirection = XMVector3Normalize(XMVector3TransformNormal(rayDirection, inverse));
+        // 三角形は部品（ノード）の座標で調べ、当たった点をワールドへ戻して距離を比べる。
+        std::vector<XMFLOAT4X4> nodeWorlds;
+        renderer::ModelNodeWorlds(*visible.model->geometry,
+                                  visible.rotations ? *visible.rotations : std::vector<renderer::ModelNodeRotation>{},
+                                  nodeWorlds);
         for (const auto& part : visible.model->geometry->lods[0].parts) {
+            const XMMATRIX partWorld =
+                part.node < nodeWorlds.size() ? XMLoadFloat4x4(&nodeWorlds[part.node]) * world : world;
+            XMVECTOR determinant;
+            const XMMATRIX inverse = XMMatrixInverse(&determinant, partWorld);
+            if (XMVectorGetX(determinant) == 0.0f) continue;
+            const XMVECTOR localOrigin = XMVector3TransformCoord(rayOrigin, inverse);
+            const XMVECTOR localDirection = XMVector3Normalize(XMVector3TransformNormal(rayDirection, inverse));
             const auto& vertices = part.mesh.vertices;
             const auto& indices = part.mesh.indices;
             for (size_t t = 0; t + 2 < indices.size(); t += 3) {
@@ -438,7 +446,7 @@ graph::GraphId Application::PickModelNode(const XMFLOAT3& origin, const XMFLOAT3
                                                XMLoadFloat3(&vertices[indices[t + 1]].position),
                                                XMLoadFloat3(&vertices[indices[t + 2]].position), localDistance)) continue;
                 const XMVECTOR point = XMVector3TransformCoord(
-                    XMVectorAdd(localOrigin, XMVectorScale(localDirection, localDistance)), world);
+                    XMVectorAdd(localOrigin, XMVectorScale(localDirection, localDistance)), partWorld);
                 const float worldDistance = XMVectorGetX(XMVector3Length(XMVectorSubtract(point, rayOrigin)));
                 if (worldDistance < distance) {
                     distance = worldDistance;
@@ -878,6 +886,65 @@ bool Application::DrawModelNodeSettings(graph::Node& node) {
                               (g.maximum.y - g.minimum.y) * scale, (g.maximum.z - g.minimum.z) * scale);
         }
         ui::EndPropertyTable();
+    }
+    // --- FBX のノードの回転（戦車の砲塔の旋回・砲身の俯仰など）---------------------
+    if (settings != nullptr && model != nullptr && model->geometry && model->geometry->nodes.size() > 1) {
+        const auto& nodes = model->geometry->nodes;
+        const auto rotationOf = [&](const std::string& name) {
+            return std::find_if(settings->nodeRotations.begin(), settings->nodeRotations.end(),
+                                [&](const renderer::ModelNodeRotation& r) { return r.node == name; });
+        };
+        if (std::none_of(nodes.begin(), nodes.end(),
+                         [&](const renderer::ModelNode& n) { return n.name == m_selectedModelNodeName; })) {
+            // 最初の子のノード（一番上の空のノードより、砲塔などの動かすものを選びやすく）。
+            const auto child = std::find_if(nodes.begin(), nodes.end(), [](const auto& n) { return n.parent >= 0; });
+            m_selectedModelNodeName = (child != nodes.end() ? *child : nodes.front()).name;
+        }
+        ui::SectionHeader("ノード");
+        if (ui::BeginPropertyTable("modelNodeRotation")) {
+            ui::PropertyLabel("ノード", "FBX のノード（階層は字下げ）。* は回転を足してあるもの");
+            ImGui::SetNextItemWidth(std::min(ui::Scaled(ui::kComboMaxWidth), ImGui::GetContentRegionAvail().x));
+            if (ImGui::BeginCombo("##modelNode", m_selectedModelNodeName.c_str())) {
+                for (size_t i = 0; i < nodes.size(); ++i) {
+                    int depth = 0;
+                    for (int p = nodes[i].parent; p >= 0; p = nodes[static_cast<size_t>(p)].parent) ++depth;
+                    const std::string label = std::string(static_cast<size_t>(depth) * 2, ' ') + nodes[i].name +
+                                              (rotationOf(nodes[i].name) != settings->nodeRotations.end() ? " *" : "");
+                    ImGui::PushID(static_cast<int>(i));
+                    if (ImGui::Selectable(label.c_str(), nodes[i].name == m_selectedModelNodeName))
+                        m_selectedModelNodeName = nodes[i].name;
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            ui::PropertyEnd();
+            float degrees[3] = {0.0f, 0.0f, 0.0f};
+            if (const auto found = rotationOf(m_selectedModelNodeName); found != settings->nodeRotations.end())
+                std::copy(std::begin(found->rotationDegrees), std::end(found->rotationDegrees), degrees);
+            const float zero[3] = {0.0f, 0.0f, 0.0f};
+            if (ui::PropertyFloat3Input("回転 (度)", degrees, zero,
+                                        "選んだノードを、その原点を中心にモデルの X / Y / Z 軸まわりに回す"
+                                        "（Z → X → Y の順）。子のノードも一緒に回る") != 0) {
+                const auto found = rotationOf(m_selectedModelNodeName);
+                const bool isZero = degrees[0] == 0.0f && degrees[1] == 0.0f && degrees[2] == 0.0f;
+                if (isZero) {
+                    if (found != settings->nodeRotations.end()) settings->nodeRotations.erase(found);
+                } else if (found != settings->nodeRotations.end()) {
+                    std::copy(std::begin(degrees), std::end(degrees), found->rotationDegrees);
+                } else {
+                    renderer::ModelNodeRotation added;
+                    added.node = m_selectedModelNodeName;
+                    std::copy(std::begin(degrees), std::end(degrees), added.rotationDegrees);
+                    settings->nodeRotations.push_back(std::move(added));
+                }
+                changed = true;
+            }
+            ui::EndPropertyTable();
+        }
+        if (!settings->nodeRotations.empty() && ui::Button("すべて戻す", ui::kWideButtonWidth)) {
+            settings->nodeRotations.clear();
+            changed = true;
+        }
     }
     if (model != nullptr && ui::Button("モデルを開く", ui::kWideButtonWidth)) {
         m_selectedModel = model->id;

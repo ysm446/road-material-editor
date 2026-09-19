@@ -175,7 +175,12 @@ void Application::ProcessModelWork() {
             continue;
         }
         m_selectedModel = id;
-        PlaceModel(id, placement.position);
+        const graph::GraphId placed = PlaceModel(id, placement.position);
+        // 開発用: --model-node-rotation の回転を、コマンドラインで置いたモデルへ掛ける。
+        if (graph::Node* node = m_graph.FindMutableNode(placed); node != nullptr && !m_options.modelNodeRotations.empty()) {
+            if (auto* settings = std::get_if<graph::ModelNodeSettings>(&node->settings))
+                settings->nodeRotations = std::exchange(m_options.modelNodeRotations, {});
+        }
     }
 
     if (m_pendingModelMaterials != 0) {

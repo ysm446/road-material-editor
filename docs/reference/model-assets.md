@@ -1,7 +1,7 @@
 # model-assets — 3D モデル（FBX）とマテリアルスロット
 
 作成日時: 2026-09-19 17:30
-更新日時: 2026-09-20 03:05
+更新日時: 2026-09-20 02:35
 
 FBX を読み込んで共有アセット `.tgmodel` にし、FBX のマテリアルごと（スロット）に共有マテリアル `.tgmat` を割り当てる。
 terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationModelPanel`）を移植したもの。
@@ -24,6 +24,12 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
 - **2 つ目の UV**（ライトマップ用など）があれば `MeshVertex::roadUv` の枠へ入れる（無ければ 1 つ目を写す）。
   マテリアルのマップごとの UV（`mapUvSets`）で読み分ける。接線は 1 つ目の UV から求めるので、
   2 つ目の UV で読む法線マップは向きが合わないことがある。
+- **ノードの階層を保つ**（`ModelGeometry::nodes`。名前・親・親から見た変換 `bindLocal`、親は子より前）。ufbx の根は持たず、
+  一番上のノードの変換は Y-up・m への変換を含む。部品はノード × スロットの組ごとで、頂点はノードの座標。
+  範囲（`minimum` / `maximum`、底面の中心もこれで決める）と面の向きの判定は読んだままの姿勢のワールドで行う。
+- ノードの行列は `ModelNodeWorlds` が求める。Model ノードの `nodeRotations`（ノード名 → X / Y / Z の度、Z → X → Y の順）を
+  ノードの原点を中心に足す。**軸はモデルの軸**（読んだままの姿勢で見た X / Y / Z）で、FBX のノード自身の軸（書き出したツールによっては Z-up）は使わない。
+  親を回すと子も一緒に回る。範囲の枠は読んだままの姿勢のまま。
 - 形状（`ModelGeometry`）は不変で `shared_ptr` 共有。アンドゥのスナップショットへ複製しても頂点は複製されない。
 
 ### 倍率
@@ -111,6 +117,7 @@ terrain-graph のモデル機能（`ModelAsset` / `ModelPreview` / `ApplicationM
     ギズモの軸はワールド軸で、下流に Transform があればその座標へ戻して値に足す（回転は R' = R・P・Ra・P の逆 を角度へ戻す）。
     ギズモは画面上で一定の大きさ（90px）、ImGui で重ね描きし深度は見ない。
   - Esc でドラッグ前へ戻す / 選択解除、Delete でノードごと削除、F で寄る。設定はグラフパネルのプロパティ欄（モデル / 位置 / 回転 / 倍率 / 寸法）。
+  - FBX にノードが 2 つ以上あれば、プロパティに「ノード」の節（字下げした階層から選ぶ・回転 (度)・すべて戻す）。回転を足したノードには * が付く。
 - 範囲の枠（モデルの向きに沿った境界ボックス）は `PreviewRenderer::SetOverlayLines` でレンダラが描く。シーンの深度でテストするので奥は隠れる。
   選んだ Model はそのモデル、選んだ Transform はその枝のモデルすべて（`ImGuiCol_PlotLinesHovered`）、ホバーは `ImGuiCol_PlotLines`。
 - 描画は `PreviewRenderer::drawSceneExtras` から `ModelPreview::RenderInScene` を呼ぶ。本描画は不透明の道路の直後
@@ -149,7 +156,7 @@ XNA のモデルビューワ（`docs/references/modelviewer_character_xna3_20151
   - 作り方: `fbxdump`（ufbx で LoadModel と同じ読み方をして三角形を JSON へ）→ Blender 5.2 の `build_tanks.py`
     （組み立てて FBX 7.4 で書き出し）→ `--import-model` → 重複したマテリアルを既存の `.tgmat` へ付け替え。
     Blender は FBX 6.1 ASCII を読めないので、元のパーツは直接 Blender へ入れない。スクリプトは `data/Models/_tools/xna_tanks/`（手元のみ）。
-  - 今のツールは読み込みで階層を焼き込むので、砲塔の旋回・砲身の俯仰はまだ動かせない（階層を保つのは後続）。パーツごとの `.tgmodel` も残してある。
+  - Model ノードの「ノード」の節で砲塔（`turret`）を Y、砲身（`barrel`）を X まわりに回せる（X が負で砲身が上がる）。パーツごとの `.tgmodel` も残してある。
 
 ## 開発用オプション
 
@@ -158,6 +165,7 @@ XNA のモデルビューワ（`docs/references/modelviewer_character_xna3_20151
 - `--place-model <path>`: モデル（`.tgmodel` / `.fbx`）の Model ノードを作って原点へ置く（帯からビューポートへ落としたのと同じ経路）。
 - `--gizmo-rotate`: ギズモを回転（E）で始める。`--select-node <id>` と合わせて回転ギズモを撮る。
 - `--gizmo-scale`: ギズモを倍率（R）で始める。
+- `--model-node-rotation <node> <x> <y> <z>`: `--place-model` で置いたモデルのノードに回転を足す（繰り返し指定できる）。
 
 ## 未対応（後続）
 

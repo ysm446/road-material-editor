@@ -1,6 +1,7 @@
 #include "TestSupport.h"
 #include "renderer/AxisProjection.h"
 #include "renderer/MeshData.h"
+#include "renderer/ModelAsset.h"
 
 #include <algorithm>
 #include <cmath>
@@ -29,6 +30,50 @@ void RunMeshSceneTests() {
     scene.meshes[0].geometry.vertices[0].position.x = std::numeric_limits<float>::quiet_NaN();
     tests::Check(!renderer::ValidateMeshScene(scene), "Nonfinite position rejected");
     tests::Check(renderer::ValidateMeshScene(renderer::MeshScene{}), "Empty scene is valid");
+
+    tests::Section("Model node hierarchy");
+    {
+        using namespace DirectX;
+        // 戦車の形: 一番上（軸を Z-up から Y-up へ回した親）→ 砲塔（上へ 2 m）→ 砲身（前へ 1 m）。
+        // 一番上は FBX を Blender から書き出したときのように X へ −90 度回っていて、子の軸はモデルの軸と違う。
+        renderer::ModelGeometry geometry;
+        geometry.nodes.resize(3);
+        geometry.nodes[0].name = "root";
+        XMStoreFloat4x4(&geometry.nodes[0].bindLocal, XMMatrixRotationX(-XM_PIDIV2));
+        geometry.nodes[1].name = "turret";
+        geometry.nodes[1].parent = 0;
+        // Z-up の座標で上へ 2 m（親の −90 度で Y-up の +Y になる）。
+        XMStoreFloat4x4(&geometry.nodes[1].bindLocal, XMMatrixTranslation(0.0f, 0.0f, 2.0f));
+        geometry.nodes[2].name = "barrel";
+        geometry.nodes[2].parent = 1;
+        // Z-up の座標で前（−Y）へ 1 m → Y-up の +Z。
+        XMStoreFloat4x4(&geometry.nodes[2].bindLocal, XMMatrixTranslation(0.0f, -1.0f, 0.0f));
+        const auto point = [](const std::vector<XMFLOAT4X4>& worlds, size_t node, XMFLOAT3 local) {
+            XMFLOAT3 out;
+            XMStoreFloat3(&out, XMVector3TransformCoord(XMLoadFloat3(&local), XMLoadFloat4x4(&worlds[node])));
+            return out;
+        };
+        const auto near = [](XMFLOAT3 a, XMFLOAT3 b) {
+            return std::abs(a.x - b.x) < 1e-4f && std::abs(a.y - b.y) < 1e-4f && std::abs(a.z - b.z) < 1e-4f;
+        };
+        std::vector<XMFLOAT4X4> worlds;
+        renderer::ModelNodeWorlds(geometry, {}, worlds);
+        tests::Check(near(point(worlds, 1, {0, 0, 0}), {0, 2, 0}) && near(point(worlds, 2, {0, 0, 0}), {0, 2, 1}),
+                     "Bind pose places child nodes through their parents");
+        renderer::ModelNodeRotation turret;
+        turret.node = "turret";
+        turret.rotationDegrees[1] = 90.0f;
+        renderer::ModelNodeWorlds(geometry, {turret}, worlds);
+        tests::Check(near(point(worlds, 1, {0, 0, 0}), {0, 2, 0}), "Rotated node keeps its origin");
+        tests::Check(near(point(worlds, 2, {0, 0, 0}), {1, 2, 0}),
+                     "Rotation uses the model Y axis and carries the child (+Z turns to +X)");
+        renderer::ModelNodeRotation barrel;
+        barrel.node = "barrel";
+        barrel.rotationDegrees[0] = -90.0f;
+        // 砲身の先（Y-up で砲身の原点から +Z へ 1 m、Z-up のローカルでは −Y へ 1 m）を X へ −90 度 → 上を向く。
+        renderer::ModelNodeWorlds(geometry, {barrel}, worlds);
+        tests::Check(near(point(worlds, 2, {0, -1, 0}), {0, 3, 1}), "Negative X rotation raises the barrel tip");
+    }
 
     tests::Section("Mesh outline edges");
     {

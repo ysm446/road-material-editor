@@ -1,6 +1,7 @@
 #include "app/Application.h"
 
 #include "core/Log.h"
+#include "core/PathUtf8.h"
 
 #include <Windows.h>
 #include <shellapi.h>
@@ -22,6 +23,7 @@ namespace {
 //                       [--hdri <path>] [--texture <path>]...
 //                       [--screenshot <path>] [--screenshot-ui <path>]
 //                       [--screenshot-frame <n>] [--import-model <fbx>] [--open-asset <path>] [--place-model <path>] [--gizmo-rotate] [--gizmo-scale]
+//                       [--model-node-rotation <node> <x> <y> <z>]
 tg::StartupOptions ParseCommandLine() {
     tg::StartupOptions options;
 
@@ -85,6 +87,11 @@ tg::StartupOptions ParseCommandLine() {
             options.gizmoRotate = true;
         } else if (argument == L"--gizmo-scale") {
             options.gizmoScale = true;
+        } else if (argument == L"--model-node-rotation" && (i + 4) < argc) {
+            tg::renderer::ModelNodeRotation rotation;
+            rotation.node = tg::ToUtf8Display(std::filesystem::path(argv[++i]));
+            for (float& degrees : rotation.rotationDegrees) degrees = static_cast<float>(::_wtof(argv[++i]));
+            options.modelNodeRotations.push_back(std::move(rotation));
         } else if (argument == L"--place-model" && (i + 1) < argc) {
             options.placeModel = argv[++i];
         } else if (argument == L"--open-asset" && (i + 1) < argc) {

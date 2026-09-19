@@ -2,6 +2,7 @@
 
 #include "compositor/MaterialLayer.h"
 #include "graph/Path.h"
+#include "renderer/ModelAsset.h"
 
 #include <array>
 #include <optional>
@@ -202,6 +203,8 @@ struct ModelNodeSettings {
     float position[3] = {0.0f, 0.0f, 0.0f};
     float rotationDegrees[3] = {0.0f, 0.0f, 0.0f};
     float scale = 1.0f;
+    // FBX のノードに足す回転（戦車の砲塔の旋回・砲身の俯仰など）。ノードの名前で指し、0 の回転は持たない。
+    std::vector<renderer::ModelNodeRotation> nodeRotations;
 };
 
 // Transform。上流のモデルを、倍率 → 回転 → 平行移動の順に動かす（原点まわり）。

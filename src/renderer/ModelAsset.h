@@ -26,9 +26,20 @@ struct ModelSlotSource {
     float opacity = 1.0f;
 };
 
+// FBX のノード 1 つ。親は nodes の添字（-1 = 一番上）で、親は必ず子より前に並ぶ。
+// bindLocal は親の座標から見たノードの変換（行ベクトルの規約。world = bindLocal * 親の world）。
+// 一番上のノードは右手系 Y-up・m への変換を含む。
+struct ModelNode {
+    std::string name;
+    int parent = -1;
+    DirectX::XMFLOAT4X4 bindLocal{};
+};
+
+// 部品。ノードとスロットの組ごとに 1 つ。頂点はノードの座標（ワールドへは ModelNodeWorlds の行列で運ぶ）。
 struct ModelPart {
     MeshData mesh;
     uint32_t slot = 0;
+    uint32_t node = 0;
 };
 
 struct ModelLod {
@@ -39,7 +50,15 @@ struct ModelLod {
 struct ModelGeometry {
     std::vector<ModelLod> lods;
     std::vector<ModelSlotSource> slots;
+    std::vector<ModelNode> nodes;
+    // 読んだままの姿勢（ノードを回す前）でのモデル全体の範囲。底面の中心（ModelPivotMatrix）もこれで決める。
     DirectX::XMFLOAT3 minimum{}, maximum{};
+};
+
+// ノードに足す回転（Model ノードの設定）。ノードの名前で指す（読み直しても番号に依存しない）。
+struct ModelNodeRotation {
+    std::string node;
+    float rotationDegrees[3] = {0.0f, 0.0f, 0.0f};
 };
 
 // CPU 形状は不変・共有。履歴へ頂点配列を複製しない。
@@ -70,6 +89,12 @@ DirectX::XMMATRIX NodeTransformMatrix(const float position[3], const float rotat
 void RotationToDegrees(DirectX::FXMMATRIX rotation, float degrees[3]);
 // world を掛けたモデルのワールド空間の境界ボックス。形状が無ければ偽。
 bool ModelWorldBounds(const ModelAsset& model, DirectX::FXMMATRIX world, DirectX::BoundingBox& bounds);
+
+// 各ノードのモデル座標での行列（geometry->nodes と同じ並び）。rotations にあるノードは、ノードの原点を中心に
+// X / Y / Z の度（NodeTransformMatrix と同じ順）を回す。軸はモデルの軸（読んだままの姿勢で見た X / Y / Z。
+// Y が上）で、親を回せば子の軸も一緒に回る。
+void ModelNodeWorlds(const ModelGeometry& geometry, const std::vector<ModelNodeRotation>& rotations,
+                     std::vector<DirectX::XMFLOAT4X4>& worlds);
 
 // FBX を読み、右手系 Y-up・メートルへ変換する。失敗したら asset.error に理由を入れて偽を返す
 // （geometry と materials は変えない）。

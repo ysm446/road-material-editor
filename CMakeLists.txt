@@ -327,6 +327,7 @@ add_executable(road_editor_tests
     src/graph/RoadMask.cpp
     tests/MeshSceneTests.cpp
     src/renderer/MeshData.cpp
+    src/renderer/ModelAsset.cpp
     tests/TestSupport.h
     tests/FrameLimiterTests.cpp
     tests/NodeGraphTests.cpp
@@ -362,7 +363,7 @@ target_include_directories(road_editor_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR
 target_compile_definitions(road_editor_tests PRIVATE TG_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 target_compile_options(road_editor_tests PRIVATE /W4 /permissive- /utf-8 /Zc:preprocessor)
 # ole32 は ProjectWorkspace の永続 ID（CoCreateGuid）に要る。
-target_link_libraries(road_editor_tests PRIVATE imgui::imgui nlohmann_json::nlohmann_json ole32)
+target_link_libraries(road_editor_tests PRIVATE imgui::imgui nlohmann_json::nlohmann_json ufbx::ufbx ole32)
 
 add_test(NAME ui-interaction COMMAND road_editor_tests)
 

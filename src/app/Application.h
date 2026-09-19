@@ -77,6 +77,8 @@ struct StartupOptions {
     // 開発用。モデルのギズモを回転（E）で始める。
     bool gizmoRotate = false;
     bool gizmoScale = false;
+    // --place-model で置いたモデルの FBX のノードに足す回転（--model-node-rotation <node> <x> <y> <z>）。
+    std::vector<renderer::ModelNodeRotation> modelNodeRotations;
     // P0: Road / 砂利Surface / 歩道Surface の ID。通常のグラフ評価は変更しない。
     graph::GraphId prototypeRoad = 0;
     graph::GraphId surfaceLayoutRoad = 0;
@@ -202,6 +204,8 @@ private:
         std::vector<graph::GraphId> transforms;
         const renderer::ModelAsset* model = nullptr;
         DirectX::XMFLOAT4X4 world{};
+        // Model ノードの設定のノードの回転（無ければ読んだままの姿勢）。
+        const std::vector<renderer::ModelNodeRotation>* rotations = nullptr;
     };
     std::vector<VisibleModel> CollectVisibleModels() const;
     // Model / Transform ノードの位置・回転・倍率。どちらでもなければ偽。
@@ -517,6 +521,8 @@ private:
     // 一覧（アセットの帯）で選んでいるモデル。窓はこれを映す。
     uint64_t m_selectedModel = 0;
     int m_modelLod = 0;
+    // Model ノードのプロパティで回転を編集している FBX のノード（名前）。
+    std::string m_selectedModelNodeName;
     // モデルごとの GPU メッシュと出力。選んでいるものは窓が開いている間毎フレーム描き、
     // それ以外はサムネイルとして 1 度だけ描く（m_renderedModelThumbnails）。
     std::unordered_map<uint64_t, std::unique_ptr<renderer::ModelPreview>> m_modelPreviews;

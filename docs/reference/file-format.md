@@ -1,7 +1,7 @@
 # file-format — プロジェクトとマテリアルのファイル形式
 
 作成日時: 2026-08-31 15:12
-更新日時: 2026-09-19 22:40
+更新日時: 2026-09-20 02:35
 
 実装は [src/io/ProjectIo.cpp](../../src/io/ProjectIo.cpp)。**形式を変えたらこの文書も直す。**
 
@@ -40,6 +40,8 @@ FBX が見つからなくても項目は残し、リンク切れとして読む�
   `model` は `models[].id`（文書内の番号）か `null`（なし）、`position` はモデルの底面の中心の位置（m）。
 - `transform`: 入力 Model → 出力 Model。設定は `transform` 節 `{position, rotation, scale}`。
 - 回転は X / Y / Z 軸まわりの度（Z → X → Y の順）。数値 1 つなら Y として読む。`scale` は 0 以下を 1 として読む。
+- `model` 節の `nodeRotations`（任意）は FBX のノードに足す回転 `[{node, rotation: [x, y, z]}]`。`node` はノードの名前。
+  無ければ書かず、読むと空（読んだままの姿勢）。古いアプリは読み飛ばす（姿勢が戻るだけなので版は上げない）。
 
 版27以前のアプリが読み飛ばして接続を失うことを防ぐため版を上げる。
 
@@ -453,6 +455,11 @@ lift, uvRepeat, uvAlongU }` を持つ（長さは m、角度は度、density は
 RGB をそのまま使うマップ（ベースカラー / 法線）はテクスチャ参照を直に書く。
 スカラーのマップは「テクスチャ + 読むチャンネル」の組で書く
 （Megascans の `_ORD` のように 1 枚へ詰めたテクスチャを使うため）。
+
+マテリアルの `mapUvSets` はマップごとに読む UV（`1` か `2`）。キーは `maps` と同じ
+（`baseColor` / `normal` / `roughness` / `metallic` / `ambientOcclusion` / `height` / `opacity`）。
+無いキー・無いとき（古いファイル）は 1。`maps` の中はテクスチャの参照だけにするため、外に置く。
+UV を 2 つ持つのはモデル（FBX の 2 つ目の UV）だけで、道路の合成とマテリアルの球は 2 でも 1 つ目の UV で読む。
 
 ```json
 "maps": {

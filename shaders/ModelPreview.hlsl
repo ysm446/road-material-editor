@@ -24,7 +24,7 @@ struct ModelConstants
     float3 cameraPosition; float exposure;
     float3 lightDirection; float lightIlluminance;
     float3 lightColor; float iblIntensity;
-    uint tonemapMode; uint sceneMode; uint2 pad;
+    uint tonemapMode; uint sceneMode; uint mapUvSets; uint pad;
     float4x4 world;
     // シーンの影。MeshPbr と同じく転置せずに入っているので mul(M, v) で読む。
     float4x4 view;
@@ -36,6 +36,14 @@ struct ModelConstants
 };
 
 ConstantBuffer<ModelConstants> g_model : register(b1);
+
+// MaterialAsset::mapUvSets のビットの位置（compositor::MaterialMap と同じ並び）。
+#define TG_MAP_BASE_COLOR 0u
+#define TG_MAP_NORMAL     1u
+#define TG_MAP_ROUGHNESS  2u
+#define TG_MAP_METALLIC   3u
+#define TG_MAP_AO         4u
+#define TG_MAP_OPACITY    6u
 
 static const uint kBlendMasked = 1u;
 static const uint kBlendTranslucent = 2u;
@@ -113,6 +121,8 @@ struct VertexInput
     float3 normal : NORMAL;
     float4 tangent : TANGENT;
     float2 uv : TEXCOORD0;
+    // 2 つ目の UV（MeshVertex::roadUv の枠。無い FBX では uv と同じ）。
+    float2 uv2 : TEXCOORD1;
 };
 
 struct PixelInput
@@ -122,6 +132,13 @@ struct PixelInput
     float3 normal : NORMAL;
     float4 tangent : TANGENT;
     float2 uv : TEXCOORD0;
+    float2 uv2 : TEXCOORD1;
+};
+
+// マップ 1 つぶんを読む UV とその微分。マップごとに 1 つ目か 2 つ目の UV を選ぶ。
+struct MapUv
+{
+    float2 uv, deltaX, deltaY;
 };
 
 PixelInput VsMain(VertexInput input)
@@ -134,13 +151,20 @@ PixelInput VsMain(VertexInput input)
     output.normal = mul(input.normal, (float3x3)g_model.world);
     output.tangent = float4(mul(input.tangent.xyz, (float3x3)g_model.world), input.tangent.w);
     output.uv = input.uv;
+    output.uv2 = input.uv2;
     return output;
 }
 
 float4 PsMain(PixelInput input, bool frontFace : SV_IsFrontFace) : SV_TARGET
 {
-    const float2 uv = input.uv;
-    const float2 deltaX = ddx(uv), deltaY = ddy(uv);
+    MapUv uvSets[2];
+    uvSets[0].uv = input.uv;
+    uvSets[0].deltaX = ddx(input.uv);
+    uvSets[0].deltaY = ddy(input.uv);
+    uvSets[1].uv = input.uv2;
+    uvSets[1].deltaX = ddx(input.uv2);
+    uvSets[1].deltaY = ddy(input.uv2);
+#define MAP_UV(map) uvSets[(g_model.mapUvSets >> (map)) & 1u]
 
     // --- 不透明度（合成モードが不透明なら見ない）--------------------------------
     float opacity = 1.0f;
@@ -149,7 +173,8 @@ float4 PsMain(PixelInput input, bool frontFace : SV_IsFrontFace) : SV_TARGET
         opacity = g_model.opacityValue;
         if (g_model.opacityIndex != kInvalidTextureIndex)
         {
-            opacity = SampleScalarMap(g_model.opacityIndex, TG_CHANNEL_SLOT_OPACITY, uv, deltaX, deltaY);
+            const MapUv m = MAP_UV(TG_MAP_OPACITY);
+            opacity = SampleScalarMap(g_model.opacityIndex, TG_CHANNEL_SLOT_OPACITY, m.uv, m.deltaX, m.deltaY);
         }
         if (g_model.blendMode == kBlendMasked)
         {
@@ -161,24 +186,28 @@ float4 PsMain(PixelInput input, bool frontFace : SV_IsFrontFace) : SV_TARGET
     float3 baseColor = g_model.baseColorTint;
     if (g_model.baseColorIndex != kInvalidTextureIndex)
     {
-        baseColor *= SampleMap(g_model.baseColorIndex, uv, MapLod(g_model.baseColorIndex, deltaX, deltaY)).rgb;
+        const MapUv m = MAP_UV(TG_MAP_BASE_COLOR);
+        baseColor *= SampleMap(g_model.baseColorIndex, m.uv, MapLod(g_model.baseColorIndex, m.deltaX, m.deltaY)).rgb;
     }
     baseColor = AdjustBaseColor(baseColor, g_model.colorAdjust.x, g_model.colorAdjust.y, g_model.brightness);
 
     float roughness = g_model.roughnessValue;
     if (g_model.roughnessIndex != kInvalidTextureIndex)
     {
-        roughness = SampleScalarMap(g_model.roughnessIndex, TG_CHANNEL_SLOT_ROUGHNESS, uv, deltaX, deltaY);
+        const MapUv m = MAP_UV(TG_MAP_ROUGHNESS);
+        roughness = SampleScalarMap(g_model.roughnessIndex, TG_CHANNEL_SLOT_ROUGHNESS, m.uv, m.deltaX, m.deltaY);
     }
     float metallic = g_model.metallicValue;
     if (g_model.metallicIndex != kInvalidTextureIndex)
     {
-        metallic = SampleScalarMap(g_model.metallicIndex, TG_CHANNEL_SLOT_METALLIC, uv, deltaX, deltaY);
+        const MapUv m = MAP_UV(TG_MAP_METALLIC);
+        metallic = SampleScalarMap(g_model.metallicIndex, TG_CHANNEL_SLOT_METALLIC, m.uv, m.deltaX, m.deltaY);
     }
     float ambientOcclusion = g_model.aoValue;
     if (g_model.aoIndex != kInvalidTextureIndex)
     {
-        ambientOcclusion = SampleScalarMap(g_model.aoIndex, TG_CHANNEL_SLOT_AO, uv, deltaX, deltaY);
+        const MapUv m = MAP_UV(TG_MAP_AO);
+        ambientOcclusion = SampleScalarMap(g_model.aoIndex, TG_CHANNEL_SLOT_AO, m.uv, m.deltaX, m.deltaY);
     }
 
     // --- 法線 --------------------------------------------------------------
@@ -188,7 +217,9 @@ float4 PsMain(PixelInput input, bool frontFace : SV_IsFrontFace) : SV_TARGET
     float3 normal = normalGeometric;
     if (g_model.normalIndex != kInvalidTextureIndex)
     {
-        float3 sampled = SampleMap(g_model.normalIndex, uv, MapLod(g_model.normalIndex, deltaX, deltaY)).rgb * 2.0f - 1.0f;
+        // 接線は 1 つ目の UV から求めてあるので、2 つ目の UV で読む法線マップは向きが合わないことがある。
+        const MapUv m = MAP_UV(TG_MAP_NORMAL);
+        float3 sampled = SampleMap(g_model.normalIndex, m.uv, MapLod(g_model.normalIndex, m.deltaX, m.deltaY)).rgb * 2.0f - 1.0f;
         if (g_model.flipNormalGreen != 0u)
         {
             sampled.y = -sampled.y;

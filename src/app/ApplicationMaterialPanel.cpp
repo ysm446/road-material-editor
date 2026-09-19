@@ -247,21 +247,27 @@ bool Application::DrawMaterialProperties(compositor::MaterialAsset& asset) {
 
     ui::SectionHeader("マップ");
     if (ui::BeginPropertyTable("materialMapRows")) {
-        changed |= DrawTextureSlotRow("ベースカラー", asset.baseColor, m_textureLibrary);
-        changed |= DrawTextureSlotRow("法線", asset.normal, m_textureLibrary);
+        changed |= DrawTextureSlotRow("ベースカラー", asset.baseColor, m_textureLibrary, &asset.mapUvSets,
+                                      compositor::MaterialMap::BaseColor);
+        changed |= DrawTextureSlotRow("法線", asset.normal, m_textureLibrary, &asset.mapUvSets,
+                                      compositor::MaterialMap::Normal);
         if (asset.normal != compositor::kNoTexture) {
             changed |= ui::PropertyBool(
                 "緑を反転", &asset.flipNormalGreen, true,
                 "法線マップの規約。OpenGL（Megascans などの既定）は入、"
                 "DirectX 規約の素材は切る。切り替えて陰影が自然なほうが正しい");
         }
-        changed |= DrawMapSlotRow("ラフネス", asset.roughness, m_textureLibrary);
-        changed |= DrawMapSlotRow("メタルネス", asset.metallic, m_textureLibrary);
-        changed |= DrawMapSlotRow("AO", asset.ambientOcclusion, m_textureLibrary);
+        changed |= DrawMapSlotRow("ラフネス", asset.roughness, m_textureLibrary, &asset.mapUvSets,
+                                  compositor::MaterialMap::Roughness);
+        changed |= DrawMapSlotRow("メタルネス", asset.metallic, m_textureLibrary, &asset.mapUvSets,
+                                  compositor::MaterialMap::Metallic);
+        changed |= DrawMapSlotRow("AO", asset.ambientOcclusion, m_textureLibrary, &asset.mapUvSets,
+                                  compositor::MaterialMap::AmbientOcclusion);
         changed |= DrawMapSlotRow("ハイト", asset.height, m_textureLibrary);
         {
             const compositor::TextureId before = asset.opacity.texture;
-            const bool slotChanged = DrawMapSlotRow("不透明度", asset.opacity, m_textureLibrary);
+            const bool slotChanged = DrawMapSlotRow("不透明度", asset.opacity, m_textureLibrary,
+                                                   &asset.mapUvSets, compositor::MaterialMap::Opacity);
             // マップを付けたのに不透明のままだと何も起きないので、マスク抜きへ切り替える。
             if (slotChanged && before == compositor::kNoTexture && asset.opacity.texture != compositor::kNoTexture &&
                 asset.blendMode == compositor::BlendMode::Opaque) {

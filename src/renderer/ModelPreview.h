@@ -16,6 +16,12 @@
 
 namespace tg::renderer {
 
+// シーンへ置いたモデル 1 つぶん。ワールド行列と、ノードに足す回転（Model ノードの設定。無ければ読んだままの姿勢）。
+struct ModelInstanceDraw {
+    DirectX::XMFLOAT4X4 world{};
+    const std::vector<ModelNodeRotation>* rotations = nullptr;
+};
+
 // モデル 1 つを回せるカメラで描く（モデルプレビューの窓と、アセットの帯のサムネイル）。
 // terrain-graph の ModelPreview から、配置（インスタンス描画）と大気を外したもの。
 //
@@ -38,11 +44,12 @@ public:
                 TonemapMode tonemap);
 
     // シーン（ビューポート）の本描画・シャドウパスの中で、置いたモデルを描く（PreviewRenderer::drawSceneExtras）。
-    // worlds は置いた数だけのワールド行列。本描画は線形 HDR を書き、露出とトーンマップはレンダラが掛ける。
+    // instances は置いた数だけ。部品は「ノードの行列 × ワールド行列」で描く。
+    // 本描画は線形 HDR を書き、露出とトーンマップはレンダラが掛ける。
     void RenderInScene(rhi::Device& device, rhi::PipelineCache& pipelineCache,
                        ID3D12GraphicsCommandList* commandList, const ModelAsset& model,
                        const compositor::MaterialLibrary& materials, const compositor::TextureLibrary& textures,
-                       const SceneDrawContext& context, const std::vector<DirectX::XMFLOAT4X4>& worlds);
+                       const SceneDrawContext& context, const std::vector<ModelInstanceDraw>& instances);
 
     Camera& GetCamera() { return m_camera; }
     bool HasOutput() const { return m_output.IsValid(); }

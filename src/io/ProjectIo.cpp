@@ -14,6 +14,7 @@
 #include <cwchar>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -254,6 +255,11 @@ compositor::NoiseParams ReadNoise(const json& node, const char* key,
 //
 // プロジェクトへの埋め込みと .tgmat で同じ形を使う。違うのはテクスチャ参照の書き方だけ。
 
+// compositor::MaterialMap の並び。maps のキーと同じ名前。
+const char* const kMaterialMapNames[] = {"baseColor", "normal", "roughness", "metallic",
+                                         "ambientOcclusion", "height", "opacity"};
+static_assert(std::size(kMaterialMapNames) == static_cast<size_t>(compositor::MaterialMap::Count));
+
 json WriteMaterialBody(const compositor::MaterialAsset& asset, const TextureWriter& writeTexture) {
     json node;
     node["name"] = asset.name;
@@ -281,6 +287,12 @@ json WriteMaterialBody(const compositor::MaterialAsset& asset, const TextureWrit
     maps["height"] = WriteMapSlot(asset.height, writeTexture);
     maps["opacity"] = WriteMapSlot(asset.opacity, writeTexture);
     node["maps"] = std::move(maps);
+    // マップごとの UV（1 か 2）。maps の中はテクスチャの参照だけにしておく（ProjectWorkspace が書き換えるため）。
+    json uvSets;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(compositor::MaterialMap::Count); ++i) {
+        uvSets[kMaterialMapNames[i]] = compositor::UsesSecondUv(asset, static_cast<compositor::MaterialMap>(i)) ? 2 : 1;
+    }
+    node["mapUvSets"] = std::move(uvSets);
     return node;
 }
 
@@ -318,6 +330,14 @@ void ReadMaterialBody(const json& node, compositor::MaterialAsset& asset,
     asset.ambientOcclusion = ReadMapSlot(*maps, "ambientOcclusion", readTexture);
     asset.height = ReadMapSlot(*maps, "height", readTexture);
     asset.opacity = ReadMapSlot(*maps, "opacity", readTexture);
+    // 無ければ（版の古いファイル）すべて 1 つ目の UV。
+    asset.mapUvSets = defaults.mapUvSets;
+    if (const json* uvSets = FindMember(node, "mapUvSets"); uvSets != nullptr && uvSets->is_object()) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(compositor::MaterialMap::Count); ++i) {
+            if (ReadInt(*uvSets, kMaterialMapNames[i], 1) == 2)
+                asset.mapUvSets |= compositor::MaterialMapBit(static_cast<compositor::MaterialMap>(i));
+        }
+    }
 }
 
 // --- レイヤー -------------------------------------------------------------
@@ -738,6 +758,15 @@ json WriteGraph(const graph::NodeGraph& graphData,
                              {"rotation", json::array({model->rotationDegrees[0], model->rotationDegrees[1],
                                                        model->rotationDegrees[2]})},
                              {"scale", model->scale}};
+            // FBX のノードに足す回転。無ければ書かない（読むと空）。
+            if (!model->nodeRotations.empty()) {
+                json rotations = json::array();
+                for (const auto& rotation : model->nodeRotations)
+                    rotations.push_back({{"node", rotation.node},
+                                         {"rotation", json::array({rotation.rotationDegrees[0], rotation.rotationDegrees[1],
+                                                                   rotation.rotationDegrees[2]})}});
+                item["model"]["nodeRotations"] = std::move(rotations);
+            }
         } else if (const auto* transform = std::get_if<graph::TransformNodeSettings>(&node.settings)) {
             item["transform"] = {
                 {"position", json::array({transform->position[0], transform->position[1], transform->position[2]})},
@@ -1021,6 +1050,19 @@ bool ReadGraph(const json& node, graph::NodeGraph& graphData,
                     assign(settings);
                     if (const json* reference = values ? FindMember(*values, "model") : nullptr; reference && readModel)
                         settings.model = readModel(*reference);
+                    if (const json* rotations = values ? FindMember(*values, "nodeRotations") : nullptr;
+                        rotations && rotations->is_array()) {
+                        for (const json& entry : *rotations) {
+                            if (!entry.is_object()) continue;
+                            renderer::ModelNodeRotation nodeRotation;
+                            nodeRotation.node = ReadString(entry, "node", "");
+                            const DirectX::XMFLOAT3 value = ReadFloat3(entry, "rotation", {});
+                            nodeRotation.rotationDegrees[0] = value.x;
+                            nodeRotation.rotationDegrees[1] = value.y;
+                            nodeRotation.rotationDegrees[2] = value.z;
+                            if (!nodeRotation.node.empty()) settings.nodeRotations.push_back(std::move(nodeRotation));
+                        }
+                    }
                     created.settings = settings;
                 } else {
                     graph::TransformNodeSettings settings;

@@ -34,7 +34,9 @@ struct ModelConstants {
     uint32_t tonemapMode;
     // 0 = プレビュー（sRGB へトーンマップ）、1 = シーン（線形 HDR、影を受ける）。
     uint32_t sceneMode;
-    uint32_t pad[2];
+    // マップごとの UV（MaterialAsset::mapUvSets）。立っているビットのマップは 2 つ目の UV で読む。
+    uint32_t mapUvSets;
+    uint32_t pad;
     // ワールド行列（転置して入れる。viewProjection と同じ規約）。
     DirectX::XMFLOAT4X4 world;
     // ここから下はシーンの影。MeshPbr と同じく転置せずに入れる。
@@ -164,7 +166,9 @@ void ModelPreview::Render(rhi::Device& device, rhi::PipelineCache& pipelineCache
     commandList->SetGraphicsRootSignature(pipelineCache.GlobalRootSignature());
 
     const compositor::MaterialAsset fallback;
-    const DirectX::XMMATRIX identity = DirectX::XMMatrixIdentity();
+    // 窓とサムネイルは読んだままの姿勢。部品の頂点はノードの座標なので、ノードの行列で運ぶ。
+    std::vector<DirectX::XMFLOAT4X4> nodeWorlds;
+    ModelNodeWorlds(*m_geometry, {}, nodeWorlds);
     const auto materialOf = [&](size_t part) -> const compositor::MaterialAsset& {
         const auto slot = m_geometry->lods[m_lod].parts[part].slot;
         const auto* material = slot < model.materials.size() ? materials.Find(model.materials[slot]) : nullptr;
@@ -175,7 +179,10 @@ void ModelPreview::Render(rhi::Device& device, rhi::PipelineCache& pipelineCache
         ModelConstants constants = {};
         DirectX::XMStoreFloat4x4(&constants.viewProjection,
                                  DirectX::XMMatrixTranspose(m_camera.ViewMatrix() * m_camera.ProjectionMatrix()));
-        DirectX::XMStoreFloat4x4(&constants.world, identity);
+        const uint32_t node = m_geometry->lods[m_lod].parts[part].node;
+        const DirectX::XMMATRIX world =
+            node < nodeWorlds.size() ? DirectX::XMLoadFloat4x4(&nodeWorlds[node]) : DirectX::XMMatrixIdentity();
+        DirectX::XMStoreFloat4x4(&constants.world, DirectX::XMMatrixTranspose(world));
         for (auto& index : constants.shadowIndices) index = compositor::kInvalidTextureIndex;
         // ベースカラーだけ sRGB として読む。それ以外はリニア（サムネイルと同じ）。
         constants.baseColorIndex = textures.SrvIndex(asset.baseColor, true);
@@ -185,6 +192,7 @@ void ModelPreview::Render(rhi::Device& device, rhi::PipelineCache& pipelineCache
         constants.aoIndex = textures.SrvIndex(asset.ambientOcclusion.texture, false);
         constants.opacityIndex = textures.SrvIndex(asset.opacity.texture, false);
         constants.mapChannels = compositor::PackMaterialChannels(asset);
+        constants.mapUvSets = asset.mapUvSets;
         constants.flipNormalGreen = asset.flipNormalGreen ? 1u : 0u;
         const bool hasEnvironment = environment.IsReady();
         constants.irradianceIndex = hasEnvironment ? environment.IrradianceSrvIndex() : compositor::kInvalidTextureIndex;
@@ -234,8 +242,8 @@ void ModelPreview::RenderInScene(rhi::Device& device, rhi::PipelineCache& pipeli
                                  ID3D12GraphicsCommandList* commandList, const ModelAsset& model,
                                  const compositor::MaterialLibrary& materials,
                                  const compositor::TextureLibrary& textures, const SceneDrawContext& context,
-                                 const std::vector<DirectX::XMFLOAT4X4>& worlds) {
-    if (!m_geometry || m_lod < 0 || worlds.empty()) return;
+                                 const std::vector<ModelInstanceDraw>& instances) {
+    if (!m_geometry || m_lod < 0 || instances.empty()) return;
     rhi::GraphicsPipelineDesc desc;
     desc.shaderPath = L"ModelPreview.hlsl";
     desc.vertexEntry = L"VsMain";
@@ -266,12 +274,20 @@ void ModelPreview::RenderInScene(rhi::Device& device, rhi::PipelineCache& pipeli
         return material ? *material : fallback;
     };
     const bool hasEnvironment = context.environment != nullptr && context.environment->IsReady();
-    const auto draw = [&](size_t part, const DirectX::XMFLOAT4X4& world) {
+    // 置いたモデルごとの、ノードのモデル座標での行列（回転を足したもの）。
+    static const std::vector<ModelNodeRotation> kNoRotations;
+    std::vector<std::vector<DirectX::XMFLOAT4X4>> nodeWorlds(instances.size());
+    for (size_t i = 0; i < instances.size(); ++i)
+        ModelNodeWorlds(*m_geometry, instances[i].rotations ? *instances[i].rotations : kNoRotations, nodeWorlds[i]);
+    const auto draw = [&](size_t part, size_t instance) {
         const auto& asset = materialOf(part);
+        const uint32_t node = m_geometry->lods[m_lod].parts[part].node;
+        DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(&instances[instance].world);
+        if (node < nodeWorlds[instance].size()) world = DirectX::XMLoadFloat4x4(&nodeWorlds[instance][node]) * world;
         ModelConstants constants = {};
         DirectX::XMStoreFloat4x4(&constants.viewProjection,
                                  DirectX::XMMatrixTranspose(DirectX::XMLoadFloat4x4(&context.viewProjection)));
-        DirectX::XMStoreFloat4x4(&constants.world, DirectX::XMMatrixTranspose(DirectX::XMLoadFloat4x4(&world)));
+        DirectX::XMStoreFloat4x4(&constants.world, DirectX::XMMatrixTranspose(world));
         constants.sceneMode = 1;
         constants.baseColorIndex = textures.SrvIndex(asset.baseColor, true);
         constants.normalIndex = textures.SrvIndex(asset.normal, false);
@@ -280,6 +296,7 @@ void ModelPreview::RenderInScene(rhi::Device& device, rhi::PipelineCache& pipeli
         constants.aoIndex = textures.SrvIndex(asset.ambientOcclusion.texture, false);
         constants.opacityIndex = textures.SrvIndex(asset.opacity.texture, false);
         constants.mapChannels = compositor::PackMaterialChannels(asset);
+        constants.mapUvSets = asset.mapUvSets;
         constants.flipNormalGreen = asset.flipNormalGreen ? 1u : 0u;
         constants.irradianceIndex = hasEnvironment ? context.environment->IrradianceSrvIndex()
                                                    : compositor::kInvalidTextureIndex;
@@ -323,14 +340,15 @@ void ModelPreview::RenderInScene(rhi::Device& device, rhi::PipelineCache& pipeli
     };
     // 不透明とマスク抜きを先に描く。半透明は影を落とさず、本描画の最後に重ねる。
     commandList->SetPipelineState(opaquePipeline);
-    for (const auto& world : worlds)
+    for (size_t instance = 0; instance < instances.size(); ++instance)
         for (size_t i = 0; i < m_meshes.size(); ++i)
-            if (m_meshes[i].IsValid() && materialOf(i).blendMode != compositor::BlendMode::Translucent) draw(i, world);
+            if (m_meshes[i].IsValid() && materialOf(i).blendMode != compositor::BlendMode::Translucent) draw(i, instance);
     if (translucentPipeline != nullptr) {
         commandList->SetPipelineState(translucentPipeline);
-        for (const auto& world : worlds)
+        for (size_t instance = 0; instance < instances.size(); ++instance)
             for (size_t i = 0; i < m_meshes.size(); ++i)
-                if (m_meshes[i].IsValid() && materialOf(i).blendMode == compositor::BlendMode::Translucent) draw(i, world);
+                if (m_meshes[i].IsValid() && materialOf(i).blendMode == compositor::BlendMode::Translucent)
+                    draw(i, instance);
     }
 }
 

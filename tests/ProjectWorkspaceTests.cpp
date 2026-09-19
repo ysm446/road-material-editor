@@ -104,7 +104,8 @@ void TestWorkspace() {
                    {"textures", json::array({{{"id", 1}, {"name", "a"}, {"path", tg::ToUtf8Portable(movedImage)}},
                                              {{"id", 2}, {"name", "b"}, {"path", tg::ToUtf8Portable(outside)}},
                                              {{"id", 3}, {"name", "c"}, {"path", tg::ToUtf8Portable(missing)}}})},
-                   {"materials", json::array({{{"id", 1}, {"name", "embedded"}, {"maps", {{"baseColor", 2}}}}})},
+                   {"materials", json::array({{{"id", 1}, {"name", "embedded"}, {"maps", {{"baseColor", 2}}},
+                                               {"mapUvSets", {{"baseColor", 1}, {"ambientOcclusion", 2}}}}})},
                    {"skies", json::array({{{"id", 1}, {"name", "sky"}, {"hdri", nullptr}}})},
                    {"graph", {{"nodes", json::array()}}}};
     const json legacyCopy = legacy;
@@ -118,6 +119,7 @@ void TestWorkspace() {
     Check(loaded["textures"][1]["path"] == tg::ToUtf8Portable(root / "Imported" / "external.png"), "取り込んだ画像を指す");
     Check(loaded["textures"][2]["path"] == tg::ToUtf8Portable(missing), "リンク切れの画像はパスのまま残る");
     Check(loaded["materials"][0]["maps"]["baseColor"] == 2 && loaded["materials"][0]["name"] == "embedded", "マテリアルの画像参照を番号へ戻す");
+    Check(loaded["materials"][0]["mapUvSets"]["ambientOcclusion"] == 2, "マップごとの UV が分離保存と展開で残る");
     Check(workspace.StartupScene() == scene, "開始シーンを覚える");
     json resaved = legacyCopy;
     Check(workspace.SaveScene(workspace.UniquePath(root / "Scenes", "resaved", ".tgscene"), resaved), "同じ旧文書をもう一度シーンへ保存する");

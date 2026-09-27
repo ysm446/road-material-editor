@@ -90,6 +90,11 @@ public:
     // ミップ 0 の uav も同じハンドルなので一緒に落ちる。
     void DeferFreeMipViews(GpuTexture& texture);
 
+    // RTV だけを返す。初期化のクリアにしか RTV を使わないテクスチャ
+    // （サムネイルやプレビュー）は、初期化を終えたら呼ぶこと
+    // （RTV ヒープは小さく、1 枚 1 枠を持ち続けると素材を並べただけで枯渇するため）。
+    void DeferFreeRtv(GpuTexture& texture);
+
     // テクスチャ / バッファの本体とディスクリプタを、まとめて遅延解放する。
     // GPU 待機は不要。呼び出し後、引数は空になる。
     void DeferRelease(GpuTexture& texture);

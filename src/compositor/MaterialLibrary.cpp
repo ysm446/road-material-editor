@@ -265,6 +265,9 @@ bool MaterialLibrary::BuildThumbnail(rhi::Device& device, rhi::PipelineCache& pi
     if (!executed) {
         return false;
     }
+    // RTV は初回のクリアにしか使わない（以降は UAV で書く）。持ち続けると
+    // マテリアル 1 つで 1 枠を占め、小さな RTV ヒープが枯渇する。
+    device.DeferFreeRtv(thumbnail);
     return true;
 }
 

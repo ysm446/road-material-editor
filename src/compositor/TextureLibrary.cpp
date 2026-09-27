@@ -462,6 +462,9 @@ bool TextureLibrary::BuildPreview(rhi::Device& device, rhi::PipelineCache& pipel
         return false;
     }
     preview.state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    // Discard に要るのは RTV フラグだけで、RTV ディスクリプタは使わない。
+    // テクスチャ 1 枚で 1 枠を占め続けないよう返す。
+    device.DeferFreeRtv(preview);
     return true;
 }
 

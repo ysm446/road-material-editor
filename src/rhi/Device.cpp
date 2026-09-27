@@ -20,7 +20,10 @@ namespace {
 // ディスクリプタは 1 枠 32 バイト程度（8192 枠で 256KB ほど）、上限は
 // Tier 1 でも 100 万枠なので、ここは余裕を持たせるほうが安い。
 constexpr uint32_t kSrvHeapCapacity = 8192;
-constexpr uint32_t kRtvHeapCapacity = 64;
+// RTV は描画先として使い続けるもの（バックバッファ、プレビューの出力など）だけが持つ。
+// 初期化のクリアにしか使わないサムネイル類は DeferFreeRtv で返すので、
+// ここは常駐する描画先の数に余裕を足した程度でよい（シェーダ不可視なので安い）。
+constexpr uint32_t kRtvHeapCapacity = 256;
 constexpr uint32_t kDsvHeapCapacity = 32;
 
 // 1 フレームあたりのアップロード容量。定数バッファと小さめの転送を想定した初期値。
@@ -120,6 +123,11 @@ void Device::DeferFreeMipViews(GpuTexture& texture) {
     texture.mipUavs.clear();
     texture.mipSrvs.clear();
     texture.uav = DescriptorHandle{};
+}
+
+void Device::DeferFreeRtv(GpuTexture& texture) {
+    DeferFree(m_rtvHeap, texture.rtv);
+    texture.rtv = DescriptorHandle{};
 }
 
 void Device::DeferRelease(GpuTexture& texture) {

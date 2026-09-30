@@ -146,6 +146,17 @@ GizmoScreen BuildGizmo(const renderer::Camera& camera, const XMFLOAT3& pivot, co
     return gizmo;
 }
 
+// 回転のギズモの軸（ローカル）。ノード自身の回転と出力側の Transform の回転で運んだ X / Y / Z。
+// 輪がモデルと一緒に回り、掴んだ輪はモデルの軸まわりに回す。
+void LocalRotationAxes(const float rotationDegrees[3], const XMFLOAT4X4& parent, XMFLOAT3 axes[3]) {
+    const XMMATRIX rotation = XMMatrixRotationRollPitchYaw(XMConvertToRadians(rotationDegrees[0]),
+                                                           XMConvertToRadians(rotationDegrees[1]),
+                                                           XMConvertToRadians(rotationDegrees[2])) *
+                              RotationPart(XMLoadFloat4x4(&parent));
+    for (int axis = 0; axis < 3; ++axis)
+        XMStoreFloat3(&axes[axis], XMVector3Normalize(XMVector3TransformNormal(XMLoadFloat3(&kAxes[axis]), rotation)));
+}
+
 // ギズモの種類。Application::ModelGizmoMode と同じ並び。
 enum class GizmoKind { Translate, Rotate, Scale };
 
@@ -677,19 +688,20 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
             if (!center.visible) return true;
             const float angleNow = std::atan2(io.MousePos.y - center.screen.y, io.MousePos.x - center.screen.x);
             const float anglePress = std::atan2(drag.pressPos.y - center.screen.y, drag.pressPos.x - center.screen.x);
-            const XMVECTOR axis = XMLoadFloat3(&kAxes[drag.handle - kHandleRing]);
+            // 輪はローカルの軸（掴んだときの姿勢。drag.nodeAxes）。画面での向きの判定はそのワールドの向きで行う。
+            const int axisIndex = drag.handle - kHandleRing;
+            const XMVECTOR worldAxis = XMLoadFloat3(&drag.nodeAxes[axisIndex]);
             const XMFLOAT3 eye = camera.Position();
-            const float facing = XMVectorGetX(XMVector3Dot(axis, XMVectorSubtract(XMLoadFloat3(&eye), pivot))) >= 0.0f ? 1.0f : -1.0f;
+            const float facing =
+                XMVectorGetX(XMVector3Dot(worldAxis, XMVectorSubtract(XMLoadFloat3(&eye), pivot))) >= 0.0f ? 1.0f : -1.0f;
             float angle = -(angleNow - anglePress) * facing;
             // Ctrl で 15 度刻み。
             if (io.KeyCtrl) angle = std::round(angle / XMConvertToRadians(15.0f)) * XMConvertToRadians(15.0f);
-            // ワールドの軸まわりに回す。ノードの回転 R は親の回転 P の手前に掛かるので、R' = R · P · Ra · P⁻¹。
-            const XMMATRIX parentRotation = RotationPart(parent);
+            // モデル自身の軸まわりに回す。行ベクトルなので手前に掛ける（R' = Ra · R）。
             const XMMATRIX start = XMMatrixRotationRollPitchYaw(XMConvertToRadians(drag.startRotation[0]),
                                                                 XMConvertToRadians(drag.startRotation[1]),
                                                                 XMConvertToRadians(drag.startRotation[2]));
-            const XMMATRIX rotated = start * parentRotation * XMMatrixRotationAxis(axis, angle) *
-                                     XMMatrixTranspose(parentRotation);
+            const XMMATRIX rotated = XMMatrixRotationAxis(XMLoadFloat3(&kAxes[axisIndex]), angle) * start;
             float degrees[3];
             renderer::RotationToDegrees(rotated, degrees);
             if (!std::equal(std::begin(degrees), std::end(degrees), target.rotation)) {
@@ -722,7 +734,10 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
         const GizmoScreen gizmo = BuildGizmo(m_renderer.GetCamera(), nodeGizmo.origin, viewportMin, viewportMax, nodeGizmo.axes);
         m_modelGizmoHover = HitGizmo(gizmo, GizmoKind::Rotate, io.MousePos);
     } else if (hasGizmo && itemHovered) {
-        const GizmoScreen gizmo = BuildGizmo(m_renderer.GetCamera(), pivot, viewportMin, viewportMax);
+        XMFLOAT3 axes[3];
+        LocalRotationAxes(selected.rotation, parent, axes);
+        const GizmoScreen gizmo = BuildGizmo(m_renderer.GetCamera(), pivot, viewportMin, viewportMax,
+                                             m_modelGizmoMode == ModelGizmoMode::Rotate ? axes : kAxes);
         m_modelGizmoHover = HitGizmo(gizmo, static_cast<GizmoKind>(m_modelGizmoMode), io.MousePos);
     }
     const auto beginDrag = [&](graph::GraphId nodeId, int handle) {
@@ -740,6 +755,7 @@ bool Application::HandleModelInstanceInput(bool itemActive, bool itemHovered, co
         std::copy(target.position, target.position + 3, drag.startPosition);
         std::copy(target.rotation, target.rotation + 3, drag.startRotation);
         drag.startScale = *target.scale;
+        if (handle >= kHandleRing && handle < kHandleScale) LocalRotationAxes(target.rotation, frameParent, drag.nodeAxes);
         const XMVECTOR p = XMLoadFloat3(&framePivot);
         if (handle >= kHandleAxis && handle < kHandlePlane) {
             ClosestOnLine(rayOrigin, rayDirection, p, XMLoadFloat3(&kAxes[handle - kHandleAxis]), drag.pressParameter);
@@ -901,10 +917,16 @@ void Application::DrawModelInstanceOverlay(const ImVec2& viewportMin, const ImVe
     // --- ギズモ（ImGui。深度は見ず常に手前） ---------------------------------------
     XMFLOAT3 pivot{};
     XMFLOAT4X4 parent{};
-    if (!modelSelected || !NodeGizmoFrame(m_selectedGraphNode, pivot, parent)) return;
+    NodeTransformRef transform;
+    if (!modelSelected || !NodeGizmoFrame(m_selectedGraphNode, pivot, parent) ||
+        !NodeTransform(m_selectedGraphNode, transform)) return;
+    // 回転の輪はモデルの軸に沿わせる（回すと輪も一緒に回る）。移動・倍率はワールドの軸のまま。
+    XMFLOAT3 localAxes[3];
+    LocalRotationAxes(transform.rotation, parent, localAxes);
     const GizmoScreen gizmo = hasNodeGizmo
         ? BuildGizmo(m_renderer.GetCamera(), nodeGizmo.origin, viewportMin, viewportMax, nodeGizmo.axes)
-        : BuildGizmo(m_renderer.GetCamera(), pivot, viewportMin, viewportMax);
+        : BuildGizmo(m_renderer.GetCamera(), pivot, viewportMin, viewportMax,
+                     m_modelGizmoMode == ModelGizmoMode::Rotate ? localAxes : kAxes);
     if (!gizmo.valid) return;
     auto* draw = ImGui::GetWindowDrawList();
     draw->PushClipRect(viewportMin, viewportMax, true);

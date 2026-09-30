@@ -31,6 +31,8 @@ public:
                                      const std::string& name, const char* extension) const;
     std::filesystem::path Resolve(const nlohmann::json& reference) const;
     nlohmann::json Reference(const std::filesystem::path& path);
+    // リンク切れ（ファイルが無い）のアセットの参照。固定 ID と、ルートからの元のパスをそのまま残す。
+    nlohmann::json MissingReference(const std::filesystem::path& path, const std::string& uid) const;
     // 中身が変わらなければ書き込まない（更新日時を保ち、サムネイルのキャッシュを無効にしない）。
     bool SaveAsset(std::filesystem::path& path, const char* kind, nlohmann::json& body);
     // ID を持たない本文（旧 .tgproj の埋め込みなど）と同じ中身の既存アセットの ID を探す。

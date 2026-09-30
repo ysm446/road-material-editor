@@ -274,6 +274,12 @@ fs::path ProjectWorkspace::Resolve(const json& reference) const {
     return !text.empty() && Contains(path) ? path : fs::path{};
 }
 
+json ProjectWorkspace::MissingReference(const fs::path& path, const std::string& uid) const {
+    json reference = {{"path", ToUtf8Portable(path.lexically_normal().lexically_relative(m_root))}};
+    if (!uid.empty()) reference["uid"] = uid;
+    return reference;
+}
+
 bool ProjectWorkspace::SaveAsset(fs::path& path, const char* kind, json& body) {
     if (!Contains(path)) return false;
     auto uid = String(body, "uid");
@@ -368,6 +374,12 @@ bool ProjectWorkspace::SaveScene(const fs::path& path, json& document) {
     const auto save = [&](json& entry, const char* kind, const char* folder, const char* ext) {
         const json id = entry.contains("id") ? entry["id"] : json();
         fs::path assetPath = FromUtf8(String(entry, "_assetPath"));
+        // リンク切れ（開いたときにファイルが無かった）はファイルを作らず、元の参照をそのまま残す。
+        if (entry.value("_missing", false) && !assetPath.empty()) {
+            entry = {{"asset", MissingReference(assetPath, String(entry, "uid"))}};
+            if (!id.is_null()) entry["id"] = id;
+            return true;
+        }
         if (assetPath.empty() || !Contains(assetPath)) {
             // ID の無い埋め込み（旧 .tgproj）を保存し直すたびに連番の複製を作らない。
             if (String(entry, "uid").empty()) {
@@ -479,13 +491,27 @@ bool ProjectWorkspace::Expand(json& document) {
         textures.push_back({{"id", id}, {"source", ref}});
         return id;
     };
-    const auto read = [&](json& entry, const char* kind) {
+    // 見つからない共有アセット。placeholder があればリンク切れの代わりで開き（参照は _missing と
+    // _assetPath / uid に残し、保存時にそのまま書き戻す）、無ければ読み込みを止める。
+    const auto read = [&](json& entry, const char* kind, const json& placeholder = json()) {
         const auto ref = entry.value("asset", json::object());
         const auto assetPath = Resolve(ref);
         json body;
         if (assetPath.empty() || !ReadAsset(assetPath, kind, body)) {
-            TG_LOG_ERROR("アセットを読み込めません: %s", String(ref, "path").c_str());
-            return false;
+            const auto text = String(ref, "path");
+            if (placeholder.is_null() || text.empty()) {
+                TG_LOG_ERROR("アセットを読み込めません: %s", text.c_str());
+                return false;
+            }
+            TG_LOG_WARN("アセットが見つかりません。リンク切れとして開きます: %s", text.c_str());
+            body = placeholder;
+            body["name"] = ToUtf8Portable(FromUtf8(text).stem());
+            body["_missing"] = true;
+            body["uid"] = String(ref, "uid");
+            body["id"] = entry.value("id", json());
+            body["_assetPath"] = ToUtf8Portable((m_root / FromUtf8(text)).lexically_normal());
+            entry = std::move(body);
+            return true;
         }
         body["id"] = entry.value("id", json());
         body["_assetPath"] = ToUtf8Portable(assetPath);
@@ -519,10 +545,19 @@ bool ProjectWorkspace::Expand(json& document) {
                 if (!entry.is_object()) return false;
                 if (!entry.contains("asset")) continue;
                 if (key == "layerMaterials") {
-                    if (!read(entry, "layer-material-asset")) return false;
+                    // 灰色の層 1 枚だけのレイヤーマテリアルとして開く（区間の割り当ては番号で残る）。
+                    static const json kMissingLayer = {
+                        {"displacement", 0.0}, {"layerBlendRange", 0.2},
+                        {"materials", json::array({{{"ambientOcclusion", 1.0}, {"baseColor", {0.5, 0.5, 0.5}}, {"blendMode", 0},
+                                                    {"heightGate", 0}, {"heightGateSoftness", 0.2}, {"heightGateThreshold", 0.5},
+                                                    {"mask", nullptr}, {"material", nullptr}, {"metallic", 0.0},
+                                                    {"roughness", 0.8}, {"uvRepeat", 2.0}, {"worldUv", false}}})}};
+                    if (!read(entry, "layer-material-asset", kMissingLayer)) return false;
                     MapLayerMaterials(entry, materialId);
                 } else {
-                    if (!read(entry, "boundary-material-asset")) return false;
+                    static const json kMissingBoundary = {{"mask", nullptr}, {"height", nullptr}, {"width", 0.5}, {"repeat", 2.0},
+                                                          {"depth", 0.03}, {"heightCenter", 0.5}, {"alongU", false}, {"invertMask", false}};
+                    if (!read(entry, "boundary-material-asset", kMissingBoundary)) return false;
                     for (const char* slot : {"mask", "height"}) {
                         const auto id = textureId(entry.value(slot, json()));
                         entry[slot] = id.is_null() ? json(0) : id;
@@ -550,7 +585,8 @@ bool ProjectWorkspace::Expand(json& document) {
         }
     }
     for (auto& entry : materials) {
-        if (!read(entry, "material-asset")) return false;
+        // 既定値のマテリアル（画像なし）として開く。
+        if (!read(entry, "material-asset", json::object())) return false;
         MapTextures(entry, textureId);
     }
     for (auto& entry : textures) {

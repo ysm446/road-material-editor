@@ -735,6 +735,24 @@ void Application::DrawAssetBrowser() {
         // 一覧で改名中に別のフォルダへ移ったら、入力欄が描かれなくなるので取り消す。
         if (!m_assetRenameTarget.empty() && !m_assetRenameInTree && m_assetRenameTarget.parent_path() != m_assetDirectory)
             FinishAssetRename(false);
+        // 別のアプリへ切り替えたら、入力中の名前で確定して抜ける（エクスプローラと同じ）。
+        if (!m_assetRenameTarget.empty() && io.AppFocusLost) FinishAssetRename(true);
+        // 名前の再クリックによる改名待ち。ダブルクリックの猶予が過ぎたら改名に入る。
+        // 別のクリック・ドラッグ・選択の変化・フォルダの移動があれば取りやめる。
+        if (!m_assetRenameArmed.empty()) {
+            const bool stillValid = m_assetRenameTarget.empty() && !io.AppFocusLost && m_selectedAssets.size() == 1 &&
+                                    m_selectedAssets.front() == m_assetRenameArmed &&
+                                    m_assetRenameArmed.parent_path() == m_assetDirectory &&
+                                    ImGui::GetDragDropPayload() == nullptr &&
+                                    !ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                                    !ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+            if (!stillValid) m_assetRenameArmed.clear();
+            else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                     ImGui::GetTime() - m_assetRenameArmedTime > io.MouseDoubleClickTime) {
+                const auto target = m_assetRenameArmed; m_assetRenameArmed.clear();
+                OpenAssetRename(target);
+            }
+        }
         const float size = ui::Scaled(84);
         const int columns = std::max(1, int(ImGui::GetContentRegionAvail().x / (size + ImGui::GetStyle().ItemSpacing.x)));
         // 読み込み済みのものをパスで引く表。ファイルごとにライブラリを総なめしない。
@@ -755,9 +773,8 @@ void Application::DrawAssetBrowser() {
         for (const auto& a : m_skyLibrary.Entries()) if (!a.assetPath.empty())
             loaded[PathKey(a.assetPath)] = {static_cast<ImTextureID>(a.thumbnail.srv.gpu.ptr)};
         for (const auto& a : m_surfaceLayouts.layerMaterials) if (!a.assetPath.empty()) {
-            const auto cached = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == a.id; });
             Loaded entry;
-            entry.handle = cached != m_layerThumbnails.end() && cached->ready ? static_cast<ImTextureID>(cached->texture.srv.gpu.ptr) : 0;
+            entry.handle = LayerThumbnailHandle(a.id);
             entry.layer = a.id;
             loaded[PathKey(a.assetPath)] = entry;
         }
@@ -838,6 +855,14 @@ void Application::DrawAssetBrowser() {
             // 全部をそのままドラッグできるよう選択を残し、ドラッグせずに離したら単独へ絞る。
             const bool plain = !io.KeyCtrl && !io.KeyShift;
             if (thumb.clicked) {
+                // 1 つだけ選ばれている項目の名前をクリックし直したら改名待ちにする。
+                // 絵の部分のクリックや、選んでいなかった項目へのクリックは選ぶだけ。
+                const bool onCaption = io.MouseClickedPos[ImGuiMouseButton_Left].y > thumb.max.y;
+                if (onCaption && plain && selected && m_selectedAssets.size() == 1 && !thumb.doubleClicked &&
+                    m_assetRenameTarget.empty() && path.filename() != L"project.tgproj") {
+                    m_assetRenameArmed = path;
+                    m_assetRenameArmedTime = ImGui::GetTime();
+                }
                 if (!(plain && selected && m_selectedAssets.size() > 1)) SelectAsset(path, io.KeyCtrl, io.KeyShift);
                 if (plain) {
                     // 読み込み済みのものは、一覧での選択もそれへ合わせる（プレビューの窓が追従する）。
@@ -864,6 +889,7 @@ void Application::DrawAssetBrowser() {
                 m_assetSelectionAnchor = path;
             }
             if (thumb.doubleClicked) {
+                m_assetRenameArmed.clear();
                 if (folder) {
                     m_assetDirectory = path;
                     m_assetRefresh = true;
@@ -931,7 +957,7 @@ void Application::DrawAssetBrowser() {
                     : ext == ".fbx" ? "ダブルクリックでモデル（.tgmodel）を作ってシーンへ読み込む"
                     : ext == ".tgmodel" ? "ダブルクリックでシーンへ読み込んでプレビュー"
                     : "ダブルクリックで開く";
-                ImGui::SetTooltip("%s\n%s\nCtrl / Shift + クリックで複数選択", ToUtf8Display(path).c_str(), hint);
+                ImGui::SetTooltip("%s\n%s\n選択中の名前をクリックで名前を変更\nCtrl / Shift + クリックで複数選択", ToUtf8Display(path).c_str(), hint);
             }
             if (ImGui::BeginPopupContextItem("assetMenu")) {
                 if (!IsAssetSelected(path)) SelectAsset(path, false, false);
@@ -992,8 +1018,9 @@ void Application::DrawAssetBrowser() {
         }
         // 余白をクリックしたら選択を外す（修飾キー付きなら残す）。
         if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered() &&
-            !io.KeyCtrl && !io.KeyShift) {
+            !ImGui::IsAnyItemActive() && !io.KeyCtrl && !io.KeyShift) {
             m_selectedAssets.clear();
+            m_assetSelectionAnchor.clear();
         }
         if (ImGui::BeginPopupContextWindow("createAsset", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
             if (ImGui::MenuItem("フォルダを作成")) createFolder(m_assetDirectory);

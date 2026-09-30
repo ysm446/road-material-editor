@@ -18,5 +18,7 @@ struct BoundaryMaterial {
     // 共有アセット（.tgboundary）のファイルと固定 ID。未保存なら空。アンドゥの写しにも入る。
     std::filesystem::path assetPath;
     std::string assetUid;
+    // 開いたときに .tgboundary が無かった（リンク切れ）。保存しても元の参照を残し、ファイルは作らない。
+    bool missing = false;
 };
 }

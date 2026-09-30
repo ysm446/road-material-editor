@@ -355,7 +355,9 @@ void Application::ProcessLayerThumbnails() {
     }
     for (auto it = m_layerThumbnails.begin(); it != m_layerThumbnails.end();) {
         if (std::none_of(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(), [&](const auto& p) { return p.id == it->id; })) {
-            m_device.DeferRelease(it->texture); it = m_layerThumbnails.erase(it);
+            m_device.DeferRelease(it->texture);
+            if (it->stored.IsValid()) m_device.DeferRelease(it->stored);
+            it = m_layerThumbnails.erase(it);
         } else ++it;
     }
     if (m_surfaceLayouts.layerMaterials.empty()) return;
@@ -364,6 +366,16 @@ void Application::ProcessLayerThumbnails() {
             LayerThumbnail entry; entry.id = preset.id; m_layerThumbnails.push_back(std::move(entry));
             m_layerThumbnailsDirty = true;
         }
+    // 描き直しは 1 つずつで時間がかかるので、それまでは前回保存時にディスクへ残した画像を出す。
+    // 残した画像はファイルの内容と照合済み（ThumbnailIsCurrent）。未保存の編集は描き上がりで置き換わる。
+    for (auto& entry : m_layerThumbnails) {
+        if (entry.storedChecked || entry.ready) continue;
+        entry.storedChecked = true;
+        const auto preset = std::find_if(m_surfaceLayouts.layerMaterials.begin(), m_surfaceLayouts.layerMaterials.end(),
+            [&](const auto& p) { return p.id == entry.id; });
+        if (preset != m_surfaceLayouts.layerMaterials.end() && !preset->assetPath.empty())
+            m_assetThumbnails.LoadStored(m_device, m_workspace, preset->assetPath, entry.stored);
+    }
     if (!m_layerThumbnailInitialized) {
         auto& renderer = m_layerThumbnailRenderer;
         renderer.RequestShadowCascadeCount(1); renderer.RequestShadowResolution(1024);
@@ -405,8 +417,16 @@ void Application::RenderLayerThumbnails(ID3D12GraphicsCommandList* commandList) 
     if (entry != m_layerThumbnails.end()) {
         entry->ready = m_layerThumbnailRenderer.CopyOutputTo(commandList, entry->texture) || entry->ready;
         entry->dirty = false;
+        if (entry->ready && entry->stored.IsValid()) m_device.DeferRelease(entry->stored);
     }
     m_layerThumbnailActive = 0;
+}
+
+ImTextureID Application::LayerThumbnailHandle(graph::SurfaceId id) const {
+    const auto entry = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == id; });
+    if (entry == m_layerThumbnails.end()) return 0;
+    if (entry->ready) return static_cast<ImTextureID>(entry->texture.srv.gpu.ptr);
+    return entry->stored.IsValid() ? static_cast<ImTextureID>(entry->stored.srv.gpu.ptr) : 0;
 }
 
 // レイヤーマテリアルをシーンから外す。ファイル（.tglayer）は残す。配置で使っていれば外さない。

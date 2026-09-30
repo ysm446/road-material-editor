@@ -443,10 +443,15 @@ private:
     struct LayerThumbnail {
         graph::SurfaceId id = 0;
         rhi::GpuTexture texture;
+        // 描き上がるまで代わりに出す、前回保存時にディスクへ残した画像（無ければ無効）。
+        rhi::GpuTexture stored;
+        bool storedChecked = false;
         bool dirty = true;
         bool ready = false;
         std::string contentKey;
     };
+    // 描き上がっていればそれを、まだならディスクに残した画像を返す（どちらも無ければ 0）。
+    ImTextureID LayerThumbnailHandle(graph::SurfaceId id) const;
     std::vector<LayerThumbnail> m_layerThumbnails;
     renderer::PreviewRenderer m_layerThumbnailRenderer;
     bool m_layerThumbnailInitialized = false;
@@ -748,6 +753,10 @@ private:
     // 左のフォルダ階層の行で編集しているとき true（一覧の同じフォルダには欄を出さない）。
     bool m_assetRenameInTree = false;
     char m_assetRenameBuffer[256] = {};
+    // 選択済みの項目の名前をもう一度クリックしたときの改名待ち（エクスプローラと同じ）。
+    // ダブルクリックの猶予が過ぎても他の操作が無ければ改名に入る。
+    std::filesystem::path m_assetRenameArmed;
+    double m_assetRenameArmedTime = 0.0;
     std::filesystem::path m_pendingAssetRename;
     std::string m_pendingAssetRenameName;
     // **ファイルを持つアセットの名前はファイル名（拡張子なし）を正とする。**

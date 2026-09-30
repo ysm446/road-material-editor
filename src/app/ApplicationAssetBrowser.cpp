@@ -755,9 +755,8 @@ void Application::DrawAssetBrowser() {
         for (const auto& a : m_skyLibrary.Entries()) if (!a.assetPath.empty())
             loaded[PathKey(a.assetPath)] = {static_cast<ImTextureID>(a.thumbnail.srv.gpu.ptr)};
         for (const auto& a : m_surfaceLayouts.layerMaterials) if (!a.assetPath.empty()) {
-            const auto cached = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(), [&](const auto& t) { return t.id == a.id; });
             Loaded entry;
-            entry.handle = cached != m_layerThumbnails.end() && cached->ready ? static_cast<ImTextureID>(cached->texture.srv.gpu.ptr) : 0;
+            entry.handle = LayerThumbnailHandle(a.id);
             entry.layer = a.id;
             loaded[PathKey(a.assetPath)] = entry;
         }

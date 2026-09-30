@@ -105,6 +105,16 @@ void AssetThumbnailCache::Store(rhi::Device& device, const fs::path& path, rhi::
     m_entries.emplace(path, std::move(entry));
 }
 
+bool AssetThumbnailCache::LoadStored(rhi::Device& device, io::ProjectWorkspace& workspace, const fs::path& path,
+                                     rhi::GpuTexture& output) {
+    if (!workspace.Contains(path)) return false;
+    const auto record = io::AssetThumbnailRecord(workspace, path);
+    if (!io::ThumbnailIsCurrent(record)) return false;
+    if (BuildImage(device, record.image, output)) return true;
+    device.DeferRelease(output);
+    return false;
+}
+
 bool AssetThumbnailCache::BuildImage(rhi::Device& device, const fs::path& path, rhi::GpuTexture& output) {
     const auto extension = Extension(path);
     const bool hdr = extension == ".hdr", linear = hdr || extension == ".exr";

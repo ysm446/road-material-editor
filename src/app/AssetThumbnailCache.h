@@ -45,6 +45,10 @@ public:
                  const std::filesystem::path& directory);
     void Destroy(rhi::Device& device);
     static bool Supports(const std::filesystem::path& path);
+    // ディスクに残したサムネイル（`.terrain-graph/thumbnails/`）が今のファイルと一致すれば読む。
+    // 読み込み済みのレイヤーマテリアルが描き上がるまでの代わりに使う。フレームの外で呼ぶ。
+    bool LoadStored(rhi::Device& device, io::ProjectWorkspace& workspace, const std::filesystem::path& path,
+                    rhi::GpuTexture& output);
     // モデルのサムネイルの照らし方（ビューポートと同じ環境・太陽・露出）。Process の前に渡す。
     // environment は Process の間だけ参照する。
     struct ModelLighting {

@@ -175,10 +175,7 @@ bool Application::DrawRoadsideTab(graph::GraphId roadId, graph::SurfaceSide side
                             for (const auto& p : roadsideEdit.layerMaterials) {
                                 if (p.id == graph::PresetLayerMaterial(roadsideEdit, span.preset)) presetIndex = static_cast<int>(presetIds.size());
                                 presetIds.push_back(p.id); presetNames.push_back(p.name.c_str());
-                                const auto thumbnail = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(),
-                                    [&](const auto& entry) { return entry.id == p.id; });
-                                presetThumbnails.push_back(thumbnail != m_layerThumbnails.end() && thumbnail->ready
-                                    ? static_cast<ImTextureID>(thumbnail->texture.srv.gpu.ptr) : 0);
+                                presetThumbnails.push_back(LayerThumbnailHandle(p.id));
                             }
                             if (!presetIds.empty() && ui::PropertyCombo("マテリアル", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
                                 "この区間のレイヤーマテリアル。幅と高さは維持する", presetThumbnails.data())) {
@@ -296,10 +293,7 @@ bool Application::DrawRoadSpanTab(graph::GraphId roadId) {
                     for (const auto& preset : edited.layerMaterials) {
                         if (preset.id == graph::PresetLayerMaterial(edited, span.preset)) presetIndex = static_cast<int>(presetIds.size());
                         presetIds.push_back(preset.id); presetNames.push_back(preset.name.c_str());
-                        const auto thumbnail = std::find_if(m_layerThumbnails.begin(), m_layerThumbnails.end(),
-                            [&](const auto& entry) { return entry.id == preset.id; });
-                        presetThumbnails.push_back(thumbnail != m_layerThumbnails.end() && thumbnail->ready
-                            ? static_cast<ImTextureID>(thumbnail->texture.srv.gpu.ptr) : 0);
+                        presetThumbnails.push_back(LayerThumbnailHandle(preset.id));
                     }
                     if (ui::PropertyCombo("マテリアル", &presetIndex, presetNames.data(), static_cast<int>(presetNames.size()), presetIndex,
                                           "この区間へ割り当てるマテリアル。1本の道路で同時に3種類まで使用できる", presetThumbnails.data())) {

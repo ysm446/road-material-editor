@@ -236,7 +236,10 @@ void Application::Shutdown() {
     m_renderer.Shutdown(m_device);
     if (m_layerPreviewInitialized) m_layerPreview.Shutdown(m_device);
     if (m_layerThumbnailInitialized) m_layerThumbnailRenderer.Shutdown(m_device);
-    for (auto& thumbnail : m_layerThumbnails) m_device.DeferRelease(thumbnail.texture);
+    for (auto& thumbnail : m_layerThumbnails) {
+        m_device.DeferRelease(thumbnail.texture);
+        if (thumbnail.stored.IsValid()) m_device.DeferRelease(thumbnail.stored);
+    }
     m_imgui.Shutdown();
     m_pipelineCache.Destroy();
     m_shaderCompiler.Destroy();

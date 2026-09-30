@@ -443,10 +443,15 @@ private:
     struct LayerThumbnail {
         graph::SurfaceId id = 0;
         rhi::GpuTexture texture;
+        // 描き上がるまで代わりに出す、前回保存時にディスクへ残した画像（無ければ無効）。
+        rhi::GpuTexture stored;
+        bool storedChecked = false;
         bool dirty = true;
         bool ready = false;
         std::string contentKey;
     };
+    // 描き上がっていればそれを、まだならディスクに残した画像を返す（どちらも無ければ 0）。
+    ImTextureID LayerThumbnailHandle(graph::SurfaceId id) const;
     std::vector<LayerThumbnail> m_layerThumbnails;
     renderer::PreviewRenderer m_layerThumbnailRenderer;
     bool m_layerThumbnailInitialized = false;

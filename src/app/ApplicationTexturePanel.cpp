@@ -416,7 +416,8 @@ bool Application::MaterialHasMissingTexture(const compositor::MaterialAsset& ass
         const compositor::LibraryTexture* entry = m_textureLibrary.Find(id);
         return entry != nullptr && entry->missing;
     };
-    return missing(asset.baseColor) || missing(asset.normal) || missing(asset.roughness.texture) ||
+    // .tgmat 自体が無い（リンク切れで開いた）ものも同じ印を出す。
+    return asset.missing || missing(asset.baseColor) || missing(asset.normal) || missing(asset.roughness.texture) ||
            missing(asset.metallic.texture) || missing(asset.ambientOcclusion.texture) ||
            missing(asset.height.texture);
 }

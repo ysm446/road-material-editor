@@ -84,6 +84,8 @@ struct LayerMaterial {
     // 共有アセット（.tglayer）のファイルと固定 ID。未保存・複製直後は空。アンドゥの写しにも入る。
     std::filesystem::path assetPath;
     std::string assetUid;
+    // 開いたときに .tglayer が無かった（リンク切れ）。保存しても元の参照を残し、ファイルは作らない。
+    bool missing = false;
 };
 struct SpanParameter {
     SurfaceId parameter = 0;

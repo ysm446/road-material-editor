@@ -42,6 +42,8 @@ struct MaterialAsset {
     // 実行中の id とは別物。id は GPU 用の通し番号で、ファイルには書かない。
     std::filesystem::path assetPath;
     std::string assetUid;
+    // 開いたときに .tgmat が無かった（リンク切れ）。保存しても元の参照を残し、ファイルは作らない。
+    bool missing = false;
     std::string name;
 
     // 未指定のスロットは下の定数を使う。

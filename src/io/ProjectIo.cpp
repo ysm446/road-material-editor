@@ -1654,6 +1654,7 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs,
         if (workspace != nullptr) {
             node["_assetPath"] = ToUtf8Portable(asset.assetPath);
             node["uid"] = asset.assetUid;
+            if (asset.missing) node["_missing"] = true;
         }
         materials.push_back(std::move(node));
     }
@@ -1721,6 +1722,7 @@ bool SaveProject(const std::filesystem::path& path, const ProjectRefs& refs,
                     if (value["id"] == entry.id) {
                         value["_assetPath"] = ToUtf8Portable(entry.assetPath);
                         value["uid"] = entry.assetUid;
+                        if (entry.missing) value["_missing"] = true;
                     }
         };
         identify(layouts["layerMaterials"], refs.surfaceLayouts.layerMaterials);
@@ -1804,6 +1806,7 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
                     if (value.is_object() && value.contains("id") && value["id"] == entry.id) {
                         entry.assetPath = FromUtf8(ReadString(value, "_assetPath"));
                         entry.assetUid = ReadString(value, "uid");
+                        entry.missing = ReadBool(value, "_missing", false);
                     }
         };
         identify("layerMaterials", pendingLayouts.layerMaterials);
@@ -1891,6 +1894,7 @@ bool LoadProject(const std::filesystem::path& path, rhi::Device& device,
                 ReadMaterialBody(node, *asset, readTexture);
                 asset->assetPath = FromUtf8(ReadString(node, "_assetPath"));
                 asset->assetUid = ReadString(node, "uid");
+                asset->missing = ReadBool(node, "_missing", false);
                 asset->thumbnailDirty = true;
             }
             if (index > 0) {
@@ -2090,7 +2094,16 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
         }
         return workspace.UniquePath(workspace.Root() / folder, name, extension);
     };
+    // リンク切れのマテリアルを指す参照。ファイルは作らず、開いたときの参照をそのまま書く。
+    const auto materialReference = [&](const compositor::MaterialAsset* asset) -> json {
+        if (asset == nullptr) return nullptr;
+        if (asset->missing && !asset->assetPath.empty()) return workspace.MissingReference(asset->assetPath, asset->assetUid);
+        json value = asset->assetPath.empty() ? json() : workspace.Reference(asset->assetPath);
+        if (value.is_null()) valid = false;
+        return value;
+    };
     for (const compositor::MaterialAsset& entry : refs.materials.Entries()) {
+        if (entry.missing) continue;
         compositor::MaterialAsset* asset = refs.materials.FindMutable(entry.id);
         json body = WriteMaterialBody(*asset, writeTexture);
         body["uid"] = asset->assetUid;
@@ -2120,15 +2133,12 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
     // レイヤーマテリアル。本文は配置データの保存形式と同じで、マテリアルの参照だけを上で保存した
     // .tgmat の固定 ID にする（SaveScene が作る本文と一致させ、中身が変わらなければ書き直さない）。
     for (graph::LayerMaterial& material : refs.surfaceLayouts.layerMaterials) {
+        if (material.missing) continue;
         graph::SurfaceLayoutDocument single;
         single.layerMaterials.push_back(material);
         const json written = WriteSurfaceLayouts(single);
         json body = written["layerMaterials"][0];
-        const auto materialRef = [&](json& value) {
-            const compositor::MaterialAsset* asset = refs.materials.Find(value.get<uint32_t>());
-            value = (asset != nullptr && !asset->assetPath.empty()) ? workspace.Reference(asset->assetPath) : json();
-            if (asset != nullptr && value.is_null()) valid = false;
-        };
+        const auto materialRef = [&](json& value) { value = materialReference(refs.materials.Find(value.get<uint32_t>())); };
         for (json& layer : body["materials"]) materialRef(layer["material"]);
         if (body.contains("materialGraph")) {
             for (json& node : body["materialGraph"]["nodes"]) materialRef(node["settings"]["material"]);
@@ -2150,10 +2160,7 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
         for (renderer::ModelAsset& model : *refs.models) {
             json slots = json::array();
             for (const compositor::MaterialAssetId id : model.materials) {
-                const compositor::MaterialAsset* asset = refs.materials.Find(id);
-                json value = (asset != nullptr && !asset->assetPath.empty()) ? workspace.Reference(asset->assetPath) : json();
-                if (asset != nullptr && value.is_null()) valid = false;
-                slots.push_back(std::move(value));
+                slots.push_back(materialReference(refs.materials.Find(id)));
             }
             json body = {{"name", model.name}, {"source", source(model.path)}, {"scale", model.scale},
                          {"materials", std::move(slots)}};
@@ -2170,6 +2177,7 @@ bool SaveSharedAssets(ProjectWorkspace& workspace, const ProjectRefs& refs) {
     }
     // 境界マテリアル。画像は元ファイルの固定 ID で参照する。
     for (compositor::BoundaryMaterial& material : refs.surfaceLayouts.boundaryMaterials) {
+        if (material.missing) continue;
         graph::SurfaceLayoutDocument single;
         single.boundaryMaterials.push_back(material);
         const json written = WriteSurfaceLayouts(single);
@@ -2225,6 +2233,7 @@ void AddExpandedLibraries(const json& document, rhi::Device& device, rhi::Pipeli
         ReadMaterialBody(node, *asset, readTexture);
         asset->assetUid = uid;
         asset->assetPath = FromUtf8(ReadString(node, "_assetPath"));
+        asset->missing = ReadBool(node, "_missing", false);
         asset->thumbnailDirty = true;
         materialIds[ReadInt(node, "id", 0)] = id;
     }

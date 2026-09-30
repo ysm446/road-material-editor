@@ -166,7 +166,9 @@ void TestWorkspace() {
     workspace.SetStartupScene(root / "Scenes" / "copy.tgscene");
 
     json broken = {{"materials", json::array({{{"id", 1}, {"asset", {{"uid", "missing"}, {"path", "Moved/renamed.tgmat"}}}}})}};
-    Check(!workspace.Expand(broken), "ID が見つからなければ同名へ付け替えず失敗する");
+    Check(workspace.Expand(broken) && broken["materials"][0].value("_missing", false) &&
+              broken["materials"][0]["uid"] == "missing" && broken["materials"][0]["id"] == 1,
+          "ID が見つからなければ同名へ付け替えず、リンク切れとして開く");
     const fs::path duplicate = workspace.UniquePath(root, "duplicate", ".tgmat");
     fs::copy_file(moved, duplicate, error);
     Check(!workspace.Scan(), "ID の重複を検出する");

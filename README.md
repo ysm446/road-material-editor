@@ -104,7 +104,7 @@ road_editor.exe [--root <dir>] [--project <path>] [--save-project <path>]
 - [UI 設計ガイド](docs/design/design-guide.md)
 - [道路材質のレイヤー構造](docs/design/road-material-layers.md)
 - [保存形式](docs/reference/file-format.md)
-- [変更履歴](docs/changelog.md)
+- [変更履歴](CHANGELOG.md)
 
 検証用のメッシュシーンは `data/mesh-scene-check/scene.tgproj` を「ファイル > シーンを開く…」で確認できる。
 3枚の異なる高さの面を表示する描画基盤の検証データで、道路生成の完成例ではない。
